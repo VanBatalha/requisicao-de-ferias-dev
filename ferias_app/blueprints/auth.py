@@ -1,45 +1,40 @@
 from __future__ import annotations
 
-from flask import redirect, request, session, url_for
+from flask import redirect, render_template, request, session, url_for
 
 from .base import bp
 from ..logging_config import get_logger
-from ..services.auth_service import (
-    build_authorize_url,
-    exchange_code_for_token,
-    fetch_current_user,
-    save_session_user,
-)
+from ..services.ldap_service import authenticate
 
 log = get_logger(__name__)
 
-@bp.route("/login")
+
+@bp.route("/login", methods=["GET", "POST"])
 def login():
-    return redirect(build_authorize_url())
+    if request.method == "GET":
+        return render_template("login.html", error="")
 
-@bp.route("/callback")
-def callback():
-    error = request.args.get("error")
-    if error:
-        return f"Erro na autorização: {error}", 400
-
-    code = request.args.get("code")
-    state = request.args.get("state")
-    if not code:
-        return "Código ausente no callback.", 400
-    if not state or state != session.get("oauth_state"):
-        return "State inválido. Possível CSRF.", 400
+    username = (request.form.get("username") or "").strip()
+    password = request.form.get("password") or ""
 
     try:
-        tokens = exchange_code_for_token(code)
-        if not tokens.access_token:
-            return "Token inválido (access_token vazio).", 400
-        user = fetch_current_user(tokens.access_token)
-        save_session_user(user, tokens)
+        u = authenticate(username, password)
+
+        # Sessão mínima usada pelo restante do app
+        session["user"] = {
+            "email": u.email or "",
+            "name": u.name or username,
+            "id": u.username,
+            "username": u.username,
+            "dn": u.dn,
+            "groups": u.groups,
+        }
+
         return redirect(url_for("ferias.home"))
     except Exception as e:
-        log.exception("Erro no callback OAuth")
-        return f"Erro ao autenticar: {e}", 500
+        log.info("Falha no login LDAP para '%s': %s", username, e)
+        return render_template("login.html", error=str(e)), 401
+
 
 @bp.route("/logout")
 def logout():

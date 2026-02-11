@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container" style="max-width:480px; margin-top:48px;">
+  <div class="card p-4 shadow-sm">
+    <h3 class="mb-3">Entrar</h3>
+    <p class="text-muted">Acesso via LDAP/AD.</p>
+
+    {% if error %}
+      <div class="alert alert-danger" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('ferias.login') }}">
+      <div class="mb-3">
+        <label class="form-label">Usuário</label>
+        <input type="text" class="form-control" name="username" placeholder="seu usuário" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Senha</label>
+        <input type="password" class="form-control" name="password" placeholder="sua senha" required>
+      </div>
+      <button type="submit" class="btn btn-primary w-100">Entrar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

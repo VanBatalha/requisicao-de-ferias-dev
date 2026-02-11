@@ -4,7 +4,7 @@ import secrets
 import urllib.parse
 from typing import Any, Dict, Optional
 
-from flask import session, url_for
+from flask import session
 
 from ..config import get_settings
 from ..logging_config import get_logger
@@ -64,6 +64,11 @@ def save_session_user(user: Dict[str, Any], tokens: SmartsheetTokens) -> None:
     }
 
 def get_access_token() -> str:
+    # Método A: token fixo (conta de serviço) configurado no ambiente.
+    s = get_settings()
+    if s.access_token:
+        return s.access_token
+    # Legado: token por sessão (OAuth Smartsheet)
     return session.get("access_token", "")
 
 def inject_user_context():
@@ -85,7 +90,7 @@ def inject_user_context():
         "user": "USUARIO",
     }.get(role, str(role).upper())
 
-    display = email or "Usuario"
+    display = user.get("name") or email or "Usuario"
     avatar_seed = (display or email or "U").strip()
     avatar = (avatar_seed[:1] or "U").upper()
 
@@ -97,6 +102,6 @@ def inject_user_context():
         user_role_label=role_label,
         user_display_name=display,
         user_avatar=avatar,
-        first=email.split("@")[0] if "@" in email else email,
-        last="",
+        first=(display.split(" ")[0] if display else (email.split("@")[0] if "@" in email else email)),
+        last=(" ".join(display.split(" ")[1:]) if display and " " in display else ""),
     )

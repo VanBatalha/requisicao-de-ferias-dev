@@ -15,7 +15,7 @@ def index():
     """
     user = session.get("user")
     if not user:
-        return render_template("base.html", content="login")
+        return redirect(url_for("ferias.login"))
 
     email = (user.get("email") or "").lower()
     grupos = get_user_grupos(email)
@@ -52,7 +52,7 @@ def ferias():
 
     user = session.get("user")
     if not user:
-        return render_template("base.html", content="login")
+        return redirect(url_for("ferias.login"))
 
     gestor_email = safe_lower(user.get("email") or "")
     if not gestor_email:
