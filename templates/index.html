@@ -1,0 +1,361 @@
+{% extends "dashboard_layout.html" %}
+{% block page_title %}Solicitação de Férias{% endblock %}
+{% block content %}
+
+<style>
+  .layout-ferias {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+  }
+
+  .lista-solicitacoes {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .painel-detalhes {
+    flex: 1;
+    background: var(--card-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 20px 24px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.04);
+    min-height: 300px;
+    position: sticky;
+    top: 24px;
+  }
+
+  .painel-detalhes h3 {
+    margin-top: 0;
+    color: var(--text-main);
+  }
+
+  .painel-vazio {
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    padding: 40px 20px;
+  }
+
+  .detalhes-conteudo {
+    display: none;
+  }
+
+  .detalhes-conteudo.show {
+    display: block;
+  }
+
+  .detalhes-campo {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .detalhes-campo:last-child {
+    border-bottom: none;
+  }
+
+  .detalhes-campo strong {
+    color: var(--text-main);
+    display: block;
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+
+  .detalhes-campo span {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .botoes-detalhes {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .botoes-detalhes button {
+    flex: 1;
+  }
+
+  /* Responsivo */
+  @media (max-width: 1024px) {
+    .layout-ferias {
+      flex-direction: column;
+    }
+
+    .painel-detalhes {
+      position: relative;
+      top: 0;
+    }
+  }
+</style>
+
+<h1>{{ first }} {{ last }} ({{ email }})</h1>
+
+<div class="layout-ferias">
+  <!-- COLUNA ESQUERDA - Lista de Solicitações -->
+  <div class="lista-solicitacoes">
+    <!-- Card Nova Solicitação -->
+    <div class="card">
+      <h3>Nova Solicitação</h3>
+      <form id="form-ferias" method="post" action="{{ url_for('ferias.api_solicitar_ferias') }}">
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
+          <label style="font-size: 13px;">Início</label>
+          <input type="date" name="data_inicio" id="data_inicio" required />
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
+          <label style="font-size: 13px;">Fim</label>
+          <input type="date" name="data_fim" id="data_fim" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Solicitar</button>
+      </form>
+      <div id="resultado" class="text-error"></div>
+    </div>
+
+    <!-- Card Saldo de Férias -->
+    <div class="card">
+      <h3>Saldo de Férias</h3>
+      <div class="saldo-line">
+        <span>Dias de direito:</span>
+        <strong>{{ dias_direito }}</strong>
+      </div>
+      <div class="saldo-line">
+        <span>Já usados:</span>
+        <strong>{{ dias_usados }}</strong>
+      </div>
+      <div class="saldo-line">
+        <span>Saldo disponível:</span>
+        <strong id="saldo">{{ saldo }}</strong>
+      </div>
+    </div>
+
+    <!-- Card Suas Solicitações -->
+    <div class="card">
+      <h3>Suas Solicitações</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Início</th>
+            <th>Fim</th>
+            <th>Dias</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row_id, inicio, fim, dias, status in solicitacoes %}
+          <tr style="cursor: pointer;" onclick="mostrarDetalhes('{{ row_id }}', '{{ inicio }}', '{{ fim }}', '{{ dias }}', '{{ status }}')">
+            <td>{{ inicio }}</td>
+            <td>{{ fim }}</td>
+            <td>{{ dias }}</td>
+            <td>
+              {% if status|lower == "pendente" %}
+                <span class="badge badge-pendente">{{ status }}</span>
+              {% elif status|lower == "aprovada" %}
+                <span class="badge badge-aprovada">{{ status }}</span>
+              {% else %}
+                <span class="badge badge-rejeitada">{{ status }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- COLUNA DIREITA - Painel de Detalhes -->
+  <aside class="painel-detalhes" id="painel-detalhes">
+    <h3>Detalhes da Solicitação</h3>
+    
+    <div class="painel-vazio" id="painel-vazio">
+      Clique em uma solicitação na lista para ver os detalhes
+    </div>
+
+    <div class="detalhes-conteudo" id="detalhes-conteudo">
+      <div class="detalhes-campo">
+        <strong>Data Início:</strong>
+        <span id="det-inicio"></span>
+      </div>
+
+      <div class="detalhes-campo">
+        <strong>Data Fim:</strong>
+        <span id="det-fim"></span>
+      </div>
+
+      <div class="detalhes-campo">
+        <strong>Dias Solicitados:</strong>
+        <span id="det-dias"></span>
+      </div>
+
+      <div class="detalhes-campo">
+        <strong>Status:</strong>
+        <span id="det-status"></span>
+      </div>
+
+      <div class="botoes-detalhes" id="botoes-detalhes">
+        <button type="button" class="btn btn-primary" onclick="abrirEdicao()">Editar</button>
+        <button type="button" class="btn btn-link" onclick="fecharDetalhes()">Limpar</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- =============================================
+     MODAL - Editar Solicitação (ativado ao clicar em "Editar")
+     ============================================= -->
+<div class="modal" id="modal-editar">
+  <button type="button" class="modal-close" onclick="fecharModal('modal-editar')">×</button>
+  
+  <h3>Editar Solicitação</h3>
+  
+  <form id="form-editar" method="post" action="{{ url_for('ferias.api_editar_solicitacao') }}">
+    <input type="hidden" name="row_id" id="edit-row-id" />
+    
+    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
+      <label style="font-size: 13px;">Início</label>
+      <input type="date" name="data_inicio" id="edit-data-inicio" required />
+    </div>
+    
+    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
+      <label style="font-size: 13px;">Fim</label>
+      <input type="date" name="data_fim" id="edit-data-fim" required />
+    </div>
+    
+    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+      <button type="submit" class="btn btn-primary">Salvar Alterações</button>
+      <button type="button" class="btn btn-link" onclick="fecharModal('modal-editar')">Cancelar</button>
+    </div>
+    
+    <div id="resultado-editar" class="text-error"></div>
+  </form>
+</div>
+
+<script>
+  // Variável para armazenar o row_id selecionado
+  let rowIdSelecionado = null;
+
+  // Função para mostrar detalhes no painel lateral
+  function mostrarDetalhes(rowId, inicio, fim, dias, status) {
+    rowIdSelecionado = rowId;
+
+    // Preenche os campos
+    document.getElementById('det-inicio').textContent = inicio;
+    document.getElementById('det-fim').textContent = fim;
+    document.getElementById('det-dias').textContent = dias;
+    document.getElementById('det-status').textContent = status;
+
+    // Mostra o conteúdo e esconde o painel vazio
+    document.getElementById('painel-vazio').style.display = 'none';
+    document.getElementById('detalhes-conteudo').classList.add('show');
+
+    // Se o status não for "pendente", não mostra o botão editar
+    if (status.toLowerCase() !== 'pendente') {
+      document.getElementById('botoes-detalhes').style.display = 'none';
+    } else {
+      document.getElementById('botoes-detalhes').style.display = 'flex';
+    }
+  }
+
+  // Função para limpar detalhes
+  function fecharDetalhes() {
+    rowIdSelecionado = null;
+    document.getElementById('painel-vazio').style.display = 'block';
+    document.getElementById('detalhes-conteudo').classList.remove('show');
+  }
+
+  // Função para abrir modal de edição
+  function abrirEdicao() {
+    if (rowIdSelecionado) {
+      const inicio = document.getElementById('det-inicio').textContent;
+      const fim = document.getElementById('det-fim').textContent;
+      
+      document.getElementById('edit-row-id').value = rowIdSelecionado;
+      
+      // Converte DD/MM/YYYY para YYYY-MM-DD
+      function dateToIso(dateStr) {
+        if (!dateStr) return '';
+        const [day, month, year] = dateStr.split('/');
+        return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      }
+      
+      document.getElementById('edit-data-inicio').value = dateToIso(inicio);
+      document.getElementById('edit-data-fim').value = dateToIso(fim);
+      document.getElementById('resultado-editar').textContent = '';
+
+      // Abre o modal
+      abrirModal('modal-editar');
+    }
+  }
+
+  // Formulário de nova solicitação
+  const form = document.getElementById('form-ferias');
+  const resultado = document.getElementById('resultado');
+  const saldoSpan = document.getElementById('saldo');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    resultado.textContent = '';
+
+    const inicio = document.getElementById('data_inicio').value;
+    const fim = document.getElementById('data_fim').value;
+
+    if (fim < inicio) {
+      resultado.textContent = 'Data fim não pode ser menor que data início.';
+      return;
+    }
+
+    const formData = new FormData(form);
+    const resp = await fetch('{{ url_for("ferias.api_solicitar_ferias") }}', {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await resp.json();
+    resultado.textContent = data.message;
+
+    if (data.ok) {
+      if (data.saldo_atualizado !== undefined) {
+        saldoSpan.textContent = data.saldo_atualizado;
+      }
+      setTimeout(() => window.location.reload(), 1500);
+    }
+  });
+
+  // Formulário de edição
+  const formEditar = document.getElementById('form-editar');
+  const resultadoEditar = document.getElementById('resultado-editar');
+
+  formEditar.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    resultadoEditar.textContent = '';
+
+    const inicio = document.getElementById('edit-data-inicio').value;
+    const fim = document.getElementById('edit-data-fim').value;
+
+    if (fim < inicio) {
+      resultadoEditar.textContent = 'Data fim não pode ser menor que data início.';
+      return;
+    }
+
+    const formData = new FormData(formEditar);
+    const resp = await fetch('{{ url_for("ferias.api_editar_solicitacao") }}', {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await resp.json();
+    resultadoEditar.textContent = data.message;
+
+    if (data.ok) {
+      if (data.saldo_atualizado !== undefined) {
+        saldoSpan.textContent = data.saldo_atualizado;
+      }
+      setTimeout(() => window.location.reload(), 1500);
+    }
+  });
+</script>
+
+{% endblock %}
