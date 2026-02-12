@@ -46,3 +46,22 @@ from .services.solicitacoes_service import (
 
 # Fallback: expõe tudo do legado para não quebrar pontos ainda não migrados
 from .legacy.core_legacy import *  # noqa: F401,F403
+
+
+# ------------------------------------------------------------
+# Wrappers públicos para helpers legados que começam com "_" .
+# Atenção: `from module import *` não importa nomes iniciados com "_".
+# Estes wrappers evitam NameError nos blueprints/templates.
+# ------------------------------------------------------------
+
+def is_colaborador_ativo(colab: dict) -> bool:
+    """Alias público para `_is_ativo` (legado)."""
+    try:
+        return _is_ativo(colab)  # type: ignore[name-defined]
+    except Exception:
+        return False
+
+def listar_colaboradores_cached():
+    """Alias público para `_listar_colaboradores_cached` (legado)."""
+    return _listar_colaboradores_cached()  # type: ignore[name-defined]
+

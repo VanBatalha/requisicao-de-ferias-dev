@@ -15,7 +15,7 @@ def api_admin_listar_usuarios():
         colaboradores = listar_colaboradores()
 
         # filtra somente Status = Ativo
-        colaboradores = [c for c in colaboradores if _is_ativo(c)]
+        colaboradores = [c for c in colaboradores if is_colaborador_ativo(c)]
 
         # se não houver busca, não devolve tudo (evita listar milhares)
         if q:

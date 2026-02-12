@@ -71,7 +71,7 @@ def ferias():
             gestor_email=gestor_email,
         ), 403
 
-    colaboradores_all = _listar_colaboradores_cached()
+    colaboradores_all = listar_colaboradores_cached()
 
     # carrega nomes (para exibição)
     nome_por_email = {}

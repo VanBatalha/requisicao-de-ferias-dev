@@ -16,9 +16,9 @@ def api_dp_colaboradores():
 
         # Filtra por status se solicitado (aceita coluna Status/STATUS)
         if status_filter == "ATIVO":
-            colaboradores = [c for c in colaboradores if _is_ativo(c)]
+            colaboradores = [c for c in colaboradores if is_colaborador_ativo(c)]
         elif status_filter == "INATIVO":
-            colaboradores = [c for c in colaboradores if not _is_ativo(c)]
+            colaboradores = [c for c in colaboradores if not is_colaborador_ativo(c)]
 
         return jsonify({
             "ok": True,

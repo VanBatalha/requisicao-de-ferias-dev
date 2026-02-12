@@ -158,7 +158,7 @@ def find_user(username: str) -> Optional[LdapUser]:
             except Exception:
                 return ""
 
-        email = _attr(s.ldap_email_attr) or _attr("mail") or ""
+        email = _attr(s.ldap_email_attr) or _attr("mail") or _attr("userPrincipalName") or ""
         name = _attr(s.ldap_name_attr) or _attr("cn") or username
 
         groups: List[str] = []
