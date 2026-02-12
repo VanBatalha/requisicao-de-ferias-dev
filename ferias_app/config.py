@@ -36,6 +36,7 @@ class Settings:
     ldap_name_attr: str = _env("LDAP_NAME_ATTR", "displayName")
     ldap_memberof_attr: str = _env("LDAP_MEMBEROF_ATTR", "memberOf")
     ldap_verify_cert: str = _env("LDAP_VERIFY_CERT", "true")  # true/false
+    ldap_starttls: str = _env("LDAP_STARTTLS", "false")  # true/false (para ldap:// na porta 389)
 
     # Smartsheet sheet IDs
     id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "0") or "0")

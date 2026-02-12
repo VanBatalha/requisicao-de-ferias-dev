@@ -35,15 +35,52 @@ def _build_server() -> Server:
     if not s.ldap_uri:
         raise ValueError("LDAP_URI não configurado.")
 
+    uri = s.ldap_uri.strip()
+    is_ldaps = uri.lower().startswith("ldaps://")
+    wants_starttls = (not is_ldaps) and _bool(getattr(s, "ldap_starttls", "false"))
+
     tls = None
-    if s.ldap_uri.strip().lower().startswith("ldaps://"):
-        # Por padrão valida certificado. Para laboratório, permitir desabilitar.
+    if is_ldaps or wants_starttls:
+        # Para LDAPS ou STARTTLS: configura validação de certificado
         tls = Tls(validate=ssl.CERT_REQUIRED if _bool(s.ldap_verify_cert) else ssl.CERT_NONE)
 
-    return Server(s.ldap_uri, get_info=ALL, tls=tls)
+    # IMPORTANTE: use_ssl deve ser True apenas para ldaps://
+    return Server(uri, get_info=ALL, use_ssl=is_ldaps, tls=tls)
 
 
 def _service_bind() -> Connection:
+    """Bind com conta técnica (recomendado) ou bind anônimo se não informado.
+
+    Para ldap:// (389), alguns servidores exigem STARTTLS. Ative com LDAP_STARTTLS=true.
+    """
+    s = get_settings()
+    server = _build_server()
+
+    try:
+        if s.ldap_bind_dn:
+            conn = Connection(server, user=s.ldap_bind_dn, password=s.ldap_bind_password, auto_bind=False)
+            conn.open()
+            if _bool(getattr(s, "ldap_starttls", "false")) and (not s.ldap_uri.strip().lower().startswith("ldaps://")):
+                conn.start_tls()
+            conn.bind()
+            if not conn.bound:
+                raise LDAPException("Bind de serviço não foi aceito (credenciais ou permissão).")
+            log.info("LDAP service bind OK (user=%s)", s.ldap_bind_dn)
+            return conn
+
+        log.warning("LDAP_BIND_DN não configurado: tentando bind anônimo (pode falhar dependendo do servidor).")
+        conn = Connection(server, auto_bind=False)
+        conn.open()
+        if _bool(getattr(s, "ldap_starttls", "false")) and (not s.ldap_uri.strip().lower().startswith("ldaps://")):
+            conn.start_tls()
+        conn.bind()
+        return conn
+    except Exception as e:
+        log.exception("Falha ao conectar/bind no LDAP: %s", e)
+        raise
+
+
+def _candidate_filters() -> Connection:
     """Bind com conta técnica (recomendado) ou bind anônimo se não informado.
 
     Observação: em muitos ADs o bind anônimo não consegue fazer search,
@@ -104,6 +141,7 @@ def find_user(username: str) -> Optional[LdapUser]:
         for f in filters:
             log.info("LDAP search: base_dn=%s filter=%s", s.ldap_base_dn, f)
             ok = conn.search(search_base=s.ldap_base_dn, search_filter=f, attributes=attrs, size_limit=2)
+            log.info('LDAP search result: ok=%s entries=%s', ok, len(conn.entries) if hasattr(conn,'entries') else 'n/a')
             if ok and conn.entries:
                 entry = conn.entries[0]
                 break
@@ -161,7 +199,14 @@ def authenticate(username: str, password: str) -> LdapUser:
         if fmt:
             bind_user = fmt.format(username=username)
 
-        Connection(server, user=bind_user, password=password, auto_bind=True).unbind()
+        conn_u = Connection(server, user=bind_user, password=password, auto_bind=False)
+        conn_u.open()
+        if _bool(getattr(get_settings(), 'ldap_starttls', 'false')) and (not get_settings().ldap_uri.strip().lower().startswith('ldaps://')):
+            conn_u.start_tls()
+        conn_u.bind()
+        if not conn_u.bound:
+            raise LDAPException('Bind do usuário não foi aceito')
+        conn_u.unbind()
         return user
     except LDAPException as e:
         log.info("Falha de autenticação LDAP para %s: %s", username, e)
