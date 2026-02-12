@@ -3,3 +3,4 @@ gunicorn>=21.2,<23
 requests>=2.31,<3
 smartsheet-python-sdk>=3.0,<4
 python-dotenv>=1.0,<2
+ldap3>=2.9,<3
