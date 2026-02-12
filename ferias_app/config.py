@@ -39,8 +39,10 @@ class Settings:
     ldap_starttls: str = _env("LDAP_STARTTLS", "false")  # true/false (para ldap:// na porta 389)
 
     # Smartsheet sheet IDs
-    id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "0") or "0")
-    id_folha_solicitacoes: int = int(_env("ID_FOLHA_SOLICITACOES", "0") or "0")
+    # Defaults iguais à versão estável (evita "sheet_id=0" quando a env não está setada no Render)
+    # Você ainda pode sobrescrever no Render com as variáveis de ambiente.
+    id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "3609445264215940") or "3609445264215940")
+    id_folha_solicitacoes: int = int(_env("ID_FOLHA_SOLICITACOES", "2890766507528068") or "2890766507528068")
 
     # Runtime
     environment: str = _env("ENVIRONMENT", _env("FLASK_ENV", "production"))

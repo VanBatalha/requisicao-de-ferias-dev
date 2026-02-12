@@ -47,6 +47,10 @@ from .services.solicitacoes_service import (
 # Fallback: expõe tudo do legado para não quebrar pontos ainda não migrados
 from .legacy.core_legacy import *  # noqa: F401,F403
 
+# Import explícito de helpers "privados" usados pelos wrappers abaixo.
+# Observação: nomes com "_" não entram no import *.
+from .legacy.core_legacy import _is_ativo, _listar_colaboradores_cached  # noqa: F401
+
 
 # ------------------------------------------------------------
 # Wrappers públicos para helpers legados que começam com "_" .
