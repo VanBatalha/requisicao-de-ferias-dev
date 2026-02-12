@@ -1,8 +1,4 @@
-import json
-from pathlib import Path
-"""Compat layer (Stage 3)
-
-Este módulo existe para manter compatibilidade com imports antigos (ex.: `from ferias_app.core import ...`).
+"""Este módulo existe para manter compatibilidade com imports antigos (ex.: `from ferias_app.core import ...`).
 
 A lógica foi reorganizada em:
 - ferias_app/services/*
@@ -13,6 +9,9 @@ O legado completo permanece em `ferias_app/legacy/core_legacy.py` como fallback.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 # Novos módulos (preferidos)
 from .config import get_settings, Settings  # noqa: F401
