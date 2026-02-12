@@ -444,7 +444,7 @@ def api_dp_atualizar_status():
         cols_sol = get_col_map(sheet_sol)
         
         row_id_int = int(row_id)
-        col_status = _col_id_by_name(sheet_sol, "STATUS")
+        col_status = col_id_by_name(sheet_sol, "STATUS")
 
         if not col_status:
             return jsonify({"ok": False, "message": "Coluna STATUS nao encontrada"}), 500

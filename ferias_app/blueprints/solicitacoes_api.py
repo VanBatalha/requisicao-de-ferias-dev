@@ -254,15 +254,15 @@ def api_solicitar_ferias():
         sheet_sol = get_sheet_solicitacoes(client)
         
         # Colunas robustas
-        col_colab = _col_id_by_name(sheet_sol, "COLABORADOR")
-        col_gestor = _col_id_by_name(sheet_sol, "GESTOR SOLICITANTE")
-        col_solic = _col_id_by_name(sheet_sol, "SOLICITAÇÃO", "SOLICITACAO")
-        col_inicio = _col_id_by_name(sheet_sol, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
-        col_fim = _col_id_by_name(sheet_sol, "DATA FIM", "DATA FINAL")
-        col_dias = _col_id_by_name(sheet_sol, "DIAS")
-        col_status = _col_id_by_name(sheet_sol, "STATUS")
-        col_obs = _col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
-        col_saldo_tipo = _col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
+        col_colab = col_id_by_name(sheet_sol, "COLABORADOR")
+        col_gestor = col_id_by_name(sheet_sol, "GESTOR SOLICITANTE")
+        col_solic = col_id_by_name(sheet_sol, "SOLICITAÇÃO", "SOLICITACAO")
+        col_inicio = col_id_by_name(sheet_sol, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
+        col_fim = col_id_by_name(sheet_sol, "DATA FIM", "DATA FINAL")
+        col_dias = col_id_by_name(sheet_sol, "DIAS")
+        col_status = col_id_by_name(sheet_sol, "STATUS")
+        col_obs = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
+        col_saldo_tipo = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
 
         rows_to_add = []
 
@@ -396,9 +396,9 @@ def api_editar_solicitacao():
             return jsonify({"ok": False, "message": "Só é possível editar solicitações com status Pendente."})
 
         # Identifica colaborador e tipo de saldo da linha
-        col_colab_id = _col_id_by_name(sheet_sol, "COLABORADOR")
-        col_obs_id = _col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
-        col_tipo_id = _col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
+        col_colab_id = col_id_by_name(sheet_sol, "COLABORADOR")
+        col_obs_id = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
+        col_tipo_id = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
 
         colab_email_row = next((c.value for c in row_antiga.cells if c.column_id == (col_colab_id or -1)), "") or ""
         colab_email_row = safe_lower(str(colab_email_row))

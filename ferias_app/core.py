@@ -54,6 +54,7 @@ from .legacy.core_legacy import (  # noqa: F401
     _listar_colaboradores_cached,
     _get_sheet_solicitacoes,
     _get_sheet_cadastro,
+    _col_id_by_name as _legacy_col_id_by_name,
 )
 
 
@@ -91,6 +92,16 @@ def get_sheet_cadastro(smartsheet_client):
     nomes iniciados com "_" não entram em `import *`.
     """
     return _get_sheet_cadastro(smartsheet_client)  # type: ignore[name-defined]
+
+
+def col_id_by_name(sheet, *candidate_names):
+    """Retorna o columnId (int) da primeira coluna cujo título bater com algum dos nomes candidatos.
+
+    A versão refatorada evita importar helpers com prefixo '_' via 'import *'.
+    Por isso expomos uma função pública e usamos ela nas blueprints.
+    """
+
+    return _legacy_col_id_by_name(sheet, *candidate_names)
 
 
 # ------------------------------------------------------------

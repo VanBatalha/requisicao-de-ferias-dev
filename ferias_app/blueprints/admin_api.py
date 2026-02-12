@@ -98,8 +98,8 @@ def api_admin_atualizar_grupos():
         if not sheet:
             return jsonify({"ok": False, "message": "Folha de cadastro não encontrada"}), 404
 
-        col_email = _col_id_by_name(sheet, "EMAIL DA EMPRESA", "EMAIL")
-        col_user_type = _col_id_by_name(sheet, "USER TYPE", "USER_TYPE", "USERTYPE", "TIPO USUARIO", "TIPO DE USUARIO")
+        col_email = col_id_by_name(sheet, "EMAIL DA EMPRESA", "EMAIL")
+        col_user_type = col_id_by_name(sheet, "USER TYPE", "USER_TYPE", "USERTYPE", "TIPO USUARIO", "TIPO DE USUARIO")
 
         if not col_email:
             return jsonify({"ok": False, "message": "Coluna 'EMAIL DA EMPRESA' não encontrada no cadastro."}), 400
