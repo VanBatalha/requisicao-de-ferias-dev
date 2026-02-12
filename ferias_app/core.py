@@ -49,7 +49,12 @@ from .legacy.core_legacy import *  # noqa: F401,F403
 
 # Import explícito de helpers "privados" usados pelos wrappers abaixo.
 # Observação: nomes com "_" não entram no import *.
-from .legacy.core_legacy import _is_ativo, _listar_colaboradores_cached  # noqa: F401
+from .legacy.core_legacy import (  # noqa: F401
+    _is_ativo,
+    _listar_colaboradores_cached,
+    _get_sheet_solicitacoes,
+    _get_sheet_cadastro,
+)
 
 
 # ------------------------------------------------------------
@@ -68,6 +73,24 @@ def is_colaborador_ativo(colab: dict) -> bool:
 def listar_colaboradores_cached():
     """Alias público para `_listar_colaboradores_cached` (legado)."""
     return _listar_colaboradores_cached()  # type: ignore[name-defined]
+
+
+def get_sheet_solicitacoes(smartsheet_client):
+    """Retorna a sheet de Solicitações (helper legado).
+
+    Motivo: o blueprint antigo referenciava `_get_sheet_solicitacoes`, mas
+    nomes iniciados com "_" não entram em `import *`.
+    """
+    return _get_sheet_solicitacoes(smartsheet_client)  # type: ignore[name-defined]
+
+
+def get_sheet_cadastro(smartsheet_client):
+    """Retorna a sheet de Cadastro (helper legado).
+
+    Motivo: o blueprint antigo referenciava `_get_sheet_cadastro`, mas
+    nomes iniciados com "_" não entram em `import *`.
+    """
+    return _get_sheet_cadastro(smartsheet_client)  # type: ignore[name-defined]
 
 
 # ------------------------------------------------------------

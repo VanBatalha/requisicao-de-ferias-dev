@@ -101,7 +101,7 @@ def api_dp_ajustes_lancar():
     agora_iso = dt.datetime.now().isoformat(timespec="seconds")
 
     try:
-        sheet_sol = _get_sheet_solicitacoes(client)
+        sheet_sol = get_sheet_solicitacoes(client)
 
         # IDs por título (compatibilidade com o restante do projeto)
         cols = get_col_map(sheet_sol)
@@ -306,8 +306,11 @@ def api_dp_gestores_relacao():
     if not gestor:
         return jsonify({"ok": False, "message": "Gestor é obrigatório"}), 400
 
-    atualizar_relacao_gestor(gestor, subordinados)
-    return jsonify({"ok": True, "message": "Relação atualizada com sucesso."})
+    try:
+        atualizar_relacao_gestor(gestor, subordinados)
+        return jsonify({"ok": True, "message": "Relação atualizada com sucesso."})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao salvar relação: {e}"}), 500
 
 
 @bp.route("/api/dp/gestores/superior", methods=["GET", "POST"])
@@ -437,7 +440,7 @@ def api_dp_atualizar_status():
     
     try:
         client = get_smartsheet_client()
-        sheet_sol = _get_sheet_solicitacoes(client)
+        sheet_sol = get_sheet_solicitacoes(client)
         cols_sol = get_col_map(sheet_sol)
         
         row_id_int = int(row_id)
@@ -480,7 +483,7 @@ def _listar_segmentos_premium(colaborador_email: str, win_start: dt.date | None,
     if not colaborador_email:
         return []
 
-    sheet_sol = _get_sheet_solicitacoes(client)
+    sheet_sol = get_sheet_solicitacoes(client)
     cols = get_col_map(sheet_sol)
     colsN = _cols_norm_map(cols)
 

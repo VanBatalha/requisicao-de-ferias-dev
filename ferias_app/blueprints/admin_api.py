@@ -94,7 +94,7 @@ def api_admin_atualizar_grupos():
         return jsonify({"ok": False, "message": "Não autenticado"}), 401
 
     try:
-        sheet = _get_sheet_cadastro(client)
+        sheet = get_sheet_cadastro(client)
         if not sheet:
             return jsonify({"ok": False, "message": "Folha de cadastro não encontrada"}), 404
 

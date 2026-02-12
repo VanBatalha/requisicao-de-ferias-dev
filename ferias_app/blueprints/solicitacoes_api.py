@@ -251,7 +251,7 @@ def api_solicitar_ferias():
         if not client:
             return jsonify({"ok": False, "message": "Smartsheet client não inicializado (sem token)."}), 500
 
-        sheet_sol = _get_sheet_solicitacoes(client)
+        sheet_sol = get_sheet_solicitacoes(client)
         
         # Colunas robustas
         col_colab = _col_id_by_name(sheet_sol, "COLABORADOR")
@@ -378,7 +378,7 @@ def api_editar_solicitacao():
     
     try:
         client = get_smartsheet_client()
-        sheet_sol = _get_sheet_solicitacoes(client)
+        sheet_sol = get_sheet_solicitacoes(client)
         cols_sol = get_col_map(sheet_sol)
 
         row_id_int = int(row_id)
