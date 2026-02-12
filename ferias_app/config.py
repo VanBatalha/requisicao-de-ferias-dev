@@ -28,6 +28,10 @@ class Settings:
     ldap_bind_dn: str = _env("LDAP_BIND_DN", "")  # ex: cn=svc-app,ou=Users,dc=...,dc=...
     ldap_bind_password: str = _env("LDAP_BIND_PASSWORD", "")
     ldap_user_filter: str = _env("LDAP_USER_FILTER", "(sAMAccountName={username})")
+    # Opcional: lista de filtros separados por ";" ou "," (tentados em ordem)
+    ldap_user_filters: str = _env("LDAP_USER_FILTERS", "")
+    # Opcional: formato para bind de autenticação (ex: "{username}@empresa.local" ou "EMPRESA\\{username}")
+    ldap_auth_bind_format: str = _env("LDAP_AUTH_BIND_FORMAT", "")
     ldap_email_attr: str = _env("LDAP_EMAIL_ATTR", "mail")
     ldap_name_attr: str = _env("LDAP_NAME_ATTR", "displayName")
     ldap_memberof_attr: str = _env("LDAP_MEMBEROF_ATTR", "memberOf")
