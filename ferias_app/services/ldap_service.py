@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import ssl
 
-from ldap3 import Connection, Server, TLS, ALL
+from ldap3 import Connection, Server, Tls, ALL
 from ldap3.core.exceptions import LDAPException
 
 from ..config import get_settings
@@ -37,9 +37,9 @@ def _build_server():
     if s.ldap_uri.strip().lower().startswith("ldaps://"):
         # Por padrão valida certificado. Para laboratório, permitir desabilitar.
         if _bool(s.ldap_verify_cert):
-            tls = TLS(validate=ssl.CERT_REQUIRED)
+            tls = Tls(validate=ssl.CERT_REQUIRED)
         else:
-            tls = TLS(validate=ssl.CERT_NONE)
+            tls = Tls(validate=ssl.CERT_NONE)
 
     return Server(s.ldap_uri, get_info=ALL, tls=tls)
 
