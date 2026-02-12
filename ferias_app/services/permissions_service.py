@@ -14,8 +14,11 @@ def get_user_type(email: str) -> str:
     """USER TYPE vindo da planilha de cadastro (USER TYPE)."""
     token = get_access_token()
     if not token:
+        log.warning("Permissões: SMARTSHEET_ACCESS_TOKEN ausente; usando USER para %s", email)
         return "USER"
-    return _get_user_type(token, email)
+    ut = _get_user_type(token, email)
+    log.info("Permissões: email=%s user_type=%s", email, ut)
+    return ut
 
 
 def get_user_role(email: str) -> str:
