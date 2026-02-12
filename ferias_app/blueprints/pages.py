@@ -3,6 +3,7 @@ from __future__ import annotations
 from .base import bp
 from ..core import *  # noqa: F401,F403
 
+@bp.route("/", endpoint="home")
 @bp.route("/")
 def index():
     """
