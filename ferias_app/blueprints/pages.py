@@ -92,7 +92,7 @@ def ferias():
         for c in colaboradores_all:
             if not isinstance(c, dict):
                 continue
-            if not _is_ativo(c):
+            if not is_colaborador_ativo(c):
                 continue
             em = safe_lower(c.get("EMAIL DA EMPRESA") or "")
             if not em or em in seen:
@@ -177,7 +177,7 @@ def painel_admin():
     
     email = user.get("email")
     if not tem_grupo(email, "Administrador"):
-        return "Acesso negado. Você não é administrador.", 403
+        return redirect(url_for("ferias.ferias"))
     
     return render_template("painel_admin.html", user=user, active_page="admin")
 
@@ -189,7 +189,7 @@ def painel_dp():
     
     email = user.get("email")
     if not (tem_grupo(email, "DP") or tem_grupo(email, "Administrador")):
-        return "Acesso negado. Você não é do DP.", 403
+        return redirect(url_for("ferias.ferias"))
     
     hoje = dt.date.today()
     mes_atual = hoje.month

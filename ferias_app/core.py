@@ -65,3 +65,37 @@ def listar_colaboradores_cached():
     """Alias público para `_listar_colaboradores_cached` (legado)."""
     return _listar_colaboradores_cached()  # type: ignore[name-defined]
 
+
+# ------------------------------------------------------------
+# Preferir SEMPRE os serviços novos para permissões/roles,
+# evitando que o import * do legado sobrescreva funções.
+# Isso garante consistência entre templates (inject_user_context)
+# e rotas (pages.py), especialmente após autenticação via LDAP.
+# ------------------------------------------------------------
+
+from .services.permissions_service import (  # noqa: E402
+    get_user_role as _svc_get_user_role,
+    get_user_type as _svc_get_user_type,
+    tem_grupo as _svc_tem_grupo,
+    is_gestor as _svc_is_gestor,
+    get_subordinados as _svc_get_subordinados,
+)
+
+# sobrescreve os nomes exportados pelo legado (se houver)
+get_user_role = _svc_get_user_role  # type: ignore[assignment]
+get_user_type = _svc_get_user_type  # type: ignore[assignment]
+tem_grupo = _svc_tem_grupo  # type: ignore[assignment]
+is_gestor = _svc_is_gestor  # type: ignore[assignment]
+get_subordinados = _svc_get_subordinados  # type: ignore[assignment]
+
+def get_user_grupos(email: str):
+    """Retorna lista de grupos compatível com o legado do sistema.
+
+    Usa SEMPRE o get_user_type do permissions_service para evitar divergência.
+    """
+    ut = get_user_type(email)
+    if ut == "ADMIN":
+        return ["Administrador"]
+    if ut == "DP":
+        return ["DP"]
+    return ["USER"]

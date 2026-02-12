@@ -31,4 +31,25 @@ def create_app() -> Flask:
     # Contexto global para templates
     app.context_processor(inject_user_context)
 
+
+    # Log de exceções (ajuda debug no Render)
+    from .logging_config import get_logger  # noqa: E402
+    log = get_logger(__name__)
+
+    @app.errorhandler(Exception)
+    def _handle_exception(e):  # noqa: ANN001
+        # Loga traceback completo no Render
+        try:
+            log.exception("Unhandled exception: %s", e)
+        except Exception:
+            pass
+
+        # Se for HTTPException (ex.: 404/403), deixa o Flask responder normalmente
+        from werkzeug.exceptions import HTTPException  # noqa: E402
+        if isinstance(e, HTTPException):
+            return e
+
+        # Para erros 500, retorna uma página simples (evita loops)
+        return ("Internal Server Error", 500)
+
     return app
