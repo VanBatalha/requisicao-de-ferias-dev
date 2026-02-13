@@ -882,42 +882,37 @@ def _listar_segmentos_premium(email: str, win_start: dt.date, win_end: dt.date):
             out.append(int(round(dias)))
     return out
 
-def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_inicio: dt.date | None = None):
+def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_inicio: datetime.datetime | None = None):
     """
     Regras Licença Certariana (PREMIUM):
-    - Até 3 períodos dentro da janela vigente (30 dias por ciclo).
+    - Até 3 períodos dentro da janela (30 dias).
     - Cada período >= 10 dias.
-    - Se 3 períodos, obrigatoriamente 3x10 (total 30).
-    - Não pode sobrar saldo < 10 (a menos que zere em 0).
+    - Se 3 períodos, obrigatoriamente 3x10.
+    - Não pode sobrar saldo < 10 (senão for 0).
     """
     # valida mínimo do novo período
     try:
-        dias = int(round(float(dias_solicitados)))
+        dias = float(dias_solicitados)
     except Exception:
-        dias = 0
+        dias = 0.0
     if dias < 10:
         raise ValueError("Na Licença Certariana, cada período deve ter no mínimo 10 dias.")
 
-    # calcula janela premium vigente (baseada na data de início da solicitação)
+    # calcula janela premium
     adm = _colaborador_admissao(email)
-    hoje_ref = dt_inicio or dt.date.today()
-
-    if adm:
-        _base, win_start, win_end = _janela_licenca_certariana(adm, hoje=hoje_ref)
+    if not adm:
+        # se não achar admissão, aplica regra só pelo saldo (mais seguro)
+        win_start = datetime.date.min
+        win_end = datetime.date.max
     else:
-        win_start, win_end = None, None
+        win_start, win_end = _janela_licenca_certariana(adm)
 
-    # se não houver janela (ainda não conquistou ou fora da janela), ainda assim aplica as regras de fracionamento
-    # usando um intervalo amplo; quem decide se "pode usar" é a validação de disponibilidade/janela em outro ponto.
-    if not (win_start and win_end):
-        win_start = dt.date.min
-        win_end = dt.date.max
-
+    # lista segmentos existentes
     existentes = _listar_segmentos_premium(email, win_start, win_end)
-    total_exist = sum(int(x) for x in existentes)
+    total_exist = sum(existentes)
     periodos_exist = len(existentes)
 
-    total = total_exist + dias
+    total = total_exist + int(round(dias))
     if total > 30:
         raise ValueError(f"Licença Certariana excede 30 dias na janela atual (tentativa: {total} dias).")
 
@@ -925,12 +920,14 @@ def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_in
     if periodos > 3:
         raise ValueError("Licença Certariana permite no máximo 3 períodos na janela atual.")
 
+    # regra de saldo restante (se não for 0, não pode ser <10)
     restante = 30 - total
     if restante != 0 and restante < 10:
         raise ValueError("O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar).")
 
+    # regra específica de 3 períodos: 3x10
     if periodos == 3:
-        todos = [int(x) for x in existentes] + [dias]
+        todos = existentes + [int(round(dias))]
         if total != 30 or any(x != 10 for x in todos):
             raise ValueError("Se a Licença Certariana for dividida em 3 períodos, deve ser obrigatoriamente 3×10 (total 30).")
 

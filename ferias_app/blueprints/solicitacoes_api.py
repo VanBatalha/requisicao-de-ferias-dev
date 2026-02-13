@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
+from ..legacy.core_legacy import _validar_fracionamento_certariana  # noqa: F401
 
 @bp.route("/api/solicitar-ferias", methods=["POST"])
 def api_solicitar_ferias():
@@ -142,16 +143,18 @@ def api_solicitar_ferias():
         resumo = get_resumo_ferias(colaborador_email)
         dias_novos = cert_total_dias if (saldo_tipo_req == "PREMIUM" and certariana_segmentos) else (dt_fim - dt_inicio).days + 1
 
-        # Validação adicional: regras de fracionamento da Licença Certariana (considera períodos já lançados)
-        if saldo_tipo_req == "PREMIUM" and not certariana_segmentos:
+        # Validação: regras de fracionamento da Licença Certariana (PREMIUM)
+        # - Até 3 períodos na janela
+        # - Mínimo 10 dias por período
+        # - Se 3 períodos, obrigatoriamente 3×10 (total 30)
+        # - Não pode sobrar saldo < 10 (ou deve zerar)
+        if saldo_tipo_req == "PREMIUM":
             try:
-                _validar_fracionamento_certariana(colaborador_email, dias_novos, dt_inicio=dt_inicio)
+                _validar_fracionamento_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio)
             except ValueError as ve:
                 return jsonify({"ok": False, "message": str(ve)}), 400
-            except Exception as _e:
-                # erro inesperado: não faz sentido liberar fracionamento inválido silenciosamente
-                return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {_e}"}), 500
-
+            except Exception as e:
+                return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
 
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
@@ -481,4 +484,5 @@ def build_cells(cells_by_id: dict):
             c.value = val
             out.append(c)
         return out
+
 
