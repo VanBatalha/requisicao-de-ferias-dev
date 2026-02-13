@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
+from ..legacy.core_legacy import _norm_title  # noqa: F401
 
 
 def _has_dp_access(email: str | None) -> bool:
