@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from ferias_app.core import col_id_by_name
 from .base import bp
 from ..core import *  # noqa: F401,F403
 # OBS: o módulo legacy tem vários helpers com prefixo "_".
@@ -347,38 +347,67 @@ def api_dp_gestores_relacao():
         return jsonify({"ok": False, "message": f"Erro ao salvar relação: {e}"}), 500
 
 
-@bp.route("/api/dp/gestores/superior", methods=["GET", "POST"])
-def api_dp_gestor_superior():
-    """Lê/atualiza a coluna GESTOR SUPERIOR do colaborador (cadastro)."""
-    user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
-        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+@bp.route("/api/dp/gestores/superior", methods=["POST"])
+@require_login
+@require_role("DP", "ADMIN")
+def dp_salvar_gestor_superior():
+    data = request.get_json(silent=True) or {}
+    colaborador = (data.get("colaborador") or "").strip().lower()
+    gestor_superior = (data.get("gestor_superior") or "").strip()
 
-    try:
-        client = get_smartsheet_client()
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao criar cliente Smartsheet: {e}"}), 500
+    if not colaborador or not gestor_superior:
+        return jsonify({"ok": False, "message": "Informe colaborador e gestor_superior."}), 400
 
-    if not client:
-        return jsonify({"ok": False, "message": "Smartsheet não configurado (token ausente)"}), 401
+    client = get_smartsheet_client()
+    sheet = get_sheet_cadastro(client)
 
-    sheet = client.Sheets.get_sheet(ID_FOLHA_CADASTRO)
-    cols = get_col_map(sheet)
-    col_email = cols.get("EMAIL DA EMPRESA") or cols.get("EMAIL")
-    col_sup = cols.get("GESTOR SUPERIOR")
-    if not col_email or not col_sup:
-        return jsonify({"ok": False, "message": "Colunas EMAIL DA EMPRESA e/ou GESTOR SUPERIOR não encontradas."}), 500
+    # ✅ coluna robusta (case-insensitive, sem acentos)
+    col_sup = col_id_by_name(sheet, "GESTOR SUPERIOR", "GESTOR_SUPERIOR", "GESTOR SUPERIOR ")
+    col_email = col_id_by_name(sheet, "EMAIL DA EMPRESA", "EMAIL", "E-MAIL")
 
-    if request.method == "GET":
-        colaborador = _norm_email(request.args.get("colaborador") or "")
-        if not colaborador:
-            return jsonify({"ok": True, "colaborador": "", "gestor_superior": ""})
-        for row in sheet.rows:
-            row_email = _norm_email(next((c.value for c in row.cells if c.column_id == col_email), ""))
-            if row_email == colaborador:
-                valor = next((c.value for c in row.cells if c.column_id == col_sup), "") or ""
-                return jsonify({"ok": True, "colaborador": colaborador, "gestor_superior": str(valor).strip()})
-        return jsonify({"ok": False, "message": "Colaborador não encontrado"}), 404
+    if not col_sup or not col_email:
+        return jsonify({
+            "ok": False,
+            "message": "Não encontrei as colunas necessárias no Cadastro.",
+            "missing": {
+                "GESTOR SUPERIOR": bool(col_sup),
+                "EMAIL DA EMPRESA": bool(col_email),
+            }
+        }), 500
+
+    # localizar row pelo email
+    row_id = None
+    for r in sheet.rows:
+        email_val = None
+        for c in r.cells:
+            if c.column_id == col_email:
+                email_val = (c.value or "").strip().lower() if c.value else ""
+                break
+        if email_val == colaborador:
+            row_id = r.id
+            break
+
+    if not row_id:
+        return jsonify({"ok": False, "message": "Colaborador não encontrado no Cadastro."}), 404
+
+    # ✅ atualiza e valida retorno
+    row = smartsheet.models.Row()
+    row.id = row_id
+
+    cell = smartsheet.models.Cell()
+    cell.column_id = col_sup
+    cell.value = gestor_superior
+    row.cells.append(cell)
+
+    result = client.Sheets.update_rows(sheet.id, [row])
+
+    # dependendo do SDK, isso pode variar, mas a ideia é: se não veio row atualizado, falhar
+    updated = getattr(result, "result", None) or getattr(result, "data", None) or result
+    if not updated:
+        return jsonify({"ok": False, "message": "Smartsheet não confirmou a atualização."}), 500
+
+    invalidate_sheet_cache("cadastro")  # se você tiver cache
+    return jsonify({"ok": True, "message": "Gestor Superior atualizado."})
 
     payload = request.get_json(silent=True) or {}
     colaborador = _norm_email(payload.get("colaborador") or "")
