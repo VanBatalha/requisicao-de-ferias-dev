@@ -145,27 +145,13 @@ def api_solicitar_ferias():
         # Validação adicional: regras de fracionamento da Licença Certariana (considera períodos já lançados)
         if saldo_tipo_req == "PREMIUM" and not certariana_segmentos:
             try:
-                direito_total = int(resumo.get("premium", {}).get("direito", 0) or 0)
-
-                adm_c = _colaborador_admissao(colaborador_email)
-                _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio) if adm_c else (0, None, None)
-
-                # Considera APROVADA + RESERVA (pendente/em análise) para travar fracionamentos inválidos
-                include_statuses = set(STATUS_APROVADA) | set(STATUS_RESERVA)
-                existentes = _listar_segmentos_premium(colaborador_email, win_start, win_end, include_statuses=include_statuses)
-
-                ok_frac, msg_frac = _validar_fracionamento_certariana(
-                    direito_total=direito_total,
-                    dt_inicio=dt_inicio,
-                    dt_fim=dt_fim,
-                    dias_novos=int(dias_novos),
-                    segmentos_existentes=existentes,
-                )
-                if not ok_frac:
-                    return jsonify({"ok": False, "message": msg_frac}), 400
+                _validar_fracionamento_certariana(colaborador_email, dias_novos, dt_inicio=dt_inicio)
+            except ValueError as ve:
+                return jsonify({"ok": False, "message": str(ve)}), 400
             except Exception as _e:
-                # Se falhar, não bloqueia (mantém compatibilidade), mas loga
-                print(f"[CERTARIANA] Falha ao validar fracionamento: {_e}")
+                # erro inesperado: não faz sentido liberar fracionamento inválido silenciosamente
+                return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {_e}"}), 500
+
 
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
@@ -495,5 +481,4 @@ def build_cells(cells_by_id: dict):
             c.value = val
             out.append(c)
         return out
-
 
