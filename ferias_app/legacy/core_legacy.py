@@ -266,11 +266,13 @@ def ensure_primary_cell(sheet, row, value):
         return
 
 
-def _get_sheet_solicitacoes(client):
+def _get_sheet_solicitacoes(client=None):
     """Cache por request + cache em memória (TTL) do sheet de solicitações.
 
     Isso reduz bastante a latência ao navegar entre telas (Smartsheet é o gargalo).
     """
+    if client is None:
+        client = get_smartsheet_client()
     if not client:
         return None
 
