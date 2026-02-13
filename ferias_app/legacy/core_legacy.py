@@ -833,7 +833,13 @@ STATUS_RESERVA = {"pendente", "em analise", "em análise"}
 def _canonical_status(s: str) -> str:
     n = _norm_status(s)
     return STATUS_CANON.get(n, (s or "").strip().upper())
-def _listar_segmentos_premium(email: str, win_start: dt.date, win_end: dt.date, exclude_row_id: int | None = None):
+def _listar_segmentos_premium(
+    email: str,
+    win_start: dt.date,
+    win_end: dt.date,
+    exclude_row_id: int | None = None,
+    include_statuses: set[str] | None = None,
+):
     """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
     sheet = _get_sheet_solicitacoes()
     col_email = col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
@@ -866,8 +872,15 @@ def _listar_segmentos_premium(email: str, win_start: dt.date, win_end: dt.date, 
 
         st = _canonical_status(str(_cell_value(row, col_status) or ""))
         stn = _norm_status(st)
-        if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
-            continue
+
+        # Se o chamador especificar quais status considerar, respeita.
+        # Caso contrário, mantém o padrão: aprovadas + reservas.
+        if include_statuses is not None:
+            if stn not in include_statuses:
+                continue
+        else:
+            if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
+                continue
 
         dt_ini = _parse_date(_cell_value(row, col_ini))
         if not dt_ini:
