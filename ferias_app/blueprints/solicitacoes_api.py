@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
-from ..legacy.core_legacy import _validar_fracionamento_certariana  # noqa: F401
+from ..rules import RuleError, validate_licenca_certariana
 
 @bp.route("/api/solicitar-ferias", methods=["POST"])
 def api_solicitar_ferias():
@@ -150,8 +150,8 @@ def api_solicitar_ferias():
         # - Não pode sobrar saldo < 10 (ou deve zerar)
         if saldo_tipo_req == "PREMIUM":
             try:
-                _validar_fracionamento_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio)
-            except ValueError as ve:
+                validate_licenca_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio)
+            except RuleError as ve:
                 return jsonify({"ok": False, "message": str(ve)}), 400
             except Exception as e:
                 return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
@@ -427,20 +427,16 @@ def api_editar_solicitacao():
             adm_c = _colaborador_admissao(colab_email_row)
             _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio_novo) if adm_c else (0, None, None)
             include_statuses = set(STATUS_APROVADA) | set(STATUS_RESERVA)
-            existentes = _listar_segmentos_premium(
-                colab_email_row, win_start, win_end,
-                exclude_row_id=row_id_int,
-                include_statuses=include_statuses
-            )
-            ok_frac, msg_frac = _validar_fracionamento_certariana(
-                direito_total=dias_direito,
-                dt_inicio=dt_inicio_novo,
-                dt_fim=dt_fim_novo,
-                dias_novos=int(dias_novos),
-                segmentos_existentes=existentes,
-            )
-            if not ok_frac:
-                return jsonify({"ok": False, "message": msg_frac})
+            try:
+                validate_licenca_certariana(
+                    colab_email_row,
+                    float(dias_novos),
+                    dt_inicio=dt_inicio_novo,
+                    exclude_row_id=row_id_int,
+                    include_statuses=include_statuses,
+                )
+            except RuleError as ve:
+                return jsonify({"ok": False, "message": str(ve)}), 400
 
         if dias_novos > saldo_ajustado:
             return jsonify({

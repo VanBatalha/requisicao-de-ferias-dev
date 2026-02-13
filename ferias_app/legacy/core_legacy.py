@@ -905,7 +905,8 @@ def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_in
         win_start = datetime.date.min
         win_end = datetime.date.max
     else:
-        win_start, win_end = _janela_licenca_certariana(adm)
+        # _janela_licenca_certariana retorna (dias_base, win_start, win_end)
+        _, win_start, win_end = _janela_licenca_certariana(adm)
 
     # lista segmentos existentes
     existentes = _listar_segmentos_premium(email, win_start, win_end)
