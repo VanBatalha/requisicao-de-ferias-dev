@@ -689,6 +689,11 @@ def _norm_solicitacao(s: str) -> str:
     """Normaliza SOLICITAÇÃO: remove acentos, caixa baixa, reduz espaços."""
     return _norm_title(s)
 
+
+def _norm(s: str | None) -> str:
+    """Compat: normalizador genérico usado em versões antigas."""
+    return _norm_title((s or "").strip())
+
 def _is_ajuste(solic: str) -> bool:
     t = _norm_solicitacao(solic)
     return "ajuste" in t
