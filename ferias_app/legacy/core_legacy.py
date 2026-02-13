@@ -832,6 +832,106 @@ STATUS_RESERVA = {"pendente", "em analise", "em análise"}
 def _canonical_status(s: str) -> str:
     n = _norm_status(s)
     return STATUS_CANON.get(n, (s or "").strip().upper())
+def _listar_segmentos_premium(email: str, win_start: datetime.date, win_end: datetime.date):
+    """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
+    sheet = _get_sheet_solicitacoes()
+    col_email = col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
+    col_saldo = col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
+    col_dias = col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
+    col_status = col_id_by_name(sheet, "STATUS")
+    col_ini = col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
+    col_sol = col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
+
+    target = _norm_email(email)
+    out = []
+
+    for row in getattr(sheet, "rows", []) or []:
+        em = _norm_email(_cell_value(row, col_email))
+        if not em or em != target:
+            continue
+
+        saldo = str(_cell_value(row, col_saldo) or "")
+        saldo_n = _norm(saldo)
+        if saldo_n != "premium":
+            continue
+
+        sol = str(_cell_value(row, col_sol) or "")
+        if "certar" not in _norm(sol):
+            continue
+        if "ajuste" in _norm(sol):
+            continue
+
+        st = _canonical_status(str(_cell_value(row, col_status) or ""))
+        stn = _norm_status(st)
+        if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
+            continue
+
+        dt_ini = _parse_date(_cell_value(row, col_ini))
+        if not dt_ini:
+            continue
+        d = dt_ini.date()
+        if d < win_start or d > win_end:
+            continue
+
+        try:
+            dias = float(str(_cell_value(row, col_dias) or "").replace(",", "."))
+        except Exception:
+            dias = 0
+        if dias:
+            out.append(int(round(dias)))
+    return out
+
+def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_inicio: datetime.datetime | None = None):
+    """
+    Regras Licença Certariana (PREMIUM):
+    - Até 3 períodos dentro da janela (30 dias).
+    - Cada período >= 10 dias.
+    - Se 3 períodos, obrigatoriamente 3x10.
+    - Não pode sobrar saldo < 10 (senão for 0).
+    """
+    # valida mínimo do novo período
+    try:
+        dias = float(dias_solicitados)
+    except Exception:
+        dias = 0.0
+    if dias < 10:
+        raise ValueError("Na Licença Certariana, cada período deve ter no mínimo 10 dias.")
+
+    # calcula janela premium
+    adm = _colaborador_admissao(email)
+    if not adm:
+        # se não achar admissão, aplica regra só pelo saldo (mais seguro)
+        win_start = datetime.date.min
+        win_end = datetime.date.max
+    else:
+        win_start, win_end = _janela_licenca_certariana(adm)
+
+    # lista segmentos existentes
+    existentes = _listar_segmentos_premium(email, win_start, win_end)
+    total_exist = sum(existentes)
+    periodos_exist = len(existentes)
+
+    total = total_exist + int(round(dias))
+    if total > 30:
+        raise ValueError(f"Licença Certariana excede 30 dias na janela atual (tentativa: {total} dias).")
+
+    periodos = periodos_exist + 1
+    if periodos > 3:
+        raise ValueError("Licença Certariana permite no máximo 3 períodos na janela atual.")
+
+    # regra de saldo restante (se não for 0, não pode ser <10)
+    restante = 30 - total
+    if restante != 0 and restante < 10:
+        raise ValueError("O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar).")
+
+    # regra específica de 3 períodos: 3x10
+    if periodos == 3:
+        todos = existentes + [int(round(dias))]
+        if total != 30 or any(x != 10 for x in todos):
+            raise ValueError("Se a Licença Certariana for dividida em 3 períodos, deve ser obrigatoriamente 3×10 (total 30).")
+
+    return True
+
 
 def _cell_value(row, col_id):
     """Retorna o valor da célula da linha para a coluna (ou None)."""

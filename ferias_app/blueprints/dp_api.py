@@ -364,8 +364,8 @@ def api_dp_gestor_superior():
 
     sheet = client.Sheets.get_sheet(ID_FOLHA_CADASTRO)
     # Busca colunas por nome com tolerância a variações (acentos/maiúsculas)
-    col_email = col_id_by_name(sheet, ["EMAIL DA EMPRESA", "EMAIL", "E-MAIL", "EMAIL EMPRESA"])
-    col_sup = col_id_by_name(sheet, ["GESTOR SUPERIOR", "GESTOR SUPERIOR ", "GESTOR_SUPERIOR"])
+    col_email = col_id_by_name(sheet, *["EMAIL DA EMPRESA", "EMAIL", "E-MAIL", "EMAIL EMPRESA"])
+    col_sup = col_id_by_name(sheet, *["GESTOR SUPERIOR", "GESTOR SUPERIOR ", "GESTOR_SUPERIOR"])
     if not col_email or not col_sup:
         return jsonify({"ok": False, "message": "Colunas de EMAIL e/ou GESTOR SUPERIOR não encontradas no cadastro."}), 500
 
