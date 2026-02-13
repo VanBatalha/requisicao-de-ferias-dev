@@ -844,12 +844,14 @@ def _listar_segmentos_premium(
 ):
     """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
     sheet = _get_sheet_solicitacoes()
-    col_email = col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
-    col_saldo = col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
-    col_dias = col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
-    col_status = col_id_by_name(sheet, "STATUS")
-    col_ini = col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
-    col_sol = col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
+
+    # Usa o helper local (legacy) para resolver IDs de colunas por nome.
+    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
+    col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
+    col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
+    col_status = _col_id_by_name(sheet, "STATUS")
+    col_ini = _col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
+    col_sol = _col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
 
     target = _norm_email(email)
     out = []
