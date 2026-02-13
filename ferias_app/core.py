@@ -1,4 +1,6 @@
-"""Este módulo existe para manter compatibilidade com imports antigos (ex.: `from ferias_app.core import ...`).
+"""Compat layer (Stage 3)
+
+Este módulo existe para manter compatibilidade com imports antigos (ex.: `from ferias_app.core import ...`).
 
 A lógica foi reorganizada em:
 - ferias_app/services/*
@@ -9,9 +11,6 @@ O legado completo permanece em `ferias_app/legacy/core_legacy.py` como fallback.
 """
 
 from __future__ import annotations
-
-import json
-from pathlib import Path
 
 # Novos módulos (preferidos)
 from .config import get_settings, Settings  # noqa: F401
@@ -148,41 +147,3 @@ def get_user_grupos(email: str):
     if ut == "DP":
         return ["DP"]
     return ["USER"]
-
-# ---------------------------------------------------------------------------
-# Runtime settings (small JSON stored alongside the app)
-# Used by admin endpoints (e.g. /api/admin/same-month).
-# ---------------------------------------------------------------------------
-
-_DEFAULT_RUNTIME_SETTINGS = {
-    "same_month": {"enabled": True},
-}
-
-def _runtime_settings_path() -> Path:
-    # Allow overriding path (useful in tests / local runs)
-    env_path = os.getenv("RUNTIME_SETTINGS_PATH")
-    if env_path:
-        return Path(env_path)
-    return Path(__file__).resolve().parent / "runtime_settings.json"
-
-def _load_runtime_settings() -> dict:
-    path = _runtime_settings_path()
-    try:
-        if path.exists():
-            raw = path.read_text(encoding="utf-8")
-            data = json.loads(raw) if raw.strip() else {}
-            if isinstance(data, dict):
-                merged = dict(_DEFAULT_RUNTIME_SETTINGS)
-                merged.update(data)
-                return merged
-    except Exception:
-        logger.exception("Falha ao ler runtime_settings.json (usando defaults)")
-    return dict(_DEFAULT_RUNTIME_SETTINGS)
-
-def _save_runtime_settings(data: dict) -> None:
-    path = _runtime_settings_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        logger.exception("Falha ao salvar runtime_settings.json")

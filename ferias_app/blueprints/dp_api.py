@@ -110,7 +110,7 @@ def api_dp_ajustes_lancar():
         # separa com quebra de linha quando já existe observação do usuário
         obs_final = (obs_final + ("\n" if obs_final else "") + complemento).strip()
 
-    hoje = dt.date.todayy().strftime("%Y-%m-%d")
+    hoje = dt.date.today().strftime("%Y-%m-%d")
     agora_iso = dt.datetime.now().isoformat(timespec="seconds")
 
     try:
@@ -413,7 +413,7 @@ def api_dp_ferias_mes():
     ano = request.args.get("ano", type=int)
     
     if not mes or not ano:
-        hoje = dt.date.todayy()
+        hoje = dt.date.today()
         mes = hoje.month
         ano = hoje.year
     
