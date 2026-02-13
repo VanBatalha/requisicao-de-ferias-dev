@@ -1,5 +1,6 @@
 from __future__ import annotations
-
+from ..services.permissions_service import require_dp
+from ..services.permissions_service import require_admin
 from .base import bp
 from ..core import *  # noqa: F401,F403
 from flask import request, jsonify, current_app
