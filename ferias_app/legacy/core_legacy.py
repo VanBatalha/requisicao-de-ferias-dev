@@ -870,9 +870,9 @@ def _listar_segmentos_premium(
 
         saldo = str(_cell_value(row, col_saldo) or "")
         saldo_n = _norm(saldo)
-        if saldo_n != "premium":
+        # Aceita variações históricas do campo SALDO TIPO
+        if not (saldo_n == "premium" or "certar" in saldo_n):
             continue
-
         sol = str(_cell_value(row, col_sol) or "")
         if "certar" not in _norm(sol):
             continue
