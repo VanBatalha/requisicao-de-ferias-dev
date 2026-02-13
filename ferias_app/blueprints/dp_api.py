@@ -14,8 +14,7 @@ from ..legacy.core_legacy import (
     _norm_email,
     _norm_status,
     _norm_title,
-    _parse_date_value,
-    _picklist_match,
+    _parse_date_value
 )
 
 
