@@ -2,6 +2,7 @@ import os
 import secrets
 import urllib.parse
 import datetime as dt
+import datetime
 import time
 import json
 import re
@@ -832,7 +833,7 @@ STATUS_RESERVA = {"pendente", "em analise", "em análise"}
 def _canonical_status(s: str) -> str:
     n = _norm_status(s)
     return STATUS_CANON.get(n, (s or "").strip().upper())
-def _listar_segmentos_premium(email: str, win_start: datetime.date, win_end: datetime.date):
+def _listar_segmentos_premium(email: str, win_start: dt.date, win_end: dt.date):
     """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
     sheet = _get_sheet_solicitacoes()
     col_email = col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
