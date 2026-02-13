@@ -288,7 +288,7 @@ def api_solicitar_ferias():
                 obs_row = (obs_row + ("\n" if obs_row else "") + f"Licença Certariana: parcela {idx}/{total_parcelas}").strip()
                 add_cell_unique(cells, col_obs, obs_row)
 
-                r.cells = [{"column_id": cid, "value": val} for cid, val in cells.items()]
+                r.cells = build_cells(cells)
 
                 ensure_primary_cell(sheet_sol, r, colaborador_email)
                 rows_to_add.append(r)
@@ -312,7 +312,7 @@ def api_solicitar_ferias():
             # Observações (opcional) -> coluna OBSERVAÇÕES
             add_cell_unique(cells, col_obs, observacoes)
 
-            new_row.cells = [{"column_id": cid, "value": val} for cid, val in cells.items()]
+            new_row.cells = build_cells(cells)
 
             ensure_primary_cell(sheet_sol, new_row, colaborador_email)
             rows_to_add.append(new_row)
@@ -461,11 +461,11 @@ def api_editar_solicitacao():
 
         row_update = smartsheet.models.Row()
         row_update.id = row_id_int
-        row_update.cells = [
-            {"column_id": cols_sol.get("DATA INICIO", -1), "value": data_inicio_str},
-            {"column_id": cols_sol.get("DATA FIM", -1), "value": data_fim_str},
-            {"column_id": cols_sol.get("DIAS", -1), "value": dias_novos},
-        ]
+        row_update.cells = build_cells({
+            cols_sol.get("DATA INICIO", -1): data_inicio_str,
+            cols_sol.get("DATA FIM", -1): data_fim_str,
+            cols_sol.get("DIAS", -1): dias_novos,
+        })
         
         client.Sheets.update_rows(ID_FOLHA_SOLICITACOES, [row_update])
         invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
@@ -480,3 +480,20 @@ def api_editar_solicitacao():
         "message": f"Solicitação atualizada para {dias_novos} dia(s). Saldo restante: {saldo_final}.",
         "saldo_atualizado": saldo_final
     })
+def build_cells(cells_by_id: dict):
+        """Converte {column_id: value} em lista de Cell() do SDK (evita linha em branco)."""
+        out = []
+        for cid, val in cells_by_id.items():
+            try:
+                cid_int = int(cid)
+            except Exception:
+                continue
+            if cid_int <= 0:
+                continue
+            c = smartsheet.models.Cell()
+            c.column_id = cid_int
+            c.value = val
+            out.append(c)
+        return out
+
+
