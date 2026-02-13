@@ -1,10 +1,7 @@
 from __future__ import annotations
-from ..services.permissions_service import require_dp
-from ..services.permissions_service import require_admin
+
 from .base import bp
 from ..core import *  # noqa: F401,F403
-from flask import request, jsonify, current_app
-import traceback
 
 
 def _has_dp_access(email: str | None) -> bool:
@@ -66,38 +63,27 @@ def api_dp_saldos(email):
 
 
 @bp.route("/api/dp/ajustes/lancar", methods=["POST"])
-@require_dp
 def api_dp_ajustes_lancar():
+    user = session.get("user")
+    if not user or not _has_dp_access(user.get("email")):
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    client = get_smartsheet_client()
+    if not client:
+        return jsonify({"ok": False, "message": "Usuário não autenticado"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    colab_email = safe_lower(payload.get("colaborador_email") or payload.get("email") or "")
+    solicitacao_raw = (payload.get("solicitacao") or "").strip()
+    obs_user = (payload.get("observacoes") or "").strip()
+
     try:
-        payload = request.get_json(silent=True) or {}
+        dias = int(float(payload.get("dias") or 0))
+    except Exception:
+        dias = 0
 
-        tipo = (payload.get("tipo") or "").strip().upper()
-        email = (payload.get("email") or "").strip().lower()
-        dias = payload.get("dias")
-        obs = (payload.get("observacoes") or "").strip()
-
-        # validações (ajuste conforme seu front)
-        if not email:
-            return jsonify({"ok": False, "message": "Email não informado"}), 400
-        if tipo not in ("REGULAR", "PREMIUM"):
-            return jsonify({"ok": False, "message": f"Tipo inválido: {tipo}"}), 400
-
-        try:
-            dias_int = int(dias)
-        except Exception:
-            return jsonify({"ok": False, "message": f"Dias inválido: {dias}"}), 400
-
-        # --- DAQUI PRA BAIXO mantém sua lógica atual de salvar no Smartsheet ---
-        # IMPORTANTE: qualquer erro agora cai no except e volta JSON.
-        #
-        # ... sua implementação atual para gravar na planilha de ajustes ...
-
-        return jsonify({"ok": True, "message": "Ajuste lançado com sucesso."})
-
-    except Exception as e:
-        tb = traceback.format_exc()
-        current_app.logger.error("[DP AJUSTES] Erro ao lançar ajuste: %s\n%s", str(e), tb)
-        return jsonify({"ok": False, "message": f"Erro interno ao lançar ajuste: {str(e)}"}), 500
+    if not colab_email:
+        return jsonify({"ok": False, "message": "Colaborador inválido"}), 400
 
     # Aceita variações com/sem acento, underscores, etc.
     ns = _norm_title(solicitacao_raw)
