@@ -2,7 +2,21 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
-from ..legacy.core_legacy import _norm_title  # noqa: F401
+# OBS: o módulo legacy tem vários helpers com prefixo "_".
+# Eles NÃO entram em "import *" (por convenção do Python), então precisam ser
+# importados explicitamente quando usados aqui.
+from ..legacy.core_legacy import (
+    _canonical_status,
+    _col_id,
+    _cols_norm_map,
+    _infer_saldo_tipo,
+    _is_ajuste,
+    _norm_email,
+    _norm_status,
+    _norm_title,
+    _parse_date_value,
+    _picklist_match,
+)
 
 
 def _has_dp_access(email: str | None) -> bool:
