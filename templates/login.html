@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="auth-shell">
+  <div class="card auth-card" style="padding: 28px 26px;">
+    <div style="display:flex; justify-content:center; margin-bottom: 14px;">
+      <img
+        src="https://media-exp1.licdn.com/dms/image/C4D0BAQHqH2D2y2WgSQ/company-logo_200_200/0/1581444009351?e=2159024400&v=beta&t=lm3gYsh-pY7vqYAQaSaXBeNLH-OuenZjKSWZChdEIcc"
+        alt="Logo"
+        style="width: 54px; height: 54px; border-radius: 14px; object-fit: cover;"
+      />
+    </div>
+
+    <h2 style="text-align:center; margin: 0 0 12px;">Acessar</h2>
+    <p class="muted" style="text-align:center; margin-top: 0;">Acesso via LDAP.</p>
+
+    {% if error %}
+      <div class="text-danger" style="margin: 10px 0 12px;">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('ferias.login') }}" style="margin-top: 10px;">
+      <div style="margin-bottom: 12px;">
+        <label class="label">Usuário</label>
+        <div class="input-with-action">
+          <input class="input" type="text" name="username" placeholder="seu usuário" required>
+          <button class="input-action" type="button" tabindex="-1" aria-hidden="true" title="Campo usuário">…</button>
+        </div>
+      </div>
+      <div style="margin-bottom: 16px;">
+        <label class="label">Senha</label>
+        <div class="input-with-action">
+          <input class="input" type="password" name="password" placeholder="sua senha" required>
+          <button class="input-action" type="button" tabindex="-1" aria-hidden="true" title="Campo senha">…</button>
+        </div>
+      </div>
+      <button type="submit" class="btn" style="width: 100%; padding: 12px 18px; border-radius: 14px; font-weight: 800;">Entrar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
