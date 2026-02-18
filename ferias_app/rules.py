@@ -84,6 +84,15 @@ def validate_licenca_certariana(
             "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar)."
         )
 
+    if periodos == 2 and restante > 0:
+        # Para haver 3 períodos, a regra exige obrigatoriamente 3×10 (total 30).
+        # Logo, após 2 períodos, só é permitido "restar" 10 se ambos os dois períodos forem 10.
+        if int(round(dias)) != 10 or any(int(round(x)) != 10 for x in segs) or int(round(restante)) != 10:
+            raise RuleError(
+                "Para fracionar a Licença Certariana em 3 períodos, deve ser obrigatoriamente 3×10 (total 30). "
+                "Caso contrário, utilize no máximo 2 períodos, com mínimo de 10 dias cada."
+            )
+
     if periodos == 3:
         todos = segs + [int(round(dias))]
         if total != 30 or any(v != 10 for v in todos):
