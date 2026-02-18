@@ -150,7 +150,7 @@ def api_solicitar_ferias():
         # - Não pode sobrar saldo < 10 (ou deve zerar)
         if saldo_tipo_req == "PREMIUM":
             try:
-                validate_licenca_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio)
+                validate_licenca_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio, dt_fim=dt_fim)
             except RuleError as ve:
                 return jsonify({"ok": False, "message": str(ve)}), 400
             except Exception as e:
@@ -432,6 +432,7 @@ def api_editar_solicitacao():
                     colab_email_row,
                     float(dias_novos),
                     dt_inicio=dt_inicio_novo,
+                    dt_fim=dt_fim_novo,
                     exclude_row_id=row_id_int,
                     include_statuses=include_statuses,
                 )

@@ -24,6 +24,7 @@ def validate_licenca_certariana(
     dias_novos: float,
     *,
     dt_inicio: Optional[dt.date] = None,
+    dt_fim: Optional[dt.date] = None,
     exclude_row_id: Optional[int] = None,
     include_statuses: Optional[Set[str]] = None,
 ) -> None:
@@ -35,7 +36,7 @@ def validate_licenca_certariana(
     from .legacy.core_legacy import (
         _colaborador_admissao,
         _janela_licenca_certariana,
-        _listar_segmentos_premium,
+        _listar_periodos_premium,
     )
 
     try:
@@ -49,12 +50,20 @@ def validate_licenca_certariana(
     adm = _colaborador_admissao(email)
     if not adm:
         # sem admissão: aplica regra apenas pela matemática (mais seguro que liberar geral)
+        direito_total = 30
         win_start, win_end = dt.date.min, dt.date.max
     else:
         # _janela_licenca_certariana retorna (dias_base, win_start, win_end)
-        _, win_start, win_end = _janela_licenca_certariana(adm, hoje=dt_inicio or None)
+        dias_base, win_start, win_end = _janela_licenca_certariana(adm, hoje=dt_inicio or None)
+        try:
+            direito_total = int(dias_base or 0)
+        except Exception:
+            direito_total = 0
 
-    existentes: list[int] = _listar_segmentos_premium(
+    if direito_total <= 0:
+        raise RuleError("Licença Certariana indisponível (direito total = 0).")
+
+    existentes = _listar_periodos_premium(
         email,
         win_start,
         win_end,
@@ -62,23 +71,42 @@ def validate_licenca_certariana(
         include_statuses=include_statuses,
     )
 
-    # normaliza existentes
-    segs = []
-    for x in existentes or []:
+    # normaliza existentes (e valida overlap quando possível)
+    segs: list[int] = []
+    if dt_inicio:
+        ini_novo = dt_inicio
+    else:
+        # sem dt_inicio: não dá para validar sobreposição; aplica apenas matemática
+        ini_novo = None
+
+    fim_novo = dt_fim
+    if ini_novo and not fim_novo:
+        fim_novo = ini_novo + dt.timedelta(days=int(round(dias)) - 1)
+
+    for seg in existentes or []:
         try:
-            segs.append(int(round(float(x))))
+            di = int(round(float(seg.get("dias") or 0)))
         except Exception:
-            segs.append(0)
+            di = 0
+        segs.append(di)
+
+        # Overlap (se tivermos datas do novo e do existente)
+        if ini_novo and fim_novo:
+            ini_e = seg.get("ini")
+            fim_e = seg.get("fim")
+            if ini_e and fim_e:
+                if not (fim_novo < ini_e or ini_novo > fim_e):
+                    raise RuleError("Este período conflita (sobrepõe) com outro período de Licença Certariana já registrado.")
 
     total = sum(segs) + int(round(dias))
-    if total > 30:
-        raise RuleError(f"Licença Certariana excede 30 dias na janela atual (tentativa: {total} dias).")
+    if total > direito_total:
+        raise RuleError(f"Licença Certariana excede o direito total ({direito_total} dias) na janela atual (tentativa: {total} dias).")
 
     periodos = len(segs) + 1
     if periodos > 3:
         raise RuleError("Licença Certariana permite no máximo 3 períodos na janela atual.")
 
-    restante = 30 - total
+    restante = direito_total - total
     if restante != 0 and restante < 10:
         raise RuleError(
             "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar)."
@@ -87,7 +115,7 @@ def validate_licenca_certariana(
     if periodos == 2 and restante > 0:
         # Para haver 3 períodos, a regra exige obrigatoriamente 3×10 (total 30).
         # Logo, após 2 períodos, só é permitido "restar" 10 se ambos os dois períodos forem 10.
-        if int(round(dias)) != 10 or any(int(round(x)) != 10 for x in segs) or int(round(restante)) != 10:
+        if not (direito_total == 30 and int(round(restante)) == 10 and int(round(dias)) == 10 and all(int(round(x)) == 10 for x in segs)):
             raise RuleError(
                 "Para fracionar a Licença Certariana em 3 períodos, deve ser obrigatoriamente 3×10 (total 30). "
                 "Caso contrário, utilize no máximo 2 períodos, com mínimo de 10 dias cada."
@@ -95,7 +123,7 @@ def validate_licenca_certariana(
 
     if periodos == 3:
         todos = segs + [int(round(dias))]
-        if total != 30 or any(v != 10 for v in todos):
+        if not (direito_total == 30 and total == 30 and all(v == 10 for v in todos)):
             raise RuleError(
                 "Quando houver 3 períodos na Licença Certariana, deve ser obrigatoriamente 3×10 (total 30)."
             )

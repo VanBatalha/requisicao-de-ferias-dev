@@ -906,6 +906,88 @@ def _listar_segmentos_premium(
             out.append(int(round(dias)))
     return out
 
+
+def _listar_periodos_premium(
+    email: str,
+    win_start: dt.date,
+    win_end: dt.date,
+    exclude_row_id: int | None = None,
+    include_statuses: set[str] | None = None,
+):
+    """Lista períodos (ini/fim/dias) já lançados/pendentes de Licença Certariana (PREMIUM) na janela.
+
+    Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None}
+    """
+    sheet = _get_sheet_solicitacoes()
+
+    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
+    col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
+    col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
+    col_status = _col_id_by_name(sheet, "STATUS")
+    col_ini = _col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
+    col_fim = _col_id_by_name(sheet, "DATA FIM", "DATA FINAL", "FIM")
+    col_sol = _col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
+
+    target = _norm_email(email)
+    out: list[dict] = []
+
+    for row in getattr(sheet, "rows", []) or []:
+        if exclude_row_id and getattr(row, "id", None) == exclude_row_id:
+            continue
+
+        em = _norm_email(_cell_value(row, col_email))
+        if not em or em != target:
+            continue
+
+        saldo = str(_cell_value(row, col_saldo) or "")
+        saldo_n = _norm(saldo)
+        if not (saldo_n == "premium" or "certar" in saldo_n):
+            continue
+
+        sol = str(_cell_value(row, col_sol) or "")
+        if "certar" not in _norm(sol):
+            continue
+        if "ajuste" in _norm(sol):
+            continue
+
+        st = _canonical_status(str(_cell_value(row, col_status) or ""))
+        stn = _norm_status(st)
+
+        if include_statuses is not None:
+            if stn not in include_statuses:
+                continue
+        else:
+            if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
+                continue
+
+        dt_ini = _parse_date(_cell_value(row, col_ini))
+        if not dt_ini:
+            continue
+        ini_d = dt_ini.date()
+        if ini_d < win_start or ini_d > win_end:
+            continue
+
+        # dias
+        try:
+            dias = float(str(_cell_value(row, col_dias) or "").replace(",", "."))
+        except Exception:
+            dias = 0.0
+        dias_i = int(round(dias)) if dias else 0
+
+        # fim
+        dt_fim = _parse_date(_cell_value(row, col_fim))
+        if dt_fim:
+            fim_d = dt_fim.date()
+        elif dias_i > 0:
+            fim_d = ini_d + dt.timedelta(days=dias_i - 1)
+        else:
+            fim_d = ini_d
+
+        out.append({"ini": ini_d, "fim": fim_d, "dias": dias_i, "row_id": getattr(row, "id", None)})
+
+    out.sort(key=lambda x: x["ini"])
+    return out
+
 def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_inicio: datetime.datetime | None = None):
     """
     Regras Licença Certariana (PREMIUM):
