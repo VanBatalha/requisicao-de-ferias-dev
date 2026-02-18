@@ -874,8 +874,9 @@ def _listar_segmentos_premium(
         if not (saldo_n == "premium" or "certar" in saldo_n):
             continue
         sol = str(_cell_value(row, col_sol) or "")
-        if "certar" not in _norm(sol):
-            continue
+        # No DEV, a Licença Certariana é identificada principalmente pelo SALDO TIPO = PREMIUM.
+        # A coluna "SOLICITAÇÃO" costuma vir como "Gozo".
+        # Mantemos apenas o bloqueio para linhas de ajuste.
         if "ajuste" in _norm(sol):
             continue
 
