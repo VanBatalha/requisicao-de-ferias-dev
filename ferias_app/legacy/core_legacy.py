@@ -963,7 +963,10 @@ def _listar_periodos_premium(
         if not dt_ini:
             continue
         ini_d = dt_ini.date()
-        if ini_d < win_start or ini_d > win_end:
+        if win_start and ini_d < win_start:
+            continue
+        if win_end and ini_d >= win_end:
+            continue
             continue
 
         # dias
@@ -982,7 +985,7 @@ def _listar_periodos_premium(
         else:
             fim_d = ini_d
 
-        out.append({"ini": ini_d, "fim": fim_d, "dias": dias_i, "row_id": getattr(row, "id", None)})
+        out.append({"ini": ini_d, "fim": fim_d, "dias": dias_i, "row_id": getattr(row, "id", None), "status": st, "solicitacao": sol})
 
     out.sort(key=lambda x: x["ini"])
     return out

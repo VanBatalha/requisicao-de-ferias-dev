@@ -12,6 +12,9 @@ Regra atual implementada aqui:
 from __future__ import annotations
 
 import datetime as dt
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import Iterable, Optional, Set
 
 
@@ -70,6 +73,21 @@ def validate_licenca_certariana(
         exclude_row_id=exclude_row_id,
         include_statuses=include_statuses,
     )
+
+
+    # Log explícito para auditoria (Render)
+    try:
+        ex_list = [
+            f"{p.get('ini')}→{p.get('fim')} dias={p.get('dias')} status={p.get('status')} sol={p.get('solicitacao')} row={p.get('row_id')}"
+            for p in (existentes or [])
+        ]
+        logger.warning(
+            "[CERTARIANA] colab=%s direito_total=%s win_start=%s win_end=%s novo=%s(%s→%s) existentes=%s",
+            email, direito_total, win_start, win_end, dias, dt_inicio, dt_fim, ex_list
+        )
+    except Exception:
+        # nunca deixar log quebrar a validação
+        pass
 
     # normaliza existentes (e valida overlap quando possível)
     segs: list[int] = []
