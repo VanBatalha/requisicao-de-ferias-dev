@@ -946,8 +946,6 @@ def _listar_periodos_premium(
             continue
 
         sol = str(_cell_value(row, col_sol) or "")
-        if "certar" not in _norm(sol):
-            continue
         if "ajuste" in _norm(sol):
             continue
 
