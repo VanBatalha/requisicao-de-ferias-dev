@@ -226,6 +226,82 @@ def get_smartsheet_client(force_user_token: bool = False):
         return smartsheet.Smartsheet(access_token)
     return None
 
+def _get_smartsheet_token() -> str | None:
+    """Obtém token Smartsheet (prioriza token de serviço; fallback OAuth em session)."""
+    service_token = (
+        os.getenv("SMARTSHEET_SERVICE_TOKEN")
+        or os.getenv("SMARTSHEET_API_TOKEN")
+        or os.getenv("SMARTSHEET_ACCESS_TOKEN")
+    )
+    if service_token:
+        return service_token
+    return session.get("access_token")
+
+
+def add_rows_rest(sheet_id: int, rows_to_add: list, *, timeout: int = 25) -> list[int]:
+    """Adiciona linhas via REST com timeout (evita travas do SDK/urllib3 em produção).
+
+    Retorna lista de row_ids inseridos (quando disponível).
+    """
+    token = _get_smartsheet_token()
+    if not token:
+        raise RuntimeError("Token Smartsheet ausente.")
+
+    url = f"https://api.smartsheet.com/2.0/sheets/{int(sheet_id)}/rows"
+    payload_rows = []
+    for r in rows_to_add or []:
+        # converte Row model -> dict esperado pela API
+        cells = []
+        for c in getattr(r, "cells", []) or []:
+            try:
+                cid = getattr(c, "column_id", None) or c.get("column_id") or c.get("columnId")
+            except Exception:
+                cid = getattr(c, "column_id", None)
+            if not cid:
+                continue
+            # value pode ser None (Smartsheet aceita)
+            val = getattr(c, "value", None) if hasattr(c, "value") else c.get("value")
+            cell = {"columnId": int(cid), "value": val}
+            # preserva "strict" se existir (evita auto-conversões)
+            if hasattr(c, "strict"):
+                cell["strict"] = bool(getattr(c, "strict"))
+            cells.append(cell)
+
+        row_dict = {"toBottom": True, "cells": cells}
+        payload_rows.append(row_dict)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    # 1 tentativa + 1 retry rápido (Smartsheet às vezes tem picos)
+    last_err = None
+    for attempt in (1, 2):
+        try:
+            resp = requests.post(url, headers=headers, json=payload_rows, timeout=timeout)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Smartsheet HTTP {resp.status_code}: {resp.text[:500]}")
+            data = resp.json() if resp.text else {}
+            inserted = []
+            try:
+                for rr in (data.get("result") or []):
+                    rid = rr.get("id")
+                    if rid:
+                        inserted.append(int(rid))
+            except Exception:
+                pass
+            return inserted
+        except Exception as e:
+            last_err = e
+            # retry apenas uma vez
+            if attempt == 1:
+                time.sleep(0.8)
+                continue
+            raise
+
+
+
 def get_col_map(sheet):
     """Retorna mapa de colunas com tratamento de erro"""
     try:
@@ -266,7 +342,7 @@ def ensure_primary_cell(sheet, row, value):
         return
 
 
-def _get_sheet_solicitacoes(client=None):
+def _get_sheet_solicitacoes(client=None, *, force_refresh: bool = False):
     """Cache por request + cache em memória (TTL) do sheet de solicitações.
 
     Isso reduz bastante a latência ao navegar entre telas (Smartsheet é o gargalo).
@@ -275,6 +351,17 @@ def _get_sheet_solicitacoes(client=None):
         client = get_smartsheet_client()
     if not client:
         return None
+
+    if force_refresh:
+        sheet = client.Sheets.get_sheet(ID_FOLHA_SOLICITACOES)
+        now = time.time()
+        _SHEET_CACHE[ID_FOLHA_SOLICITACOES] = {"ts": now, "sheet": sheet}
+        try:
+            g._sheet_solicitacoes = sheet
+        except Exception:
+            pass
+        return sheet
+
 
     # 1) cache por request
     try:
@@ -848,7 +935,7 @@ def _listar_segmentos_premium(
     include_statuses: set[str] | None = None,
 ):
     """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
-    sheet = _get_sheet_solicitacoes()
+    sheet = _get_sheet_solicitacoes(force_refresh=force_refresh)
 
     # Usa o helper local (legacy) para resolver IDs de colunas por nome.
     col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
@@ -914,6 +1001,8 @@ def _listar_periodos_premium(
     win_end: dt.date,
     exclude_row_id: int | None = None,
     include_statuses: set[str] | None = None,
+    *,
+    force_refresh: bool = False,
 ):
     """Lista períodos (ini/fim/dias) já lançados/pendentes de Licença Certariana (PREMIUM) na janela.
 

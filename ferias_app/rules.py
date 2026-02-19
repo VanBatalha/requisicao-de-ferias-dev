@@ -72,6 +72,7 @@ def validate_licenca_certariana(
         win_end,
         exclude_row_id=exclude_row_id,
         include_statuses=include_statuses,
+        force_refresh=True,
     )
 
 
@@ -85,6 +86,7 @@ def validate_licenca_certariana(
             "[CERTARIANA] colab=%s direito_total=%s win_start=%s win_end=%s novo=%s(%s→%s) existentes=%s",
             email, direito_total, win_start, win_end, dias, dt_inicio, dt_fim, ex_list
         )
+        print(f"[CERTARIANA] colab={email} direito_total={direito_total} win_start={win_start} win_end={win_end} novo={dias}({dt_inicio}→{dt_fim}) existentes={ex_list}")
     except Exception:
         # nunca deixar log quebrar a validação
         pass

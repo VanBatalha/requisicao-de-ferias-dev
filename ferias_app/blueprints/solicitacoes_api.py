@@ -313,13 +313,8 @@ def api_solicitar_ferias():
             "fim": col_fim, "dias": col_dias, "status": col_status, "obs": col_obs, "saldo_tipo": col_saldo_tipo
         })
 
-        resp = client.Sheets.add_rows(ID_FOLHA_SOLICITACOES, rows_to_add)
-        inserted_ids = []
-        try:
-            inserted_ids = [getattr(r, "id", None) for r in (resp.result or [])]
-            print("[SOLICITAR-FERIAS] inserted row ids:", inserted_ids)
-        except Exception:
-            pass
+        inserted_ids = add_rows_rest(ID_FOLHA_SOLICITACOES, rows_to_add, timeout=25)
+        print("[SOLICITAR-FERIAS] inserted row ids:", inserted_ids)
         invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao salvar solicitação: {e}"}), 500
