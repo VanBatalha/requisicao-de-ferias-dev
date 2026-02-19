@@ -883,6 +883,25 @@ def _parse_date_value(v):
     # Reaproveita o parser mais robusto (ISO + BR + datetime)
     return parse_data(v)
 
+def _to_date(v):
+    """Converte datetime/date/str em date (sem lançar erro)."""
+    if v is None:
+        return None
+    if isinstance(v, dt.datetime):
+        return v.date()
+    if isinstance(v, dt.date):
+        return v
+    try:
+        pv = _parse_date_value(v)
+        if isinstance(pv, dt.datetime):
+            return pv.date()
+        if isinstance(pv, dt.date):
+            return pv
+    except Exception:
+        pass
+    return None
+
+
 def _add_months(d: dt.date, months: int) -> dt.date:
     """Soma meses em uma data, preservando o dia quando possível."""
     y = d.year + (d.month - 1 + months) // 12
@@ -982,7 +1001,7 @@ def _listar_segmentos_premium(
         dt_ini = _parse_date_value(_cell_value(row, col_ini))
         if not dt_ini:
             continue
-        d = dt_ini.date()
+        d = _to_date(dt_ini)
         if d < win_start or d > win_end:
             continue
 
@@ -1008,11 +1027,9 @@ def _listar_periodos_premium(
 
     Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None}
     """
-    sheet = _get_sheet_solicitacoes(force_refresh=force_refresh)
+    sheet = _get_sheet_solicitacoes(force_refresh=False)
 
-    col_email = _col_id_by_name(sheet, "COLABORADOR")
-    if col_email is None:
-        col_email = _col_id_by_name(sheet, "EMAIL DO COLABORADOR", "EMAIL", "EMAIL DA EMPRESA")
+    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
     col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
     col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
     col_status = _col_id_by_name(sheet, "STATUS")
@@ -1053,7 +1070,7 @@ def _listar_periodos_premium(
         dt_ini = _parse_date_value(_cell_value(row, col_ini))
         if not dt_ini:
             continue
-        ini_d = dt_ini.date()
+        ini_d = _to_date(dt_ini)
         if win_start and ini_d < win_start:
             continue
         if win_end and ini_d > win_end:
@@ -1069,7 +1086,7 @@ def _listar_periodos_premium(
         # fim
         dt_fim = _parse_date_value(_cell_value(row, col_fim))
         if dt_fim:
-            fim_d = dt_fim.date()
+            fim_d = _to_date(dt_fim)
         elif dias_i > 0:
             fim_d = ini_d + dt.timedelta(days=dias_i - 1)
         else:
@@ -1134,14 +1151,61 @@ def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_in
 
 
 def _cell_value(row, col_id):
-    """Retorna o valor da célula da linha para a coluna (ou None)."""
+    """Retorna o valor da célula da linha para a coluna (ou None).
+
+    Importante: em colunas do tipo *Contato*, o Smartsheet costuma retornar
+    `cell.value=None` e preencher `cell.object_value` (dict) com campos como
+    `email` e `name`. Essa função tenta extrair o valor de forma robusta.
+    """
     try:
         if not col_id or int(col_id) <= 0:
             return None
         cid = int(col_id)
-        return next((c.value for c in row.cells if c.column_id == cid), None)
     except Exception:
         return None
+
+    if not row:
+        return None
+
+    for c in getattr(row, "cells", []) or []:
+        if getattr(c, "column_id", None) != cid:
+            continue
+
+        v = getattr(c, "value", None)
+        if v is not None and v != "":
+            return v
+
+        ov = getattr(c, "object_value", None)
+        if ov is None:
+            ov = getattr(c, "objectValue", None)
+
+        try:
+            if isinstance(ov, dict):
+                if ov.get("email"):
+                    return ov.get("email")
+                if ov.get("name"):
+                    return ov.get("name")
+                vals = ov.get("values")
+                if isinstance(vals, list) and vals:
+                    return vals[0]
+            if isinstance(ov, list) and ov:
+                first = ov[0]
+                if isinstance(first, dict):
+                    return first.get("email") or first.get("name")
+                return getattr(first, "email", None) or getattr(first, "name", None)
+            if ov is not None:
+                em = getattr(ov, "email", None)
+                if em:
+                    return em
+                nm = getattr(ov, "name", None)
+                if nm:
+                    return nm
+        except Exception:
+            pass
+
+        return v
+
+    return None
 
 def _colaborador_por_email(email: str):
     email = safe_lower(email)
