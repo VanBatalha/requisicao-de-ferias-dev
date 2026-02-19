@@ -935,7 +935,7 @@ def _listar_segmentos_premium(
     include_statuses: set[str] | None = None,
 ):
     """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
-    sheet = _get_sheet_solicitacoes(force_refresh=False)
+    sheet = _get_sheet_solicitacoes(force_refresh=force_refresh)
 
     # Usa o helper local (legacy) para resolver IDs de colunas por nome.
     col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
@@ -1008,7 +1008,7 @@ def _listar_periodos_premium(
 
     Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None}
     """
-    sheet = _get_sheet_solicitacoes(force_refresh=False)
+    sheet = _get_sheet_solicitacoes(force_refresh=force_refresh)
 
     col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
     col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
@@ -1075,6 +1075,29 @@ def _listar_periodos_premium(
 
         out.append({"ini": ini_d, "fim": fim_d, "dias": dias_i, "row_id": getattr(row, "id", None), "status": st, "solicitacao": sol})
 
+
+    # DEBUG: se não encontrou nada, imprime amostra para diagnóstico no Render
+    if not out:
+        try:
+            print("[CERTARIANA-DEBUG] col_ids",
+                  {"email": col_email, "saldo": col_saldo, "dias": col_dias, "status": col_status, "inicio": col_ini, "fim": col_fim, "solicitacao": col_sol})
+            sample = []
+            for row in (getattr(sheet, "rows", []) or [])[:8]:
+                rid = getattr(row, "id", None)
+                sample.append({
+                    "row_id": rid,
+                    "email": _cell_value(row, col_email),
+                    "saldo": _cell_value(row, col_saldo),
+                    "dias": _cell_value(row, col_dias),
+                    "status": _cell_value(row, col_status),
+                    "inicio": _cell_value(row, col_ini),
+                    "fim": _cell_value(row, col_fim),
+                    "sol": _cell_value(row, col_sol),
+                })
+            print("[CERTARIANA-DEBUG] sample_first_rows", sample)
+        except Exception as e:
+            print("[CERTARIANA-DEBUG] failed", repr(e))
+
     out.sort(key=lambda x: x["ini"])
     return out
 
@@ -1132,14 +1155,50 @@ def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_in
 
 
 def _cell_value(row, col_id):
-    """Retorna o valor da célula da linha para a coluna (ou None)."""
+    """Retorna o valor da célula (preferindo display_value) e faz unwrap de tipos comuns do Smartsheet.
+
+    Observação: Em colunas do tipo Contact List, o SDK costuma retornar:
+      - value: dict {'email': ..., ...}  OU  list[dict]
+      - display_value: string com o email/nome
+
+    Para garantir que filtros por email funcionem, este helper:
+      1) tenta display_value,
+      2) depois tenta extrair 'email' de dict/list,
+      3) por fim retorna value bruto.
+    """
     try:
         if not col_id or int(col_id) <= 0:
             return None
         cid = int(col_id)
-        return next((c.value for c in row.cells if c.column_id == cid), None)
+        cell = next((c for c in row.cells if c.column_id == cid), None)
+        if cell is None:
+            return None
+
+        dv = getattr(cell, "display_value", None)
+        if dv not in (None, ""):
+            return dv
+
+        v = getattr(cell, "value", None)
+
+        # Contact list / contact
+        if isinstance(v, dict):
+            if "email" in v and v.get("email"):
+                return v.get("email")
+        if isinstance(v, list) and v:
+            # list of contacts
+            emails = []
+            for item in v:
+                if isinstance(item, dict) and item.get("email"):
+                    emails.append(item.get("email"))
+                else:
+                    emails.append(str(item))
+            # Se for lista de emails, retorna string com primeiro (compat com uso atual)
+            return emails[0] if len(emails) == 1 else ",".join(emails)
+
+        return v
     except Exception:
         return None
+
 
 def _colaborador_por_email(email: str):
     email = safe_lower(email)
