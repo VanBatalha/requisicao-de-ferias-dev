@@ -935,7 +935,7 @@ def _listar_segmentos_premium(
     include_statuses: set[str] | None = None,
 ):
     """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
-    sheet = _get_sheet_solicitacoes(force_refresh=force_refresh)
+    sheet = _get_sheet_solicitacoes(force_refresh=False)
 
     # Usa o helper local (legacy) para resolver IDs de colunas por nome.
     col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
@@ -979,7 +979,7 @@ def _listar_segmentos_premium(
             if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
                 continue
 
-        dt_ini = _parse_date(_cell_value(row, col_ini))
+        dt_ini = _parse_date_value(_cell_value(row, col_ini))
         if not dt_ini:
             continue
         d = dt_ini.date()
@@ -1008,7 +1008,7 @@ def _listar_periodos_premium(
 
     Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None}
     """
-    sheet = _get_sheet_solicitacoes()
+    sheet = _get_sheet_solicitacoes(force_refresh=False)
 
     col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
     col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
@@ -1048,14 +1048,13 @@ def _listar_periodos_premium(
             if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
                 continue
 
-        dt_ini = _parse_date(_cell_value(row, col_ini))
+        dt_ini = _parse_date_value(_cell_value(row, col_ini))
         if not dt_ini:
             continue
         ini_d = dt_ini.date()
         if win_start and ini_d < win_start:
             continue
-        if win_end and ini_d >= win_end:
-            continue
+        if win_end and ini_d > win_end:
             continue
 
         # dias
@@ -1066,7 +1065,7 @@ def _listar_periodos_premium(
         dias_i = int(round(dias)) if dias else 0
 
         # fim
-        dt_fim = _parse_date(_cell_value(row, col_fim))
+        dt_fim = _parse_date_value(_cell_value(row, col_fim))
         if dt_fim:
             fim_d = dt_fim.date()
         elif dias_i > 0:

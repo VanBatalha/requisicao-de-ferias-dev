@@ -310,6 +310,7 @@ def api_solicitar_ferias():
         print("[SOLICITAR-FERIAS] Gravando no sheet:", ID_FOLHA_SOLICITACOES)
         print("[SOLICITAR-FERIAS] Col IDs:", {
             "colab": col_colab, "gestor": col_gestor,
+            "solicitacao": col_solic, "inicio": col_inicio,
             "fim": col_fim, "dias": col_dias, "status": col_status, "obs": col_obs, "saldo_tipo": col_saldo_tipo
         })
 
