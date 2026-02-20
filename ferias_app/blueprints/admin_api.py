@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from ferias_app.legacy.core_legacy import _load_runtime_settings
-
 from .base import bp
 from ..core import *  # noqa: F401,F403
 
@@ -201,3 +199,4 @@ def api_admin_set_same_month():
 # ============================================
 # API: dp - COLABORADORES (Planilha 360944526 - COLABORADORES (Planilha 3609445264215940)
 # ============================================
+
