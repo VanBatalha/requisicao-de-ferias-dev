@@ -23,14 +23,26 @@ bp = Blueprint("solicitacoes_api", __name__)
 # -------------------------
 
 def _cell_value(row, col_id):
-    # Smartsheet SDK: cell.value is the raw value, display_value is formatted.
-    for c in getattr(row, "cells", []) or []:
-        if c.column_id == col_id:
-            v = c.value
+    for c in row.get("cells", []):
+        if c.get("columnId") == col_id:
+            v = c.get("value", None)
             if v is None:
-                v = getattr(c, "display_value", None)
+                return None
+            # Smartsheet pode retornar contato como dict (ou lista de dicts)
+            if isinstance(v, dict):
+                if "email" in v:
+                    return v.get("email")
+                if "name" in v:
+                    return v.get("name")
+                return str(v)
+            if isinstance(v, list):
+                # lista de contatos
+                if v and isinstance(v[0], dict) and "email" in v[0]:
+                    return v[0].get("email")
+                return str(v)
             return v
     return None
+
 
 
 def _iter_sheet_rows(sheet_id: int, page_size: int = 500):

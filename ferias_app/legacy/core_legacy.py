@@ -1937,3 +1937,14 @@ def periodo_permitido(dt_inicio, dt_fim, requester_email: str | None = None):
 # ============================================
 # ROTAS WEB
 # ============================================
+
+
+def obter_email_usuario_logado() -> str:
+    """Compat: retorna o e-mail do usuário autenticado via sessão (LDAP/OAuth)."""
+    try:
+        from flask import session
+        user = session.get("user") or {}
+        email = user.get("email") or user.get("mail") or ""
+        return str(email).strip().lower()
+    except Exception:
+        return ""
