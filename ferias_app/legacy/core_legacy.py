@@ -29,6 +29,8 @@ CURRENT_USER_URL = "https://api.smartsheet.com/2.0/users/me"
 # IDs das folhas no Smartsheet
 ID_FOLHA_CADASTRO = int(os.getenv("ID_FOLHA_CADASTRO", "3609445264215940"))  # cadastro colaboradores
 ID_FOLHA_SOLICITACOES = int(os.getenv("ID_FOLHA_SOLICITACOES", "2890766507528068"))  # solicitações de férias
+# Compatibilidade: alguns módulos mais novos usam este nome.
+SHEET_ID_SOLICITACOES = ID_FOLHA_SOLICITACOES
 
 """Observação importante (Gestores/Subordinados)
 
@@ -982,7 +984,7 @@ def _listar_segmentos_premium(
         dt_ini = _parse_date_value(_cell_value(row, col_ini))
         if not dt_ini:
             continue
-        d = dt_ini.date()
+        d = dt_ini
         if d < win_start or d > win_end:
             continue
 
@@ -1051,7 +1053,7 @@ def _listar_periodos_premium(
         dt_ini = _parse_date_value(_cell_value(row, col_ini))
         if not dt_ini:
             continue
-        ini_d = dt_ini.date()
+        ini_d = dt_ini
         if win_start and ini_d < win_start:
             continue
         if win_end and ini_d > win_end:
@@ -1067,7 +1069,7 @@ def _listar_periodos_premium(
         # fim
         dt_fim = _parse_date_value(_cell_value(row, col_fim))
         if dt_fim:
-            fim_d = dt_fim.date()
+            fim_d = dt_fim
         elif dias_i > 0:
             fim_d = ini_d + dt.timedelta(days=dias_i - 1)
         else:
