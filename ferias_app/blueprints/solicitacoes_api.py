@@ -148,13 +148,25 @@ def api_solicitar_ferias():
         # - Mínimo 10 dias por período
         # - Se 3 períodos, obrigatoriamente 3×10 (total 30)
         # - Não pode sobrar saldo < 10 (ou deve zerar)
+       # Dentro da função api_solicitar_ferias(), após linha ~95:
+
         if saldo_tipo_req == "PREMIUM":
-            try:
-                validate_licenca_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio, dt_fim=dt_fim)
-            except RuleError as ve:
-                return jsonify({"ok": False, "message": str(ve)}), 400
-            except Exception as e:
-                return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
+    try:
+        # Adicionar também PENDENTE e EM ANÁLISE para validação de períodos
+        from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
+        include_statuses = STATUS_APROVADA | STATUS_RESERVA
+        
+        validate_licenca_certariana(
+            colaborador_email,
+            float(dias_novos),
+            dt_inicio=dt_inicio,
+            dt_fim=dt_fim,
+            include_statuses=include_statuses,
+        )
+    except RuleError as ve:
+        return jsonify({"ok": False, "message": str(ve)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
 
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
@@ -419,21 +431,25 @@ def api_editar_solicitacao():
         dias_novos = (dt_fim_novo - dt_inicio_novo).days + 1
 
         if saldo_tipo_row == "PREMIUM":
-            # Regras de fracionamento/overlap (considerando outras linhas)
-            adm_c = _colaborador_admissao(colab_email_row)
-            _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio_novo) if adm_c else (0, None, None)
-            include_statuses = set(STATUS_APROVADA) | set(STATUS_RESERVA)
-            try:
-                validate_licenca_certariana(
-                    colab_email_row,
-                    float(dias_novos),
-                    dt_inicio=dt_inicio_novo,
-                    dt_fim=dt_fim_novo,
-                    exclude_row_id=row_id_int,
-                    include_statuses=include_statuses,
-                )
-            except RuleError as ve:
-                return jsonify({"ok": False, "message": str(ve)}), 400
+        # Regras de fracionamento/overlap (considerando outras linhas)
+        adm_c = _colaborador_admissao(colab_email_row)
+        _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio_novo) if adm_c else (0, None, None)
+        
+        # ← ADICIONE ISSO:
+        from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
+        include_statuses = STATUS_APROVADA | STATUS_RESERVA
+        
+        try:
+            validate_licenca_certariana(
+                colab_email_row,
+                float(dias_novos),
+                dt_inicio=dt_inicio_novo,
+                dt_fim=dt_fim_novo,
+                exclude_row_id=row_id_int,
+                include_statuses=include_statuses,  # ← Agora passa corretamente!
+            )
+        except RuleError as ve:
+            return jsonify({"ok": False, "message": str(ve)}), 400
 
         if dias_novos > saldo_ajustado:
             return jsonify({
