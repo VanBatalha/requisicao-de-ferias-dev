@@ -1005,11 +1005,10 @@ def _listar_periodos_premium(
     force_refresh: bool = False,
 ):
     """Lista períodos (ini/fim/dias) já lançados/pendentes de Licença Certariana (PREMIUM) na janela.
-
-    Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None}
+    Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None, status: str, solicitacao: str}
     """
     sheet = _get_sheet_solicitacoes(force_refresh=False)
-
+    
     col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
     col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
     col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
@@ -1073,7 +1072,16 @@ def _listar_periodos_premium(
         else:
             fim_d = ini_d
 
-        out.append({"ini": ini_d, "fim": fim_d, "dias": dias_i, "row_id": getattr(row, "id", None), "status": st, "solicitacao": sol})
+        out.append(
+            {
+                "ini": ini_d,
+                "fim": fim_d,
+                "dias": dias_i,
+                "row_id": getattr(row, "id", None),
+                "status": st,
+                "solicitacao": sol,
+            }
+        )
 
     out.sort(key=lambda x: x["ini"])
     return out
