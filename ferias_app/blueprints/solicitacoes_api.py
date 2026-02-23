@@ -430,25 +430,25 @@ def api_editar_solicitacao():
         dias_novos = (dt_fim_novo - dt_inicio_novo).days + 1
 
         if saldo_tipo_row == "PREMIUM":
-        # Regras de fracionamento/overlap (considerando outras linhas)
-        adm_c = _colaborador_admissao(colab_email_row)
-        _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio_novo) if adm_c else (0, None, None)
-        
-        # ← ADICIONE ISSO:
-        from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
-        include_statuses = STATUS_APROVADA | STATUS_RESERVA
-        
-        try:
-            validate_licenca_certariana(
-                colab_email_row,
-                float(dias_novos),
-                dt_inicio=dt_inicio_novo,
-                dt_fim=dt_fim_novo,
-                exclude_row_id=row_id_int,
-                include_statuses=include_statuses,  # ← Agora passa corretamente!
-            )
-        except RuleError as ve:
-            return jsonify({"ok": False, "message": str(ve)}), 400
+            # Regras de fracionamento/overlap (considerando outras linhas)
+            adm_c = _colaborador_admissao(colab_email_row)
+            _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio_novo) if adm_c else (0, None, None)
+            
+            # ← ADICIONE ISSO:
+            from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
+            include_statuses = STATUS_APROVADA | STATUS_RESERVA
+            
+            try:
+                validate_licenca_certariana(
+                    colab_email_row,
+                    float(dias_novos),
+                    dt_inicio=dt_inicio_novo,
+                    dt_fim=dt_fim_novo,
+                    exclude_row_id=row_id_int,
+                    include_statuses=include_statuses,  # ← Agora passa corretamente!
+                )
+            except RuleError as ve:
+                return jsonify({"ok": False, "message": str(ve)}), 400
 
         if dias_novos > saldo_ajustado:
             return jsonify({
@@ -492,5 +492,3 @@ def build_cells(cells_by_id: dict):
             c.value = val
             out.append(c)
         return out
-
-
