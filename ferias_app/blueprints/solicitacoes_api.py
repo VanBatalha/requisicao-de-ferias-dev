@@ -152,7 +152,6 @@ def api_solicitar_ferias():
 
     if saldo_tipo_req == "PREMIUM":
         try:
-            # Adicionar também PENDENTE e EM ANÁLISE para validação de períodos
             from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
             include_statuses = STATUS_APROVADA | STATUS_RESERVA
             
