@@ -150,23 +150,23 @@ def api_solicitar_ferias():
         # - Não pode sobrar saldo < 10 (ou deve zerar)
        # Dentro da função api_solicitar_ferias(), após linha ~95:
 
-        if saldo_tipo_req == "PREMIUM":
-    try:
-        # Adicionar também PENDENTE e EM ANÁLISE para validação de períodos
-        from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
-        include_statuses = STATUS_APROVADA | STATUS_RESERVA
-        
-        validate_licenca_certariana(
-            colaborador_email,
-            float(dias_novos),
-            dt_inicio=dt_inicio,
-            dt_fim=dt_fim,
-            include_statuses=include_statuses,
-        )
-    except RuleError as ve:
-        return jsonify({"ok": False, "message": str(ve)}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
+    if saldo_tipo_req == "PREMIUM":
+        try:
+            # Adicionar também PENDENTE e EM ANÁLISE para validação de períodos
+            from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
+            include_statuses = STATUS_APROVADA | STATUS_RESERVA
+            
+            validate_licenca_certariana(
+                colaborador_email,
+                float(dias_novos),
+                dt_inicio=dt_inicio,
+                dt_fim=dt_fim,
+                include_statuses=include_statuses,
+            )
+        except RuleError as ve:
+            return jsonify({"ok": False, "message": str(ve)}), 400
+        except Exception as e:
+            return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
 
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
