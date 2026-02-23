@@ -150,7 +150,7 @@ def api_solicitar_ferias():
         # - Não pode sobrar saldo < 10 (ou deve zerar)
        # Dentro da função api_solicitar_ferias(), após linha ~95:
 
-    if saldo_tipo_req == "PREMIUM":
+    if saldo_tipo_req = "PREMIUM":
         try:
             from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
             include_statuses = STATUS_APROVADA | STATUS_RESERVA
