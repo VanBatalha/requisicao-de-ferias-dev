@@ -10,11 +10,11 @@ Regra atual implementada aqui:
 """
 
 from __future__ import annotations
-
 import datetime as dt
 import logging
 
 logger = logging.getLogger(__name__)
+
 from typing import Iterable, Optional, Set
 
 
@@ -32,7 +32,7 @@ def validate_licenca_certariana(
     include_statuses: Optional[Set[str]] = None,
 ) -> None:
     """Valida fracionamento da Licença Certariana.
-
+    
     Levanta RuleError quando a regra for violada.
     """
     # imports locais para evitar ciclos
@@ -63,8 +63,8 @@ def validate_licenca_certariana(
         except Exception:
             direito_total = 0
 
-    if direito_total <= 0:
-        raise RuleError("Licença Certariana indisponível (direito total = 0).")
+        if direito_total <= 0:
+            raise RuleError("Licença Certariana indisponível (direito total = 0).")
 
     existentes = _listar_periodos_premium(
         email,
@@ -75,7 +75,6 @@ def validate_licenca_certariana(
         force_refresh=True,
     )
 
-
     # Log explícito para auditoria (Render)
     try:
         ex_list = [
@@ -84,9 +83,18 @@ def validate_licenca_certariana(
         ]
         logger.warning(
             "[CERTARIANA] colab=%s direito_total=%s win_start=%s win_end=%s novo=%s(%s→%s) existentes=%s",
-            email, direito_total, win_start, win_end, dias, dt_inicio, dt_fim, ex_list
+            email,
+            direito_total,
+            win_start,
+            win_end,
+            dias,
+            dt_inicio,
+            dt_fim,
+            ex_list,
         )
-        print(f"[CERTARIANA] colab={email} direito_total={direito_total} win_start={win_start} win_end={win_end} novo={dias}({dt_inicio}→{dt_fim}) existentes={ex_list}")
+        print(
+            f"[CERTARIANA] colab={email} direito_total={direito_total} win_start={win_start} win_end={win_end} novo={dias}({dt_inicio}→{dt_fim}) existentes={ex_list}"
+        )
     except Exception:
         # nunca deixar log quebrar a validação
         pass
@@ -116,11 +124,15 @@ def validate_licenca_certariana(
             fim_e = seg.get("fim")
             if ini_e and fim_e:
                 if not (fim_novo < ini_e or ini_novo > fim_e):
-                    raise RuleError("Este período conflita (sobrepõe) com outro período de Licença Certariana já registrado.")
+                    raise RuleError(
+                        "Este período conflita (sobrepõe) com outro período de Licença Certariana já registrado."
+                    )
 
     total = sum(segs) + int(round(dias))
     if total > direito_total:
-        raise RuleError(f"Licença Certariana excede o direito total ({direito_total} dias) na janela atual (tentativa: {total} dias).")
+        raise RuleError(
+            f"Licença Certariana excede o direito total ({direito_total} dias) na janela atual (tentativa: {total} dias)."
+        )
 
     periodos = len(segs) + 1
     if periodos > 3:
@@ -135,7 +147,12 @@ def validate_licenca_certariana(
     if periodos == 2 and restante > 0:
         # Para haver 3 períodos, a regra exige obrigatoriamente 3×10 (total 30).
         # Logo, após 2 períodos, só é permitido "restar" 10 se ambos os dois períodos forem 10.
-        if not (direito_total == 30 and int(round(restante)) == 10 and int(round(dias)) == 10 and all(int(round(x)) == 10 for x in segs)):
+        if not (
+            direito_total == 30
+            and int(round(restante)) == 10
+            and int(round(dias)) == 10
+            and all(int(round(x)) == 10 for x in segs)
+        ):
             raise RuleError(
                 "Para fracionar a Licença Certariana em 3 períodos, deve ser obrigatoriamente 3×10 (total 30). "
                 "Caso contrário, utilize no máximo 2 períodos, com mínimo de 10 dias cada."
