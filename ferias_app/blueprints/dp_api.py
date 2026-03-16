@@ -2,38 +2,11 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
-# OBS: o módulo legacy tem vários helpers com prefixo "_".
-# Eles NÃO entram em "import *" (por convenção do Python), então precisam ser
-# importados explicitamente quando usados aqui.
-from ..legacy.core_legacy import (
-    _canonical_status,
-    _col_id,
-    _cols_norm_map,
-    _infer_saldo_tipo,
-    _is_ajuste,
-    _norm_email,
-    _norm_status,
-    _norm_title,
-    _parse_date_value
-)
-
-
-def _has_dp_access(email: str | None) -> bool:
-    """Retorna True se o usuário tem acesso ao Painel DP.
-
-    Fail-closed: se der erro ao consultar permissões, não libera acesso.
-    """
-    try:
-        if not email:
-            return False
-        return tem_grupo(email, "DP") or tem_grupo(email, "Administrador")
-    except Exception:
-        return False
 
 @bp.route("/api/dp/colaboradores")
 def api_dp_colaboradores():
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     status_filter = (request.args.get("status") or "").upper().strip()
@@ -43,9 +16,9 @@ def api_dp_colaboradores():
 
         # Filtra por status se solicitado (aceita coluna Status/STATUS)
         if status_filter == "ATIVO":
-            colaboradores = [c for c in colaboradores if is_colaborador_ativo(c)]
+            colaboradores = [c for c in colaboradores if _is_ativo(c)]
         elif status_filter == "INATIVO":
-            colaboradores = [c for c in colaboradores if not is_colaborador_ativo(c)]
+            colaboradores = [c for c in colaboradores if not _is_ativo(c)]
 
         return jsonify({
             "ok": True,
@@ -57,7 +30,7 @@ def api_dp_colaboradores():
 @bp.route("/api/dp/saldos/<path:email>")
 def api_dp_saldos(email):
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     email = safe_lower(email or "")
@@ -79,16 +52,12 @@ def api_dp_saldos(email):
 @bp.route("/api/dp/ajustes/lancar", methods=["POST"])
 def api_dp_ajustes_lancar():
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
-    try:
-        client = get_smartsheet_client()
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao criar cliente Smartsheet: {e}"}), 500
-
+    client = get_smartsheet_client()
     if not client:
-        return jsonify({"ok": False, "message": "Smartsheet não configurado (token ausente)"}), 401
+        return jsonify({"ok": False, "message": "Usuário não autenticado"}), 401
 
     payload = request.get_json(silent=True) or {}
     colab_email = safe_lower(payload.get("colaborador_email") or payload.get("email") or "")
@@ -132,7 +101,7 @@ def api_dp_ajustes_lancar():
     agora_iso = dt.datetime.now().isoformat(timespec="seconds")
 
     try:
-        sheet_sol = get_sheet_solicitacoes(client)
+        sheet_sol = _get_sheet_solicitacoes(client)
 
         # IDs por título (compatibilidade com o restante do projeto)
         cols = get_col_map(sheet_sol)
@@ -263,7 +232,7 @@ def api_dp_ajustes_lancar():
             }), 500
 
         # invalida cache (inclui cache por-request) antes de recalcular saldos
-        invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
+        _invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
 
         inserted_ids = []
         try:
@@ -288,7 +257,7 @@ def api_dp_ajustes_lancar():
 @bp.route("/api/dp/colaborador/<email>")
 def api_dp_colaborador(email):
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
     
     try:
@@ -318,18 +287,15 @@ def api_dp_colaborador(email):
 @bp.route("/api/dp/gestores/relacao", methods=["GET", "POST"])
 def api_dp_gestores_relacao():
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     if request.method == "GET":
-        try:
-            gestor = _norm_email(request.args.get("gestor") or "")
-            if not gestor:
-                return jsonify({"ok": True, "gestor": "", "subordinados": []})
-            subs = get_subordinados_direto(gestor)
-            return jsonify({"ok": True, "gestor": gestor, "subordinados": subs})
-        except Exception as e:
-            return jsonify({"ok": False, "message": f"Erro ao carregar relação: {e}"}), 500
+        gestor = _norm_email(request.args.get("gestor") or "")
+        if not gestor:
+            return jsonify({"ok": True, "gestor": "", "subordinados": []})
+        subs = get_subordinados_direto(gestor)
+        return jsonify({"ok": True, "gestor": gestor, "subordinados": subs})
 
     payload = request.get_json(silent=True) or {}
     gestor = _norm_email(payload.get("gestor") or "")
@@ -340,34 +306,27 @@ def api_dp_gestores_relacao():
     if not gestor:
         return jsonify({"ok": False, "message": "Gestor é obrigatório"}), 400
 
-    try:
-        atualizar_relacao_gestor(gestor, subordinados)
-        return jsonify({"ok": True, "message": "Relação atualizada com sucesso."})
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao salvar relação: {e}"}), 500
+    atualizar_relacao_gestor(gestor, subordinados)
+    return jsonify({"ok": True, "message": "Relação atualizada com sucesso."})
 
 
 @bp.route("/api/dp/gestores/superior", methods=["GET", "POST"])
 def api_dp_gestor_superior():
     """Lê/atualiza a coluna GESTOR SUPERIOR do colaborador (cadastro)."""
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
-    try:
-        client = get_smartsheet_client()
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao criar cliente Smartsheet: {e}"}), 500
-
+    client = get_smartsheet_client()
     if not client:
-        return jsonify({"ok": False, "message": "Smartsheet não configurado (token ausente)"}), 401
+        return jsonify({"ok": False, "message": "Usuário não autenticado"}), 401
 
     sheet = client.Sheets.get_sheet(ID_FOLHA_CADASTRO)
-    # Busca colunas por nome com tolerância a variações (acentos/maiúsculas)
-    col_email = col_id_by_name(sheet, *["EMAIL DA EMPRESA", "EMAIL", "E-MAIL", "EMAIL EMPRESA"])
-    col_sup = col_id_by_name(sheet, *["GESTOR SUPERIOR", "GESTOR SUPERIOR ", "GESTOR_SUPERIOR"])
+    cols = get_col_map(sheet)
+    col_email = cols.get("EMAIL DA EMPRESA") or cols.get("EMAIL")
+    col_sup = cols.get("GESTOR SUPERIOR")
     if not col_email or not col_sup:
-        return jsonify({"ok": False, "message": "Colunas de EMAIL e/ou GESTOR SUPERIOR não encontradas no cadastro."}), 500
+        return jsonify({"ok": False, "message": "Colunas EMAIL DA EMPRESA e/ou GESTOR SUPERIOR não encontradas."}), 500
 
     if request.method == "GET":
         colaborador = _norm_email(request.args.get("colaborador") or "")
@@ -410,10 +369,7 @@ def api_dp_gestor_superior():
     try:
         row_update = smartsheet.models.Row()
         row_update.id = target_row_id
-        cell = smartsheet.models.Cell()
-        cell.column_id = col_sup
-        cell.value = valor_out
-        row_update.cells = [cell]
+        row_update.cells = [{"column_id": col_sup, "value": valor_out}]
         client.Sheets.update_rows(ID_FOLHA_CADASTRO, [row_update])
         try:
             if hasattr(g, "_cadastro_colaboradores"):
@@ -431,7 +387,7 @@ def api_dp_gestor_superior():
 @bp.route("/api/dp/ferias-mes")
 def api_dp_ferias_mes():
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
     
     mes = request.args.get("mes", type=int)
@@ -463,7 +419,7 @@ def api_dp_ferias_mes():
 def api_dp_atualizar_status():
     """DP pode alterar status das solicitacoes"""
     user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
+    if not user or not (tem_grupo(user.get("email"), "DP") or tem_grupo(user.get("email"), "Administrador")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
     
     payload = request.get_json(silent=True) or {}
@@ -481,11 +437,11 @@ def api_dp_atualizar_status():
     
     try:
         client = get_smartsheet_client()
-        sheet_sol = get_sheet_solicitacoes(client)
+        sheet_sol = _get_sheet_solicitacoes(client)
         cols_sol = get_col_map(sheet_sol)
         
         row_id_int = int(row_id)
-        col_status = col_id_by_name(sheet_sol, "STATUS")
+        col_status = _col_id_by_name(sheet_sol, "STATUS")
 
         if not col_status:
             return jsonify({"ok": False, "message": "Coluna STATUS nao encontrada"}), 500
@@ -495,7 +451,7 @@ def api_dp_atualizar_status():
         row_update.cells = [{"column_id": col_status, "value": _canonical_status(novo_status_upper)}]
         
         client.Sheets.update_rows(ID_FOLHA_SOLICITACOES, [row_update])
-        invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
+        _invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
         
         return jsonify({"ok": True, "message": f"Status atualizado para {novo_status_upper}"})
     except Exception as e:
@@ -524,7 +480,7 @@ def _listar_segmentos_premium(colaborador_email: str, win_start: dt.date | None,
     if not colaborador_email:
         return []
 
-    sheet_sol = get_sheet_solicitacoes(client)
+    sheet_sol = _get_sheet_solicitacoes(client)
     cols = get_col_map(sheet_sol)
     colsN = _cols_norm_map(cols)
 

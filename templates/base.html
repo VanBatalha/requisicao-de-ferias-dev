@@ -255,34 +255,16 @@
   </head>
 
   <body>
-    {% if session.user %}
-      {% block app_shell %}
-        <div class="auth-shell">
-          <div class="card auth-card">
-            <div class="brand">
-              <div class="brand-mark"></div>
-              <div class="brand-name">Gestão de Férias</div>
-            </div>
-            {% block content %}{% endblock %}
-          </div>
-        </div>
-      {% endblock %}
-    {% else %}
+    {% block app_shell %}
       <div class="auth-shell">
         <div class="card auth-card">
           <div class="brand">
             <div class="brand-mark"></div>
             <div class="brand-name">Gestão de Férias</div>
           </div>
-
-          {% if content == "login" %}
-            <p class="muted">Entre com a sua conta Smartsheet para continuar.</p>
-            <a href="{{ url_for('login') }}" class="btn" style="display:inline-block; text-decoration:none;">Entrar com Smartsheet</a>
-          {% else %}
-            <p class="muted">Nada a exibir.</p>
-          {% endif %}
+          {% block content %}{% endblock %}
         </div>
       </div>
-    {% endif %}
+    {% endblock %}
   </body>
 </html>

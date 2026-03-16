@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
-from ..rules import RuleError, validate_licenca_certariana
 
 @bp.route("/api/solicitar-ferias", methods=["POST"])
 def api_solicitar_ferias():
@@ -143,30 +142,31 @@ def api_solicitar_ferias():
         resumo = get_resumo_ferias(colaborador_email)
         dias_novos = cert_total_dias if (saldo_tipo_req == "PREMIUM" and certariana_segmentos) else (dt_fim - dt_inicio).days + 1
 
-        # Validação: regras de fracionamento da Licença Certariana (PREMIUM)
-        # - Até 3 períodos na janela
-        # - Mínimo 10 dias por período
-        # - Se 3 períodos, obrigatoriamente 3×10 (total 30)
-        # - Não pode sobrar saldo < 10 (ou deve zerar)
-       # Dentro da função api_solicitar_ferias(), após linha ~95:
-
-        if saldo_tipo_req == "PREMIUM":
+        # Validação adicional: regras de fracionamento da Licença Certariana (considera períodos já lançados)
+        if saldo_tipo_req == "PREMIUM" and not certariana_segmentos:
             try:
-                from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
-                include_statuses = STATUS_APROVADA | STATUS_RESERVA
-    
-                validate_licenca_certariana(
-                    colaborador_email,
-                    float(dias_novos),
+                direito_total = int(resumo.get("premium", {}).get("direito", 0) or 0)
+
+                adm_c = _colaborador_admissao(colaborador_email)
+                _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio) if adm_c else (0, None, None)
+
+                # Considera APROVADA + RESERVA (pendente/em análise) para travar fracionamentos inválidos
+                include_statuses = set(STATUS_APROVADA) | set(STATUS_RESERVA)
+                existentes = _listar_segmentos_premium(colaborador_email, win_start, win_end, include_statuses=include_statuses)
+
+                ok_frac, msg_frac = _validar_fracionamento_certariana(
+                    direito_total=direito_total,
                     dt_inicio=dt_inicio,
                     dt_fim=dt_fim,
-                    include_statuses=include_statuses,
+                    dias_novos=int(dias_novos),
+                    segmentos_existentes=existentes,
                 )
-            except RuleError as ve:
-                return jsonify({"ok": False, "message": str(ve)}), 400
-            except Exception as e:
-                return jsonify({"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}), 500
-    
+                if not ok_frac:
+                    return jsonify({"ok": False, "message": msg_frac}), 400
+            except Exception as _e:
+                # Se falhar, não bloqueia (mantém compatibilidade), mas loga
+                print(f"[CERTARIANA] Falha ao validar fracionamento: {_e}")
+
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
         
@@ -186,7 +186,7 @@ def api_solicitar_ferias():
             saldo_tipo_final = "PREMIUM"
 
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao montar resumo/validações: {e}"}), 500
+        return jsonify({"ok": False, "message": f"Erro ao validar saldo de férias: {e}"}), 500
 
     # saldo base usado para o cálculo final
     saldo_base = reg_saldo if saldo_tipo_final == "REGULAR" else prem_saldo
@@ -251,18 +251,18 @@ def api_solicitar_ferias():
         if not client:
             return jsonify({"ok": False, "message": "Smartsheet client não inicializado (sem token)."}), 500
 
-        sheet_sol = get_sheet_solicitacoes(client)
+        sheet_sol = _get_sheet_solicitacoes(client)
         
         # Colunas robustas
-        col_colab = col_id_by_name(sheet_sol, "COLABORADOR")
-        col_gestor = col_id_by_name(sheet_sol, "GESTOR SOLICITANTE")
-        col_solic = col_id_by_name(sheet_sol, "SOLICITAÇÃO", "SOLICITACAO")
-        col_inicio = col_id_by_name(sheet_sol, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
-        col_fim = col_id_by_name(sheet_sol, "DATA FIM", "DATA FINAL")
-        col_dias = col_id_by_name(sheet_sol, "DIAS")
-        col_status = col_id_by_name(sheet_sol, "STATUS")
-        col_obs = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
-        col_saldo_tipo = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
+        col_colab = _col_id_by_name(sheet_sol, "COLABORADOR")
+        col_gestor = _col_id_by_name(sheet_sol, "GESTOR SOLICITANTE")
+        col_solic = _col_id_by_name(sheet_sol, "SOLICITAÇÃO", "SOLICITACAO")
+        col_inicio = _col_id_by_name(sheet_sol, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
+        col_fim = _col_id_by_name(sheet_sol, "DATA FIM", "DATA FINAL")
+        col_dias = _col_id_by_name(sheet_sol, "DIAS")
+        col_status = _col_id_by_name(sheet_sol, "STATUS")
+        col_obs = _col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
+        col_saldo_tipo = _col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
 
         rows_to_add = []
 
@@ -288,7 +288,7 @@ def api_solicitar_ferias():
                 obs_row = (obs_row + ("\n" if obs_row else "") + f"Licença Certariana: parcela {idx}/{total_parcelas}").strip()
                 add_cell_unique(cells, col_obs, obs_row)
 
-                r.cells = build_cells(cells)
+                r.cells = [{"column_id": cid, "value": val} for cid, val in cells.items()]
 
                 ensure_primary_cell(sheet_sol, r, colaborador_email)
                 rows_to_add.append(r)
@@ -312,7 +312,7 @@ def api_solicitar_ferias():
             # Observações (opcional) -> coluna OBSERVAÇÕES
             add_cell_unique(cells, col_obs, observacoes)
 
-            new_row.cells = build_cells(cells)
+            new_row.cells = [{"column_id": cid, "value": val} for cid, val in cells.items()]
 
             ensure_primary_cell(sheet_sol, new_row, colaborador_email)
             rows_to_add.append(new_row)
@@ -321,13 +321,17 @@ def api_solicitar_ferias():
         print("[SOLICITAR-FERIAS] Gravando no sheet:", ID_FOLHA_SOLICITACOES)
         print("[SOLICITAR-FERIAS] Col IDs:", {
             "colab": col_colab, "gestor": col_gestor,
-            "solicitacao": col_solic, "inicio": col_inicio,
             "fim": col_fim, "dias": col_dias, "status": col_status, "obs": col_obs, "saldo_tipo": col_saldo_tipo
         })
 
-        inserted_ids = add_rows_rest(ID_FOLHA_SOLICITACOES, rows_to_add, timeout=25)
-        print("[SOLICITAR-FERIAS] inserted row ids:", inserted_ids)
-        invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
+        resp = client.Sheets.add_rows(ID_FOLHA_SOLICITACOES, rows_to_add)
+        inserted_ids = []
+        try:
+            inserted_ids = [getattr(r, "id", None) for r in (resp.result or [])]
+            print("[SOLICITAR-FERIAS] inserted row ids:", inserted_ids)
+        except Exception:
+            pass
+        _invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao salvar solicitação: {e}"}), 500
 
@@ -374,7 +378,7 @@ def api_editar_solicitacao():
     
     try:
         client = get_smartsheet_client()
-        sheet_sol = get_sheet_solicitacoes(client)
+        sheet_sol = _get_sheet_solicitacoes(client)
         cols_sol = get_col_map(sheet_sol)
 
         row_id_int = int(row_id)
@@ -392,9 +396,9 @@ def api_editar_solicitacao():
             return jsonify({"ok": False, "message": "Só é possível editar solicitações com status Pendente."})
 
         # Identifica colaborador e tipo de saldo da linha
-        col_colab_id = col_id_by_name(sheet_sol, "COLABORADOR")
-        col_obs_id = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
-        col_tipo_id = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
+        col_colab_id = _col_id_by_name(sheet_sol, "COLABORADOR")
+        col_obs_id = _col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
+        col_tipo_id = _col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
 
         colab_email_row = next((c.value for c in row_antiga.cells if c.column_id == (col_colab_id or -1)), "") or ""
         colab_email_row = safe_lower(str(colab_email_row))
@@ -433,22 +437,21 @@ def api_editar_solicitacao():
             # Regras de fracionamento/overlap (considerando outras linhas)
             adm_c = _colaborador_admissao(colab_email_row)
             _, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio_novo) if adm_c else (0, None, None)
-            
-            # ← ADICIONE ISSO:
-            from ..legacy.core_legacy import STATUS_APROVADA, STATUS_RESERVA
-            include_statuses = STATUS_APROVADA | STATUS_RESERVA
-            
-            try:
-                validate_licenca_certariana(
-                    colab_email_row,
-                    float(dias_novos),
-                    dt_inicio=dt_inicio_novo,
-                    dt_fim=dt_fim_novo,
-                    exclude_row_id=row_id_int,
-                    include_statuses=include_statuses,  # ← Agora passa corretamente!
-                )
-            except RuleError as ve:
-                return jsonify({"ok": False, "message": str(ve)}), 400
+            include_statuses = set(STATUS_APROVADA) | set(STATUS_RESERVA)
+            existentes = _listar_segmentos_premium(
+                colab_email_row, win_start, win_end,
+                exclude_row_id=row_id_int,
+                include_statuses=include_statuses
+            )
+            ok_frac, msg_frac = _validar_fracionamento_certariana(
+                direito_total=dias_direito,
+                dt_inicio=dt_inicio_novo,
+                dt_fim=dt_fim_novo,
+                dias_novos=int(dias_novos),
+                segmentos_existentes=existentes,
+            )
+            if not ok_frac:
+                return jsonify({"ok": False, "message": msg_frac})
 
         if dias_novos > saldo_ajustado:
             return jsonify({
@@ -458,14 +461,14 @@ def api_editar_solicitacao():
 
         row_update = smartsheet.models.Row()
         row_update.id = row_id_int
-        row_update.cells = build_cells({
-            cols_sol.get("DATA INICIO", -1): data_inicio_str,
-            cols_sol.get("DATA FIM", -1): data_fim_str,
-            cols_sol.get("DIAS", -1): dias_novos,
-        })
+        row_update.cells = [
+            {"column_id": cols_sol.get("DATA INICIO", -1), "value": data_inicio_str},
+            {"column_id": cols_sol.get("DATA FIM", -1), "value": data_fim_str},
+            {"column_id": cols_sol.get("DIAS", -1), "value": dias_novos},
+        ]
         
         client.Sheets.update_rows(ID_FOLHA_SOLICITACOES, [row_update])
-        invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
+        _invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
         
         saldo_final = saldo_ajustado - dias_novos
     except Exception as e:
@@ -477,18 +480,3 @@ def api_editar_solicitacao():
         "message": f"Solicitação atualizada para {dias_novos} dia(s). Saldo restante: {saldo_final}.",
         "saldo_atualizado": saldo_final
     })
-def build_cells(cells_by_id: dict):
-        """Converte {column_id: value} em lista de Cell() do SDK (evita linha em branco)."""
-        out = []
-        for cid, val in cells_by_id.items():
-            try:
-                cid_int = int(cid)
-            except Exception:
-                continue
-            if cid_int <= 0:
-                continue
-            c = smartsheet.models.Cell()
-            c.column_id = cid_int
-            c.value = val
-            out.append(c)
-        return out

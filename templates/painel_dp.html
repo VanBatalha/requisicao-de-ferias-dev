@@ -136,7 +136,7 @@
         <div class="ajustes-right">
           <div class="ajustes-topbar">
             <button id="btn-ajuste-ferias" class="btn btn-secondary active">AJUSTE FÉRIAS</button>
-            <button id="btn-ajuste-premium" class="btn btn-secondary">AJUSTE PREMIUM</button>
+            <button id="btn-ajuste-premium" class="btn btn-secondary">AJUSTE CERTARIANA</button>
           </div>
     
           <div class="ajustes-right-body">
@@ -157,7 +157,7 @@
                   <div class="saldo-val" id="ajustes-saldo-regular">-</div>
                 </div>
                 <div class="saldo-box premium">
-                  <div class="saldo-lbl">Saldo Premium</div>
+                  <div class="saldo-lbl">Saldo Certariano</div>
                   <div class="saldo-val" id="ajustes-saldo-premium">-</div>
                 </div>
               </div>
@@ -170,7 +170,7 @@
               <div class="form-group">
                 <label for="ajustes-obs">Observações</label>
                 <textarea id="ajustes-obs" class="form-control" rows="4" placeholder="Motivo do ajuste (opcional)"></textarea>
-                <div class="muted" style="margin-top:6px;">Será concatenado automaticamente com “Ajuste feito pelo DP”.</div>
+                <div class="muted" style="margin-top:6px;">Após o ajuste, será computado automaticamente o novo saldo</div>
               </div>
     
               <button id="ajustes-salvar" class="btn btn-primary" style="width:100%;">Salvar ajuste</button>
@@ -1601,7 +1601,7 @@ async function atualizarStatusDP() {
 // ===============================
 // ===== AJUSTES (DP) - JS =======
 // ===============================
-let ajustesModo = "AJUSTE FÉRIAS"; // ou "AJUSTE PREMIUM"
+let ajustesModo = "AJUSTE FÉRIAS"; // ou "AJUSTE CERTARIANA"
 let ajustesGestorSel = null;
 let ajustesSubSel = null;
 let ajustesColabsCache = null;
@@ -1796,7 +1796,7 @@ function aSetModo(modo){
 
   if (bFerias && bPrem){
     bFerias.classList.toggle("active", modo === "AJUSTE FÉRIAS");
-    bPrem.classList.toggle("active", modo === "AJUSTE PREMIUM");
+    bPrem.classList.toggle("active", modo === "AJUSTE CERTARIANA");
   }
 }
 
@@ -1824,7 +1824,7 @@ async function aSalvarAjuste(){
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
         colaborador_email: ajustesSubSel,
-        solicitacao: ajustesModo,   // "AJUSTE FÉRIAS" | "AJUSTE PREMIUM"
+        solicitacao: ajustesModo,   // "AJUSTE FÉRIAS" | "AJUSTE CERTARIANA"
         dias: dias,
         observacoes: obs
       })
@@ -1869,7 +1869,7 @@ async function initAjustesTab(){
       });
 
       document.getElementById("btn-ajuste-ferias")?.addEventListener("click", () => aSetModo("AJUSTE FÉRIAS"));
-      document.getElementById("btn-ajuste-premium")?.addEventListener("click", () => aSetModo("AJUSTE PREMIUM"));
+      document.getElementById("btn-ajuste-premium")?.addEventListener("click", () => aSetModo("AJUSTE CERTARIANA"));
       document.getElementById("ajustes-salvar")?.addEventListener("click", aSalvarAjuste);
 
       aSetModo("AJUSTE FÉRIAS");

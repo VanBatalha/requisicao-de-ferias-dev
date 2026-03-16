@@ -3,11 +3,20 @@
 {% block content %}
 
 <style>
+  /* ===== Layout geral ===== */
+  .content-narrow{
+    max-width: 1120px;
+    margin: 0 auto;
+  }
+  @media (max-width: 640px){
+    .content-narrow{ padding: 0 6px; }
+  }
+
   .ferias-header{
     display:flex;
     gap:12px;
     align-items:flex-start;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
   .ferias-header .icon{
     width:34px;height:34px;border-radius:10px;
@@ -16,28 +25,51 @@
     border: 1px solid rgba(22, 163, 74, .18);
     font-size:18px;
     margin-top:2px;
+    flex: 0 0 auto;
   }
   .ferias-title{margin:0;font-size:28px;font-weight:800;line-height:1.1;}
   .ferias-sub{margin:4px 0 0 0;}
+  @media (max-width: 640px){
+    .ferias-title{font-size:22px;}
+  }
 
   .section-title{
     font-weight:800;
-    margin: 8px 0 10px 0;
+    margin: 6px 0 10px 0;
     display:flex;
     align-items:center;
     gap:8px;
   }
 
+  /* ===== Cards/KPIs ===== */
+  .card{
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, .35);
+    background: rgba(255,255,255,.03);
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  @media (max-width: 640px){
+    .card{ padding: 12px; border-radius: 16px; }
+  }
+  .divider{height:1px;background: rgba(148,163,184,.25);margin:12px 0;}
+
   .kpis{
     display:grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-    margin-bottom: 18px;
+    gap: 12px;
   }
+  @media (max-width: 980px){
+    .kpis{grid-template-columns: repeat(2, minmax(0,1fr));}
+  }
+  @media (max-width: 520px){
+    .kpis{grid-template-columns: 1fr;}
+  }
+
   .kpi{
-    display:flex; gap:12px; align-items:center;
+    display:flex; gap:10px; align-items:center;
     min-width:0;
-    padding: 16px;
+    padding: 14px;
     border-radius: 16px;
     border: 1px solid rgba(148, 163, 184, .35);
     background: rgba(255,255,255,.04);
@@ -51,40 +83,47 @@
     background: rgba(59, 130, 246, .10);
     border: 1px solid rgba(59, 130, 246, .18);
     font-size:18px;
+    flex: 0 0 auto;
   }
   .kpi.saldo .kicon{
     background: rgba(245, 158, 11, .12);
     border-color: rgba(245, 158, 11, .18);
   }
-  .klabel{font-size:12px; opacity:.82; line-height:1.15; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient: vertical; overflow:hidden;}
+  .klabel{
+    font-size:12px;
+    opacity:.82;
+    line-height:1.15;
+    display:-webkit-box;
+    -webkit-line-clamp:2;
+    -webkit-box-orient: vertical;
+    overflow:hidden;
+  }
   .kvalue{font-size:22px; font-weight:900; line-height:1.1;}
   .kmeta{font-size:12px; opacity:.8; margin-top:2px;}
 
-  .grid-2{
+  /* ===== Formulário (layout responsivo) ===== */
+  .form-grid-main,
+  .form-grid-dates,
+  .form-grid-cert{
     display:grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 12px;
   }
+  .span-12{ grid-column: span 12; }
+  .span-6{ grid-column: span 6; }
+  .span-5{ grid-column: span 5; }
+  .span-4{ grid-column: span 4; }
+  .span-3{ grid-column: span 3; }
+  .span-2{ grid-column: span 2; }
+
   @media (max-width: 980px){
-    .kpis{grid-template-columns: repeat(2, minmax(0,1fr));}
-    .grid-2{grid-template-columns: 1fr;}
+    .form-grid-main,
+    .form-grid-dates,
+    .form-grid-cert{
+      grid-template-columns: 1fr;
+    }
+    .span-12,.span-6,.span-5,.span-4,.span-3,.span-2{ grid-column: auto !important; }
   }
-
-  .card{
-    border-radius: 18px;
-    border: 1px solid rgba(148, 163, 184, .35);
-    background: rgba(255,255,255,.03);
-    padding: 16px;
-    margin-bottom: 14px;
-  }
-  .divider{height:1px;background: rgba(148,163,184,.25);margin:12px 0;}
-
-  .form-grid{
-    display:grid;
-    grid-template-columns: repeat(2, minmax(0,1fr));
-    gap: 14px;
-  }
-  @media (max-width: 980px){ .form-grid{grid-template-columns: 1fr;} }
 
   .form-group label{display:block;font-weight:700;margin-bottom:6px;}
   .form-control{
@@ -92,25 +131,51 @@
     padding: 10px 12px;
     border-radius: 12px;
     border: 1px solid rgba(148, 163, 184, .35);
-    background: rgba(0,0,0,.15);
+    background: rgba(0,0,0,.12);
     color: inherit;
   }
+  .hint{
+    margin-top: 8px;
+    font-size: 12px;
+    opacity: .82;
+  }
+
+  /* Botão: compacto no desktop, 100% no mobile */
   .btn-primary{
-    margin-top: 10px;
-    width: 100%;
-    padding: 12px 14px;
+    margin-top: 12px;
+    width: auto;
+    min-width: 240px;
+    max-width: 360px;
+    padding: 10px 14px;
     border-radius: 14px;
     border: 1px solid rgba(34, 197, 94, .35);
     background: rgba(34, 197, 94, .12);
-    font-weight: 800;
+    font-weight: 900;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
   }
+  .btn-row{
+    display:flex;
+    justify-content:center;
+  }
+  @media (max-width: 640px){
+    .btn-primary{
+      width: 100%;
+      max-width: none;
+      min-width: 0;
+    }
+  }
+
   .msg{margin-top:10px;}
   .muted{opacity:.8}
 
+  /* ===== Histórico ===== */
   .hist-item{
     display:flex;
-    align-items:center;
+    align-items:flex-start;
     justify-content:space-between;
     gap: 10px;
     padding: 12px 12px;
@@ -118,6 +183,10 @@
     border: 1px solid rgba(148, 163, 184, .25);
     background: rgba(0,0,0,.12);
   }
+  @media (max-width: 640px){
+    .hist-item{ flex-direction: column; align-items: stretch; }
+  }
+
   .hist-left{display:flex; flex-direction:column; gap:6px;}
   .hist-range{font-weight:800;}
   .hist-meta{display:flex; gap:10px; flex-wrap:wrap; font-size:12px; opacity:.9;}
@@ -129,6 +198,7 @@
     border: 1px solid rgba(148, 163, 184, .35);
     background: rgba(255,255,255,.04);
     white-space: nowrap;
+    align-self: flex-start;
   }
   .badge-aprovada{border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.12);}
   .badge-rejeitada{border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.12);}
@@ -136,15 +206,16 @@
   .badge-premium{border-style:dashed;}
 </style>
 
-<div class="ferias-header">
-  <div class="icon">🏖️</div>
-  <div>
-    <h1 class="ferias-title">Solicitações de Férias</h1>
-    <p class="ferias-sub muted">Você está operando para: <strong>{{ colaborador_nome }}</strong> ({{ colaborador_email }})</p>
-  </div>
-</div>
+<div class="content-narrow">
 
-<div class="grid-2">
+  <div class="ferias-header">
+    <div class="icon">🏖️</div>
+    <div>
+      <h1 class="ferias-title">Solicitações de Férias</h1>
+      <p class="ferias-sub muted">Você está operando para: <strong>{{ colaborador_nome }}</strong> ({{ colaborador_email }})</p>
+    </div>
+  </div>
+
   <div class="card">
     <div class="section-title">🟩 Férias Regulares</div>
     <div class="kpis">
@@ -173,7 +244,7 @@
         </div>
       </div>
       <div class="kpi saldo">
-        <div class="kicon">💰</div>
+        <div class="kicon">📆</div>
         <div>
           <div class="klabel">Saldo disponível</div>
           <div class="kvalue" id="saldo-regular">{{ "%.1f"|format(saldo) }}</div>
@@ -184,7 +255,7 @@
   </div>
 
   <div class="card">
-    <div class="section-title">🟦 Licença Premium</div>
+    <div class="section-title">🟦 Licença Certariana</div>
     <div class="kpis">
       <div class="kpi premium">
         <div class="kicon">🗓️</div>
@@ -211,109 +282,128 @@
         </div>
       </div>
       <div class="kpi saldo premium">
-        <div class="kicon">🎁</div>
+        <div class="kicon">📆</div>
         <div>
-          <div class="klabel">Saldo Premium</div>
+          <div class="klabel">Saldo Certariano</div>
           <div class="kvalue" id="saldo-premium">{{ "%.1f"|format(premium_saldo) }}</div>
           <div class="kmeta">dias</div>
         </div>
       </div>
     </div>
   </div>
-</div>
 
-<div class="card">
-  <h3 style="margin:0">Nova Solicitação</h3>
-  <div class="divider"></div>
+  <div class="card">
+    <h3 style="margin:0">Nova Solicitação</h3>
+    <div class="divider"></div>
 
-  <form method="post" id="form-solicitacao">
-    <div class="form-grid">
-      <div class="form-group">
-        <label for="colaborador_email">Colaborador</label>
-        <select class="form-control" id="colaborador_email" name="colaborador_email" required>
-          {% for c in colaboradores_opcoes %}
-            <option value="{{ c.email }}" {{ 'selected' if c.email == colaborador_email else '' }}>
-              {{ c.nome }}
-            </option>
-          {% endfor %}
-        </select>
-        <div class="muted" style="margin-top:6px;">Dica: altere o colaborador e clique em “Fazer Solicitação” para registrar para ele.</div>
-      </div>
+    <form method="post" id="form-solicitacao">
 
-      <div class="form-group">
-        <label for="saldo_tipo">Usar saldo</label>
-        <select class="form-control" id="saldo_tipo" name="saldo_tipo">
-          <option value="REGULAR">Férias regulares</option>
-          <option value="PREMIUM">Licença Premium</option>
-        </select>
-        <div class="muted" style="margin-top:6px;">Se o saldo regular acabar, o sistema pode usar Premium automaticamente (se houver saldo suficiente).</div>
-      </div>
-
-      <div class="form-group">
-        <label for="tipo_solicitacao">Tipo de solicitação</label>
-        <select class="form-control" id="tipo_solicitacao" name="tipo_solicitacao" required>
-          <option value="">Selecione…</option>
-          <option value="Gozo">Gozo</option>
-          <option value="Venda">Venda</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label for="data_inicio">Data início</label>
-        <input class="form-control" type="date" id="data_inicio" name="data_inicio" required>
-      </div>
-
-      <div class="form-group">
-        <label for="data_fim">Data fim</label>
-        <input class="form-control" type="date" id="data_fim" name="data_fim" required>
-      </div>
-
-      <div class="form-group" style="grid-column: 1 / -1;">
-        <label for="observacoes">Observações (opcional)</label>
-        <textarea class="form-control" id="observacoes" name="observacoes" rows="3" placeholder="Digite observações..."></textarea>
-      </div>
-    </div>
-
-    <button type="submit" class="btn-primary">➕ Fazer Solicitação</button>
-    <div id="resultado" class="msg muted"></div>
-  </form>
-</div>
-
-<div class="card">
-  <h3 style="margin:0">Histórico de Solicitações</h3>
-  <div class="divider"></div>
-
-  {% if solicitacoes and solicitacoes|length > 0 %}
-    <div style="display:flex; flex-direction:column; gap:12px;">
-      {% for row_id, colab_email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs, criado_por in solicitacoes %}
-        {% set st = (status or '')|lower %}
-        {% if 'aprov' in st %}
-          {% set badge='badge-aprovada' %}
-        {% elif 'reprov' in st or 'cancel' in st or 'rejeit' in st %}
-          {% set badge='badge-rejeitada' %}
-        {% else %}
-          {% set badge='badge-pendente' %}
-        {% endif %}
-
-        <div class="hist-item">
-          <div class="hist-left">
-            <div class="hist-range">📅 {{ inicio }} a {{ fim }}</div>
-            <div class="muted" style="font-size:12px; margin-top:-2px;">👤 {{ nome_por_email.get(colab_email, colab_email) }}</div>
-            <div class="hist-meta">
-              <span>⏱️ {{ dias_item }} dias</span>
-              <span>🧾 {{ solicitacao }}</span>{% if criado_por %}<span>✍️ {{ criado_por }}</span>{% endif %}
-              <span class="badge {{ 'badge-premium' if saldo_tipo == 'PREMIUM' else '' }}">{{ saldo_tipo }}</span>
-              {% if obs %}<span title="{{ obs|e }}">📝 {{ obs|truncate(60, True, '…') }}</span>{% endif %}
-            </div>
-          </div>
-          <div class="badge {{ badge }}">{{ (status or 'Pendente')|upper }}</div>
+      <!-- Linha principal (campos categóricos) -->
+      <div class="form-grid-main">
+        <div class="form-group span-5">
+          <label for="colaborador_email">Colaborador</label>
+          <select class="form-control" id="colaborador_email" name="colaborador_email" required>
+            {% for c in colaboradores_opcoes %}
+              <option value="{{ c.email }}" {{ 'selected' if c.email == colaborador_email else '' }}>
+                {{ c.nome }}
+              </option>
+            {% endfor %}
+          </select>
+          <div class="hint">Ao alterar o colaborador, o painel é recarregado automaticamente.</div>
         </div>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="muted">Nenhuma solicitação encontrada.</div>
-  {% endif %}
-</div>
+
+        <div class="form-group span-2" id="grupo-tipo-solicitacao">
+          <label for="tipo_solicitacao">Tipo</label>
+          <select class="form-control" id="tipo_solicitacao" name="tipo_solicitacao" required>
+            <option value="">Selecione…</option>
+            <option value="Gozo">Gozo</option>
+            <option value="Venda">Venda</option>
+          </select>
+        </div>
+
+        <div class="form-group span-3">
+          <label for="saldo_tipo">Tipo de Férias</label>
+          <select class="form-control" id="saldo_tipo" name="saldo_tipo">
+            <option value="REGULAR">Férias regulares</option>
+            <option value="PREMIUM">Licença Certariana</option>
+          </select>
+        </div>
+
+      </div>
+
+      <div class="hint" id="certariana-hint" style="display:none;">
+        Na Licença Certariana, você pode solicitar em até 3 períodos, com mínimo de 10 dias por período. 
+        Se forem 3 períodos, deve ser 3×10 (total 30). Se forem 2 períodos, ambos devem ter pelo menos 10 dias (ex.: 20+10, 16+14, etc.).
+      </div>
+
+      <!-- Datas Férias Regulares -->
+      <div id="wrap-regular" style="margin-top:12px;">
+        <div class="form-grid-dates">
+          <div class="form-group span-6" id="grupo-data-inicio">
+            <label for="data_inicio">Data início</label>
+            <input class="form-control" type="date" id="data_inicio" name="data_inicio" required>
+          </div>
+
+          <div class="form-group span-6" id="grupo-data-fim">
+            <label for="data_fim">Data fim</label>
+            <input class="form-control" type="date" id="data_fim" name="data_fim" required>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- Observações -->
+      <div style="margin-top:12px;">
+        <div class="form-group">
+          <label for="observacoes">Observações (opcional)</label>
+          <textarea class="form-control" id="observacoes" name="observacoes" rows="2" placeholder="Digite observações..."></textarea>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button type="submit" class="btn-primary">➕ Fazer Solicitação</button>
+      </div>
+      <div id="resultado" class="msg muted"></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0">Histórico de Solicitações</h3>
+    <div class="divider"></div>
+
+    {% if solicitacoes and solicitacoes|length > 0 %}
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        {% for row_id, colab_email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs in solicitacoes %}
+          {% set st = (status or '')|lower %}
+          {% if 'aprov' in st %}
+            {% set badge='badge-aprovada' %}
+          {% elif 'reprov' in st or 'cancel' in st or 'rejeit' in st %}
+            {% set badge='badge-rejeitada' %}
+          {% else %}
+            {% set badge='badge-pendente' %}
+          {% endif %}
+
+          <div class="hist-item">
+            <div class="hist-left">
+              <div class="hist-range">📅 {{ inicio }} a {{ fim }}</div>
+              <div class="muted" style="font-size:12px; margin-top:-2px;">👤 {{ nome_por_email.get(colab_email, colab_email) }}</div>
+              <div class="hist-meta">
+                <span>⏱️ {{ dias_item }} dias</span>
+                <span>🧾 {{ solicitacao }}</span>
+                <span class="badge {{ 'badge-premium' if saldo_tipo == 'PREMIUM' else '' }}">{{ 'CERTARIANA' if saldo_tipo == 'PREMIUM' else 'REGULAR' }}</span>
+                {% if obs %}<span title="{{ obs|e }}">📝 {{ obs|truncate(60, True, '…') }}</span>{% endif %}
+              </div>
+            </div>
+            <div class="badge {{ badge }}">{{ (status or 'Pendente')|upper }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="muted">Nenhuma solicitação encontrada.</div>
+    {% endif %}
+  </div>
+
+</div><!-- /content-narrow -->
 
 <script>
   (function initSaldoTipoDefault(){
@@ -325,6 +415,61 @@
     }
   })();
 
+  // ===== Licença Certariana (PREMIUM) — 1 período por solicitação =====
+const selTipoFerias = document.getElementById('saldo_tipo');
+const hintCert = document.getElementById('certariana-hint');
+
+const inpInicio = document.getElementById('data_inicio');
+const inpFim = document.getElementById('data_fim');
+
+const selTipoSolic = document.getElementById('tipo_solicitacao');
+const grupoTipoSolic = document.getElementById('grupo-tipo-solicitacao');
+
+function _setDisplay(el, show){
+  if (!el) return;
+  el.style.display = show ? '' : 'none';
+}
+
+function _applyTipoFerias(){
+  const isCert = (selTipoFerias?.value || 'REGULAR') === 'PREMIUM';
+
+  // Datas são sempre preenchidas (tanto regular quanto certariana)
+  if (inpInicio) inpInicio.required = true;
+  if (inpFim) inpFim.required = true;
+
+  // Hint de regras
+  _setDisplay(hintCert, isCert);
+
+  // Licença Certariana sempre é Gozo
+  if (selTipoSolic){
+    const optVenda = selTipoSolic.querySelector('option[value="Venda"]');
+    const optGozo = selTipoSolic.querySelector('option[value="Gozo"]');
+    if (isCert){
+      if (optGozo) optGozo.disabled = false;
+      if (optVenda) optVenda.disabled = true;
+      selTipoSolic.value = 'Gozo';
+    } else {
+      if (optVenda) optVenda.disabled = false;
+    }
+  }
+
+  // Mantém o campo visível (para transparência)
+  _setDisplay(grupoTipoSolic, true);
+}
+
+selTipoFerias?.addEventListener('change', _applyTipoFerias);
+_applyTipoFerias();
+
+  // Atualiza o painel ao trocar o colaborador (recarrega a página com ?colaborador=...)
+  const selColab = document.getElementById('colaborador_email');
+  selColab?.addEventListener('change', () => {
+    const email = (selColab.value || '').trim();
+    if (!email) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('colaborador', email);
+    window.location.href = url.toString();
+  });
+
   const form = document.getElementById('form-solicitacao');
   const resultado = document.getElementById('resultado');
 
@@ -334,7 +479,7 @@
 
     try {
       const fd = new FormData(form);
-      const resp = await fetch('{{ url_for("api_solicitar_ferias") }}', { method: 'POST', body: fd });
+      const resp = await fetch('{{ url_for("ferias.api_solicitar_ferias") }}', { method: 'POST', body: fd });
       const data = await resp.json().catch(() => ({}));
       if (resultado) resultado.textContent = data.message || 'Solicitação enviada.';
       if (resp.ok && data.ok) {

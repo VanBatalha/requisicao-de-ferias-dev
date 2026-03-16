@@ -21,23 +21,23 @@
 
     <ul class="nav">
       <li>
-        <a href="{{ url_for('ferias') }}" class="{{ 'active' if active_page == 'ferias' else '' }}">📝 Solicitações</a>
+        <a href="{{ url_for('ferias.ferias') }}" class="{{ 'active' if active_page == 'ferias' else '' }}">📝 Solicitações</a>
       </li>
 
       {% if 'DP' in user_grupos or 'Administrador' in user_grupos %}
       <li>
-        <a href="{{ url_for('painel_dp') }}" class="{{ 'active' if active_page == 'dp' else '' }}">📋 Painel DP</a>
+        <a href="{{ url_for('ferias.painel_dp') }}" class="{{ 'active' if active_page == 'dp' else '' }}">📋 Painel DP</a>
       </li>
       {% endif %}
 
       {% if 'Administrador' in user_grupos %}
       <li>
-        <a href="{{ url_for('painel_admin') }}" class="{{ 'active' if active_page == 'admin' else '' }}">🛠️ Admin</a>
+        <a href="{{ url_for('ferias.painel_admin') }}" class="{{ 'active' if active_page == 'admin' else '' }}">🛠️ Admin</a>
       </li>
       {% endif %}
 
       <li style="margin-top:8px;">
-        <a href="{{ url_for('logout') }}">🚪 Sair</a>
+        <a href="{{ url_for('ferias.logout') }}">🚪 Sair</a>
       </li>
     </ul>
   </aside>

@@ -186,7 +186,7 @@
 
     if (!q) return;
 
-    const resp = await fetch(`{{ url_for("api_admin_listar_usuarios") }}?q=${encodeURIComponent(q)}`);
+    const resp = await fetch(`{{ url_for("ferias.api_admin_listar_usuarios") }}?q=${encodeURIComponent(q)}`);
     const data = await resp.json();
 
     if (!data.ok) {
@@ -207,7 +207,7 @@
     $("msgSalvar").textContent = "Salvando...";
     $("msgSalvar").className = "muted";
 
-    const resp = await fetch(`{{ url_for("api_admin_atualizar_grupos") }}`, {
+    const resp = await fetch(`{{ url_for("ferias.api_admin_atualizar_grupos") }}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, grupos }),

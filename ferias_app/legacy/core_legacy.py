@@ -2,7 +2,6 @@ import os
 import secrets
 import urllib.parse
 import datetime as dt
-import datetime
 import time
 import json
 import re
@@ -226,82 +225,6 @@ def get_smartsheet_client(force_user_token: bool = False):
         return smartsheet.Smartsheet(access_token)
     return None
 
-def _get_smartsheet_token() -> str | None:
-    """Obtém token Smartsheet (prioriza token de serviço; fallback OAuth em session)."""
-    service_token = (
-        os.getenv("SMARTSHEET_SERVICE_TOKEN")
-        or os.getenv("SMARTSHEET_API_TOKEN")
-        or os.getenv("SMARTSHEET_ACCESS_TOKEN")
-    )
-    if service_token:
-        return service_token
-    return session.get("access_token")
-
-
-def add_rows_rest(sheet_id: int, rows_to_add: list, *, timeout: int = 25) -> list[int]:
-    """Adiciona linhas via REST com timeout (evita travas do SDK/urllib3 em produção).
-
-    Retorna lista de row_ids inseridos (quando disponível).
-    """
-    token = _get_smartsheet_token()
-    if not token:
-        raise RuntimeError("Token Smartsheet ausente.")
-
-    url = f"https://api.smartsheet.com/2.0/sheets/{int(sheet_id)}/rows"
-    payload_rows = []
-    for r in rows_to_add or []:
-        # converte Row model -> dict esperado pela API
-        cells = []
-        for c in getattr(r, "cells", []) or []:
-            try:
-                cid = getattr(c, "column_id", None) or c.get("column_id") or c.get("columnId")
-            except Exception:
-                cid = getattr(c, "column_id", None)
-            if not cid:
-                continue
-            # value pode ser None (Smartsheet aceita)
-            val = getattr(c, "value", None) if hasattr(c, "value") else c.get("value")
-            cell = {"columnId": int(cid), "value": val}
-            # preserva "strict" se existir (evita auto-conversões)
-            if hasattr(c, "strict"):
-                cell["strict"] = bool(getattr(c, "strict"))
-            cells.append(cell)
-
-        row_dict = {"toBottom": True, "cells": cells}
-        payload_rows.append(row_dict)
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    # 1 tentativa + 1 retry rápido (Smartsheet às vezes tem picos)
-    last_err = None
-    for attempt in (1, 2):
-        try:
-            resp = requests.post(url, headers=headers, json=payload_rows, timeout=timeout)
-            if resp.status_code >= 400:
-                raise RuntimeError(f"Smartsheet HTTP {resp.status_code}: {resp.text[:500]}")
-            data = resp.json() if resp.text else {}
-            inserted = []
-            try:
-                for rr in (data.get("result") or []):
-                    rid = rr.get("id")
-                    if rid:
-                        inserted.append(int(rid))
-            except Exception:
-                pass
-            return inserted
-        except Exception as e:
-            last_err = e
-            # retry apenas uma vez
-            if attempt == 1:
-                time.sleep(0.8)
-                continue
-            raise
-
-
-
 def get_col_map(sheet):
     """Retorna mapa de colunas com tratamento de erro"""
     try:
@@ -342,26 +265,13 @@ def ensure_primary_cell(sheet, row, value):
         return
 
 
-def _get_sheet_solicitacoes(client=None, *, force_refresh: bool = False):
+def _get_sheet_solicitacoes(client):
     """Cache por request + cache em memória (TTL) do sheet de solicitações.
 
     Isso reduz bastante a latência ao navegar entre telas (Smartsheet é o gargalo).
     """
-    if client is None:
-        client = get_smartsheet_client()
     if not client:
         return None
-
-    if force_refresh:
-        sheet = client.Sheets.get_sheet(ID_FOLHA_SOLICITACOES)
-        now = time.time()
-        _SHEET_CACHE[ID_FOLHA_SOLICITACOES] = {"ts": now, "sheet": sheet}
-        try:
-            g._sheet_solicitacoes = sheet
-        except Exception:
-            pass
-        return sheet
-
 
     # 1) cache por request
     try:
@@ -776,11 +686,6 @@ def _norm_solicitacao(s: str) -> str:
     """Normaliza SOLICITAÇÃO: remove acentos, caixa baixa, reduz espaços."""
     return _norm_title(s)
 
-
-def _norm(s: str | None) -> str:
-    """Compat: normalizador genérico usado em versões antigas."""
-    return _norm_title((s or "").strip())
-
 def _is_ajuste(solic: str) -> bool:
     t = _norm_solicitacao(solic)
     return "ajuste" in t
@@ -927,217 +832,6 @@ STATUS_RESERVA = {"pendente", "em analise", "em análise"}
 def _canonical_status(s: str) -> str:
     n = _norm_status(s)
     return STATUS_CANON.get(n, (s or "").strip().upper())
-def _listar_segmentos_premium(
-    email: str,
-    win_start: dt.date,
-    win_end: dt.date,
-    exclude_row_id: int | None = None,
-    include_statuses: set[str] | None = None,
-):
-    """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
-    sheet = _get_sheet_solicitacoes(force_refresh=False)
-
-    # Usa o helper local (legacy) para resolver IDs de colunas por nome.
-    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
-    col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
-    col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
-    col_status = _col_id_by_name(sheet, "STATUS")
-    col_ini = _col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
-    col_sol = _col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
-
-    target = _norm_email(email)
-    out = []
-
-    for row in getattr(sheet, "rows", []) or []:
-        if exclude_row_id and getattr(row, 'id', None) == exclude_row_id:
-            continue
-        em = _norm_email(_cell_value(row, col_email))
-        if not em or em != target:
-            continue
-
-        saldo = str(_cell_value(row, col_saldo) or "")
-        saldo_n = _norm(saldo)
-        # Aceita variações históricas do campo SALDO TIPO
-        if not (saldo_n == "premium" or "certar" in saldo_n):
-            continue
-        sol = str(_cell_value(row, col_sol) or "")
-        # No DEV, a Licença Certariana é identificada principalmente pelo SALDO TIPO = PREMIUM.
-        # A coluna "SOLICITAÇÃO" costuma vir como "Gozo".
-        # Mantemos apenas o bloqueio para linhas de ajuste.
-        if "ajuste" in _norm(sol):
-            continue
-
-        st = _canonical_status(str(_cell_value(row, col_status) or ""))
-        stn = _norm_status(st)
-
-        # Se o chamador especificar quais status considerar, respeita.
-        # Caso contrário, mantém o padrão: aprovadas + reservas.
-        if include_statuses is not None:
-            if stn not in include_statuses:
-                continue
-        else:
-            if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
-                continue
-
-        dt_ini = _parse_date_value(_cell_value(row, col_ini))
-        if not dt_ini:
-            continue
-        d = dt_ini.date()
-        if d < win_start or d > win_end:
-            continue
-
-        try:
-            dias = float(str(_cell_value(row, col_dias) or "").replace(",", "."))
-        except Exception:
-            dias = 0
-        if dias:
-            out.append(int(round(dias)))
-    return out
-
-
-def _listar_periodos_premium(
-    email: str,
-    win_start: dt.date,
-    win_end: dt.date,
-    exclude_row_id: int | None = None,
-    include_statuses: set[str] | None = None,
-    *,
-    force_refresh: bool = False,
-):
-    """Lista períodos (ini/fim/dias) já lançados/pendentes de Licença Certariana (PREMIUM) na janela.
-    Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None, status: str, solicitacao: str}
-    """
-    sheet = _get_sheet_solicitacoes(force_refresh=False)
-    
-    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
-    col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
-    col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
-    col_status = _col_id_by_name(sheet, "STATUS")
-    col_ini = _col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
-    col_fim = _col_id_by_name(sheet, "DATA FIM", "DATA FINAL", "FIM")
-    col_sol = _col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
-
-    target = _norm_email(email)
-    out: list[dict] = []
-
-    for row in getattr(sheet, "rows", []) or []:
-        if exclude_row_id and getattr(row, "id", None) == exclude_row_id:
-            continue
-
-        em = _norm_email(_cell_value(row, col_email))
-        if not em or em != target:
-            continue
-
-        saldo = str(_cell_value(row, col_saldo) or "")
-        saldo_n = _norm(saldo)
-        if not (saldo_n == "premium" or "certar" in saldo_n):
-            continue
-
-        sol = str(_cell_value(row, col_sol) or "")
-        if "ajuste" in _norm(sol):
-            continue
-
-        st = _canonical_status(str(_cell_value(row, col_status) or ""))
-        stn = _norm_status(st)
-
-        if include_statuses is not None:
-            if stn not in include_statuses:
-                continue
-        else:
-            if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
-                continue
-
-        dt_ini = _parse_date_value(_cell_value(row, col_ini))
-        if not dt_ini:
-            continue
-        ini_d = dt_ini.date()
-        if win_start and ini_d < win_start:
-            continue
-        if win_end and ini_d > win_end:
-            continue
-
-        # dias
-        try:
-            dias = float(str(_cell_value(row, col_dias) or "").replace(",", "."))
-        except Exception:
-            dias = 0.0
-        dias_i = int(round(dias)) if dias else 0
-
-        # fim
-        dt_fim = _parse_date_value(_cell_value(row, col_fim))
-        if dt_fim:
-            fim_d = dt_fim.date()
-        elif dias_i > 0:
-            fim_d = ini_d + dt.timedelta(days=dias_i - 1)
-        else:
-            fim_d = ini_d
-
-        out.append(
-            {
-                "ini": ini_d,
-                "fim": fim_d,
-                "dias": dias_i,
-                "row_id": getattr(row, "id", None),
-                "status": st,
-                "solicitacao": sol,
-            }
-        )
-
-    out.sort(key=lambda x: x["ini"])
-    return out
-
-def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_inicio: datetime.datetime | None = None):
-    """
-    Regras Licença Certariana (PREMIUM):
-    - Até 3 períodos dentro da janela (30 dias).
-    - Cada período >= 10 dias.
-    - Se 3 períodos, obrigatoriamente 3x10.
-    - Não pode sobrar saldo < 10 (senão for 0).
-    """
-    # valida mínimo do novo período
-    try:
-        dias = float(dias_solicitados)
-    except Exception:
-        dias = 0.0
-    if dias < 10:
-        raise ValueError("Na Licença Certariana, cada período deve ter no mínimo 10 dias.")
-
-    # calcula janela premium
-    adm = _colaborador_admissao(email)
-    if not adm:
-        # se não achar admissão, aplica regra só pelo saldo (mais seguro)
-        win_start = datetime.date.min
-        win_end = datetime.date.max
-    else:
-        # _janela_licenca_certariana retorna (dias_base, win_start, win_end)
-        _, win_start, win_end = _janela_licenca_certariana(adm)
-
-    # lista segmentos existentes
-    existentes = _listar_segmentos_premium(email, win_start, win_end)
-    total_exist = sum(existentes)
-    periodos_exist = len(existentes)
-
-    total = total_exist + int(round(dias))
-    if total > 30:
-        raise ValueError(f"Licença Certariana excede 30 dias na janela atual (tentativa: {total} dias).")
-
-    periodos = periodos_exist + 1
-    if periodos > 3:
-        raise ValueError("Licença Certariana permite no máximo 3 períodos na janela atual.")
-
-    # regra de saldo restante (se não for 0, não pode ser <10)
-    restante = 30 - total
-    if restante != 0 and restante < 10:
-        raise ValueError("O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar).")
-
-    # regra específica de 3 períodos: 3x10
-    if periodos == 3:
-        todos = existentes + [int(round(dias))]
-        if total != 30 or any(x != 10 for x in todos):
-            raise ValueError("Se a Licença Certariana for dividida em 3 períodos, deve ser obrigatoriamente 3×10 (total 30).")
-
-    return True
-
 
 def _cell_value(row, col_id):
     """Retorna o valor da célula da linha para a coluna (ou None)."""
