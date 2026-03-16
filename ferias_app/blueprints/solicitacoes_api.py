@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .base import bp
 from ..core import *  # noqa: F401,F403
+from .dp_api import _listar_segmentos_premium, _validar_fracionamento_certariana
 
 @bp.route("/api/solicitar-ferias", methods=["POST"])
 def api_solicitar_ferias():
