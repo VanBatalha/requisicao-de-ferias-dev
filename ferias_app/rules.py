@@ -157,25 +157,19 @@ def validate_licenca_certariana(
             "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar)."
         )
 
-    # Validação 5: Se 2 períodos, verificar que ambos têm >= 10 dias
+    # Validação 5: Se 2 períodos, ambos precisam ter >= 10 dias.
+    #
+    # Observação importante:
+    # deixar saldo 10 É permitido, pois isso viabiliza um 3º período de 10 dias,
+    # exatamente como a regra do negócio descreve (3×10). O que não pode é sobrar
+    # saldo entre 1 e 9 dias, já tratado acima.
     if periodos == 2:
-        # Neste ponto, já sabemos que o novo período tem >= 10 (validação 1)
-        # Agora verificamos que o período existente também tem >= 10
         for seg_dias in segs:
             if seg_dias < 10:
                 raise RuleError(
                     "Para fracionar em 2 períodos, ambos devem ter no mínimo 10 dias. "
                     "Verifique o período anterior."
                 )
-        
-        # Se houver um terceiro período possível (restante == 10), exigir que seja 3×10
-        if restante == 10:
-            # Terceiro período estaria disponível
-            raise RuleError(
-                "Para fracionar a Licença Certariana em 3 períodos, deve ser obrigatoriamente 3×10 (total 30). "
-                "Com 2 períodos já usando 20 dias, o restante deve ser 0 (não pode deixar 10 dias isolado para um 3º período). "
-                "Ou solicite 3 períodos de 10 dias cada."
-            )
 
     # Validação 6: Se 3 períodos, deve ser obrigatoriamente 10+10+10
     if periodos == 3:

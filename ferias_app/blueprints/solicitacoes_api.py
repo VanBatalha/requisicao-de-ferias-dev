@@ -35,8 +35,8 @@ def api_solicitar_ferias():
     if saldo_tipo_req not in ("REGULAR", "PREMIUM"):
         saldo_tipo_req = "REGULAR"
 
-    # Licença Certariana (PREMIUM) agora é solicitada em parcelas fixas:
-    # - 2 períodos de 15 dias OU 3 períodos de 10 dias
+    # Licença Certariana (PREMIUM): até 3 períodos, mínimo de 10 dias por período.
+    # Se forem 3 períodos, deve ser 3×10 (total 30).
     cert_formato = (request.form.get("certariana_formato") or "").strip()
     cert_inicio_1 = (request.form.get("cert_inicio_1") or "").strip()
     cert_inicio_2 = (request.form.get("cert_inicio_2") or "").strip()
@@ -178,7 +178,7 @@ def api_solicitar_ferias():
             else:
                 return jsonify({
                     "ok": False,
-                    "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias e informe 2×15 ou 3×10."
+                    "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias e informe um período válido conforme a regra: até 3 períodos, mínimo de 10 dias por período; se forem 3, deve ser 3×10."
                 }), 400
         else:
             if dias_novos > prem_saldo:
