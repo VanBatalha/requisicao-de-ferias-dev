@@ -58,9 +58,19 @@ def validate_licenca_certariana(
         raise RuleError("Na Licença Certariana, cada período deve ter no mínimo 10 dias.")
 
     adm = _colaborador_admissao(email)
+    resumo_premium_direito = 0
+    try:
+        # Usa o mesmo conceito exibido no painel (direito base + ajustes aprovados),
+        # para não invalidar casos em que a Certariana foi concedida por ajuste manual.
+        from .legacy.core_legacy import get_resumo_ferias
+        resumo_premium_direito = int((get_resumo_ferias(email) or {}).get("premium", {}).get("direito", 0) or 0)
+    except Exception:
+        resumo_premium_direito = 0
+
     if not adm:
-        # sem admissão: aplica regra apenas pela matemática (mais seguro que liberar geral)
-        direito_total = 30
+        # sem admissão: se existir direito por ajuste/manual, valida pela matemática desse direito;
+        # caso contrário, mantém o default defensivo de 30 apenas para a regra de fracionamento.
+        direito_total = resumo_premium_direito if resumo_premium_direito > 0 else 30
         win_start, win_end = dt.date.min, dt.date.max
     else:
         # _janela_licenca_certariana retorna (dias_base, win_start, win_end)
@@ -69,6 +79,13 @@ def validate_licenca_certariana(
             direito_total = int(dias_base or 0)
         except Exception:
             direito_total = 0
+
+        # Se a janela base não estiver vigente, mas existir direito via ajuste manual aprovado,
+        # a validação deve respeitar o total efetivamente exibido no painel.
+        if direito_total <= 0 and resumo_premium_direito > 0:
+            direito_total = resumo_premium_direito
+            win_start = win_start or dt.date.min
+            win_end = win_end or dt.date.max
 
         if direito_total <= 0:
             raise RuleError("Licença Certariana indisponível (direito total = 0).")
