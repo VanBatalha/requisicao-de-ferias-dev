@@ -101,7 +101,7 @@
     <!-- Card Nova Solicitação -->
     <div class="card">
       <h3>Nova Solicitação</h3>
-      <form id="form-ferias" method="post" action="{{ url_for('ferias.api_solicitar_ferias') }}">
+      <form id="form-ferias" method="post" action="{{ url_for('api_solicitar_ferias') }}">
         <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
           <label style="font-size: 13px;">Início</label>
           <input type="date" name="data_inicio" id="data_inicio" required />
@@ -211,7 +211,7 @@
   
   <h3>Editar Solicitação</h3>
   
-  <form id="form-editar" method="post" action="{{ url_for('ferias.api_editar_solicitacao') }}">
+  <form id="form-editar" method="post" action="{{ url_for('api_editar_solicitacao') }}">
     <input type="hidden" name="row_id" id="edit-row-id" />
     
     <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
@@ -308,7 +308,7 @@
     }
 
     const formData = new FormData(form);
-    const resp = await fetch('{{ url_for("ferias.api_solicitar_ferias") }}', {
+    const resp = await fetch('{{ url_for("api_solicitar_ferias") }}', {
       method: 'POST',
       body: formData
     });
@@ -341,7 +341,7 @@
     }
 
     const formData = new FormData(formEditar);
-    const resp = await fetch('{{ url_for("ferias.api_editar_solicitacao") }}', {
+    const resp = await fetch('{{ url_for("api_editar_solicitacao") }}', {
       method: 'POST',
       body: formData
     });
