@@ -15,6 +15,7 @@
       <div class="avatar">{{ user_avatar }}</div>
       <div>
         <div class="name">{{ user_display_name }}</div>
+        {% if user_email %}<div class="muted" style="font-size:12px; margin-top:2px;">{{ user_email }}</div>{% endif %}
         <div class="role">{{ user_role_label }}</div>
       </div>
     </div>

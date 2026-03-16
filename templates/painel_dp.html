@@ -864,7 +864,7 @@
 
           <div id="lista-subordinados" class="box-scroll" style="margin-top:12px; max-height: 420px;"></div>
 
-          <button id="btn-salvar-relacao" class="btn" style="margin-top:12px;">Salvar relação</button>
+          <button type="button" id="btn-salvar-relacao" class="btn" style="margin-top:12px;">Salvar relação</button>
           <div id="msg-relacao" class="muted" style="margin-top:10px;"></div>
         </div>
 
@@ -908,7 +908,7 @@
             <option value="DP">DP</option>
           </select>
 
-          <button id="btn-salvar-superior" class="btn" style="margin-top:12px;">Salvar Gestor Superior</button>
+          <button type="button" id="btn-salvar-superior" class="btn" style="margin-top:12px;">Salvar Gestor Superior</button>
           <div id="msg-superior" class="muted" style="margin-top:10px;"></div>
         </div>
 
@@ -1192,6 +1192,8 @@ async function carregarTelaGestores() {
     const msg = document.getElementById('msg-superior');
     if (msg) msg.textContent = '';
 
+    const btn = document.getElementById('btn-salvar-superior');
+
     const email = _normEmailJS(selColabSup?.value);
     const val = (selValorSup?.value || '').toString().trim();
 
@@ -1204,13 +1206,22 @@ async function carregarTelaGestores() {
       return;
     }
 
-    const r = await fetch('/api/dp/gestores/superior', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ colaborador: email, gestor_superior: val })
-    });
-    const j = await r.json().catch(() => ({}));
-    if (msg) msg.textContent = j.message || (r.ok ? 'Salvo!' : 'Erro ao salvar.');
+    try {
+      if (msg) msg.textContent = 'Salvando Gestor Superior...';
+      if (btn) btn.disabled = true;
+
+      const r = await fetch('/api/dp/gestores/superior', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ colaborador: email, gestor_superior: val })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (msg) msg.textContent = j.message || (r.ok ? 'Gestor Superior salvo.' : 'Erro ao salvar Gestor Superior.');
+    } catch (e) {
+      if (msg) msg.textContent = 'Erro ao salvar Gestor Superior.';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   });
 
   sel?.addEventListener('change', async () => {
@@ -1227,19 +1238,30 @@ async function carregarTelaGestores() {
     const msg = document.getElementById('msg-relacao');
     if (msg) msg.textContent = '';
 
+    const btn = document.getElementById('btn-salvar-relacao');
+
     if (!gestorSelecionadoEmail) {
       if (msg) msg.textContent = 'Selecione um gestor.';
       return;
     }
     const subordinados = Array.from(gestorSubSelecionados);
 
-    const r = await fetch('/api/dp/gestores/relacao', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ gestor: gestorSelecionadoEmail, subordinados })
-    });
-    const j = await r.json().catch(() => ({}));
-    if (msg) msg.textContent = j.message || (r.ok ? 'Salvo!' : 'Erro ao salvar.');
+    try {
+      if (msg) msg.textContent = 'Salvando relação...';
+      if (btn) btn.disabled = true;
+
+      const r = await fetch('/api/dp/gestores/relacao', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ gestor: gestorSelecionadoEmail, subordinados })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (msg) msg.textContent = j.message || (r.ok ? 'Relação salva.' : 'Erro ao salvar relação.');
+    } catch (e) {
+      if (msg) msg.textContent = 'Erro ao salvar relação.';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   });
 }
 

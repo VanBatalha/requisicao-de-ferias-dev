@@ -28,14 +28,21 @@ class Settings:
     ldap_bind_dn: str = _env("LDAP_BIND_DN", "")  # ex: cn=svc-app,ou=Users,dc=...,dc=...
     ldap_bind_password: str = _env("LDAP_BIND_PASSWORD", "")
     ldap_user_filter: str = _env("LDAP_USER_FILTER", "(sAMAccountName={username})")
+    # Opcional: lista de filtros separados por ";" ou "," (tentados em ordem)
+    ldap_user_filters: str = _env("LDAP_USER_FILTERS", "")
+    # Opcional: formato para bind de autenticação (ex: "{username}@empresa.local" ou "EMPRESA\\{username}")
+    ldap_auth_bind_format: str = _env("LDAP_AUTH_BIND_FORMAT", "")
     ldap_email_attr: str = _env("LDAP_EMAIL_ATTR", "mail")
     ldap_name_attr: str = _env("LDAP_NAME_ATTR", "displayName")
     ldap_memberof_attr: str = _env("LDAP_MEMBEROF_ATTR", "memberOf")
     ldap_verify_cert: str = _env("LDAP_VERIFY_CERT", "true")  # true/false
+    ldap_starttls: str = _env("LDAP_STARTTLS", "false")  # true/false (para ldap:// na porta 389)
 
     # Smartsheet sheet IDs
-    id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "0") or "0")
-    id_folha_solicitacoes: int = int(_env("ID_FOLHA_SOLICITACOES", "0") or "0")
+    # Defaults iguais à versão estável (evita "sheet_id=0" quando a env não está setada no Render)
+    # Você ainda pode sobrescrever no Render com as variáveis de ambiente.
+    id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "3609445264215940") or "3609445264215940")
+    id_folha_solicitacoes: int = int(_env("ID_FOLHA_SOLICITACOES", "2890766507528068") or "2890766507528068")
 
     # Runtime
     environment: str = _env("ENVIRONMENT", _env("FLASK_ENV", "production"))

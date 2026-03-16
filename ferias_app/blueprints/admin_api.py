@@ -15,7 +15,7 @@ def api_admin_listar_usuarios():
         colaboradores = listar_colaboradores()
 
         # filtra somente Status = Ativo
-        colaboradores = [c for c in colaboradores if _is_ativo(c)]
+        colaboradores = [c for c in colaboradores if is_colaborador_ativo(c)]
 
         # se não houver busca, não devolve tudo (evita listar milhares)
         if q:
@@ -94,12 +94,12 @@ def api_admin_atualizar_grupos():
         return jsonify({"ok": False, "message": "Não autenticado"}), 401
 
     try:
-        sheet = _get_sheet_cadastro(client)
+        sheet = get_sheet_cadastro(client)
         if not sheet:
             return jsonify({"ok": False, "message": "Folha de cadastro não encontrada"}), 404
 
-        col_email = _col_id_by_name(sheet, "EMAIL DA EMPRESA", "EMAIL")
-        col_user_type = _col_id_by_name(sheet, "USER TYPE", "USER_TYPE", "USERTYPE", "TIPO USUARIO", "TIPO DE USUARIO")
+        col_email = col_id_by_name(sheet, "EMAIL DA EMPRESA", "EMAIL")
+        col_user_type = col_id_by_name(sheet, "USER TYPE", "USER_TYPE", "USERTYPE", "TIPO USUARIO", "TIPO DE USUARIO")
 
         if not col_email:
             return jsonify({"ok": False, "message": "Coluna 'EMAIL DA EMPRESA' não encontrada no cadastro."}), 400
@@ -127,7 +127,7 @@ def api_admin_atualizar_grupos():
         client.Sheets.update_rows(ID_FOLHA_CADASTRO, [row_update])
 
         # invalida caches para refletir imediatamente
-        _invalidate_sheet_cache(ID_FOLHA_CADASTRO)
+        invalidate_sheet_cache(ID_FOLHA_CADASTRO)
         try:
             if hasattr(g, "_colaboradores_list_cache"):
                 delattr(g, "_colaboradores_list_cache")
