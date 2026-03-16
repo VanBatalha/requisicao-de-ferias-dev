@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import smartsheet
+
 from .base import bp
 from ..core import *  # noqa: F401,F403
 # OBS: o módulo legacy tem vários helpers com prefixo "_".
@@ -78,67 +80,60 @@ def api_dp_saldos(email):
 
 @bp.route("/api/dp/ajustes/lancar", methods=["POST"])
 def api_dp_ajustes_lancar():
-    user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
-        return jsonify({"ok": False, "message": "Acesso negado"}), 403
-
     try:
-        client = get_smartsheet_client()
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao criar cliente Smartsheet: {e}"}), 500
+        user = session.get("user")
+        if not user or not _has_dp_access(user.get("email")):
+            return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
-    if not client:
-        return jsonify({"ok": False, "message": "Smartsheet não configurado (token ausente)"}), 401
+        try:
+            client = get_smartsheet_client()
+        except Exception as e:
+            return jsonify({"ok": False, "message": f"Erro ao criar cliente Smartsheet: {e}"}), 500
 
-    payload = request.get_json(silent=True) or {}
-    colab_email = safe_lower(payload.get("colaborador_email") or payload.get("email") or "")
-    solicitacao_raw = (payload.get("solicitacao") or "").strip()
-    obs_user = (payload.get("observacoes") or "").strip()
+        if not client:
+            return jsonify({"ok": False, "message": "Smartsheet não configurado (token ausente)"}), 401
 
-    try:
-        dias = int(float(payload.get("dias") or 0))
-    except Exception:
-        dias = 0
+        payload = request.get_json(silent=True) or {}
+        colab_email = safe_lower(payload.get("colaborador_email") or payload.get("email") or "")
+        solicitacao_raw = (payload.get("solicitacao") or "").strip()
+        obs_user = (payload.get("observacoes") or "").strip()
 
-    if not colab_email:
-        return jsonify({"ok": False, "message": "Colaborador inválido"}), 400
+        try:
+            dias = int(float(payload.get("dias") or 0))
+        except Exception:
+            dias = 0
 
-    # Aceita variações com/sem acento, underscores, etc.
-    ns = _norm_title(solicitacao_raw)
-    if ns in ("ajuste ferias", "ajuste férias"):
-        solicitacao = "AJUSTE FÉRIAS"
-        saldo_tipo = "REGULAR"
-    elif ns in ("ajuste premium",):
-        solicitacao = "AJUSTE PREMIUM"
-        saldo_tipo = "PREMIUM"
-    elif ns in ("ajuste certariana", "ajuste licenca certariana", "ajuste licença certariana",
-                "ajuste licenca", "ajuste licença"):
-        solicitacao = "AJUSTE CERTARIANA"
-        saldo_tipo = "PREMIUM"
-    else:
-        return jsonify({"ok": False, "message": "Solicitação inválida"}), 400
+        if not colab_email:
+            return jsonify({"ok": False, "message": "Colaborador inválido"}), 400
 
-    if dias == 0:
-        return jsonify({"ok": False, "message": "Dias deve ser diferente de zero"}), 400
+        ns = _norm_title(solicitacao_raw)
+        if ns in ("ajuste ferias", "ajuste férias"):
+            solicitacao = "AJUSTE FÉRIAS"
+            saldo_tipo = "REGULAR"
+        elif ns in ("ajuste premium",):
+            solicitacao = "AJUSTE PREMIUM"
+            saldo_tipo = "PREMIUM"
+        elif ns in ("ajuste certariana", "ajuste licenca certariana", "ajuste licença certariana",
+                    "ajuste licenca", "ajuste licença"):
+            solicitacao = "AJUSTE CERTARIANA"
+            saldo_tipo = "PREMIUM"
+        else:
+            return jsonify({"ok": False, "message": "Solicitação inválida"}), 400
 
-    dp_email = safe_lower(user.get("email") or "")
-    obs_final = obs_user
-    complemento = f"Ajuste feito pelo DP ({dp_email})"
-    if complemento.lower() not in obs_final.lower():
-        # separa com quebra de linha quando já existe observação do usuário
-        obs_final = (obs_final + ("\n" if obs_final else "") + complemento).strip()
+        if dias == 0:
+            return jsonify({"ok": False, "message": "Dias deve ser diferente de zero"}), 400
 
-    hoje = dt.date.today().strftime("%Y-%m-%d")
-    agora_iso = dt.datetime.now().isoformat(timespec="seconds")
+        dp_email = safe_lower(user.get("email") or "")
+        obs_final = obs_user
+        complemento = f"Ajuste feito pelo DP ({dp_email})"
+        if complemento.lower() not in obs_final.lower():
+            obs_final = (obs_final + ("\n" if obs_final else "") + complemento).strip()
 
-    try:
+        hoje = dt.date.today().strftime("%Y-%m-%d")
+
         sheet_sol = get_sheet_solicitacoes(client)
-
-        # IDs por título (compatibilidade com o restante do projeto)
         cols = get_col_map(sheet_sol)
         colsN = _cols_norm_map(cols)
-
-        # Mapa normalizado -> objeto coluna (para validar PICKLIST etc.)
         cols_objN = {_norm_title(c.title): c for c in getattr(sheet_sol, "columns", [])}
 
         def _get_col_obj(*names):
@@ -158,7 +153,6 @@ def api_dp_ajustes_lancar():
         col_tipo_obj = _get_col_obj("SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
         col_obs_obj = _get_col_obj("OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
 
-        # IDs (mantém compatibilidade com helpers existentes)
         col_colab = col_colab_obj.id if col_colab_obj else _col_id(colsN, "COLABORADOR")
         col_solic = col_solic_obj.id if col_solic_obj else _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
         col_inicio = col_inicio_obj.id if col_inicio_obj else _col_id(colsN, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
@@ -169,64 +163,57 @@ def api_dp_ajustes_lancar():
         col_tipo = col_tipo_obj.id if col_tipo_obj else _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
         col_obs = col_obs_obj.id if col_obs_obj else _col_id(colsN, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
 
+        if not col_colab:
+            return jsonify({"ok": False, "message": "Coluna COLABORADOR não encontrada na folha de solicitações."}), 500
+        if not col_dias:
+            return jsonify({"ok": False, "message": "Coluna DIAS não encontrada na folha de solicitações."}), 500
+
         def _picklist_match(col_obj, value):
             if not col_obj or value is None:
                 return value
             opts = getattr(col_obj, "options", None) or []
             if not opts:
                 return value
-            # match exato
             if value in opts:
                 return value
-            # match case-insensitive
             v = str(value).strip().lower()
             for o in opts:
                 if str(o).strip().lower() == v:
                     return o
-            # não existe na lista -> retorna None para não enviar (evita erro)
             return None
+
         new_row = smartsheet.models.Row()
         new_row.to_top = True
         new_row.cells = []
 
         def add_cell(col_id, value):
-            if isinstance(col_id, int) and col_id > 0:
-                new_row.cells.append(smartsheet.models.Cell({'column_id': col_id, 'value': value}))
+            if isinstance(col_id, int) and col_id > 0 and value is not None:
+                new_row.cells.append(smartsheet.models.Cell({"column_id": col_id, "value": value}))
 
-        # Para AJUSTES, por processo do DP, o "colaborador alvo" é identificado na coluna
-        # COLABORADOR (mesmo que em outras linhas essa coluna possa conter nome).
-        # Ainda assim, preench... (evita rejeição por coluna primária vazia e facilita filtros).
-        # normaliza valores para colunas do tipo PICKLIST (se existir lista de opções)
-        solicitacao_val = _picklist_match(col_solic_obj, solicitacao)
-        saldo_tipo_val = _picklist_match(col_tipo_obj, saldo_tipo)
-
-        # STATUS costuma ser PICKLIST; tenta algumas variações comuns e, se não existir, não envia
+        solicitacao_val = _picklist_match(col_solic_obj, solicitacao) or solicitacao
+        saldo_tipo_val = _picklist_match(col_tipo_obj, saldo_tipo) or saldo_tipo
         status_val = (
             _picklist_match(col_status_obj, "APROVADA") or
             _picklist_match(col_status_obj, "Aprovada") or
             _picklist_match(col_status_obj, "APROVADO") or
             _picklist_match(col_status_obj, "Aprovado") or
-            _picklist_match(col_status_obj, "AJUSTE") or
-            _picklist_match(col_status_obj, "Ajuste") or
-            None
+            "APROVADA"
         )
 
         add_cell(col_colab, colab_email)
-        if solicitacao_val is not None:
-            add_cell(col_solic, solicitacao_val)
+        add_cell(col_solic, solicitacao_val)
         add_cell(col_inicio, hoje)
         add_cell(col_fim, hoje)
-        if saldo_tipo_val is not None:
-            add_cell(col_tipo, saldo_tipo_val)
+        add_cell(col_tipo, saldo_tipo_val)
         add_cell(col_dias, dias)
-        if status_val is not None:
-            add_cell(col_status, status_val)
+        add_cell(col_status, status_val)
         add_cell(col_gestor, dp_email)
         add_cell(col_obs, obs_final)
 
-        resp = client.Sheets.add_rows(ID_FOLHA_SOLICITACOES, [new_row])
+        if not getattr(new_row, "cells", None):
+            return jsonify({"ok": False, "message": "Nenhuma célula válida foi montada para o ajuste."}), 500
 
-        # validação robusta do retorno do Smartsheet (evita falso-positivo com HTTP 200 sem inserir linha)
+        resp = client.Sheets.add_rows(ID_FOLHA_SOLICITACOES, [new_row])
         if resp is None:
             return jsonify({
                 "ok": False,
@@ -235,8 +222,6 @@ def api_dp_ajustes_lancar():
             }), 500
 
         result = getattr(resp, "result", None)
-
-        # Sucesso: Smartsheet normalmente retorna uma lista de Row(s) inseridas em resp.result
         if isinstance(result, list):
             if len(result) == 0:
                 return jsonify({
@@ -245,7 +230,6 @@ def api_dp_ajustes_lancar():
                     "sheet_id": ID_FOLHA_SOLICITACOES,
                 }), 500
         else:
-            # Erro: resp.result pode vir como ErrorResult (não tem len). Extrair detalhes.
             err = result
             return jsonify({
                 "ok": False,
@@ -262,7 +246,6 @@ def api_dp_ajustes_lancar():
                 }
             }), 500
 
-        # invalida cache (inclui cache por-request) antes de recalcular saldos
         invalidate_sheet_cache(ID_FOLHA_SOLICITACOES)
 
         inserted_ids = []
@@ -271,16 +254,22 @@ def api_dp_ajustes_lancar():
         except Exception:
             inserted_ids = []
 
-        resumo = get_resumo_ferias(colab_email)
-        return jsonify({
+        retorno = {
             "ok": True,
             "message": "Ajuste lançado com sucesso.",
             "sheet_id": ID_FOLHA_SOLICITACOES,
             "inserted_ids": inserted_ids,
             "row_id": inserted_ids[0] if inserted_ids else None,
-            "regular": resumo["regular"],
-            "premium": resumo["premium"],
-        })
+        }
+
+        try:
+            resumo = get_resumo_ferias(colab_email)
+            retorno["regular"] = resumo.get("regular")
+            retorno["premium"] = resumo.get("premium")
+        except Exception as e:
+            retorno["warning"] = f"Ajuste salvo, mas não foi possível recalcular os saldos imediatamente: {e}"
+
+        return jsonify(retorno)
 
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao lançar ajuste: {e}"}), 500
