@@ -54,6 +54,29 @@
     
                         <button id="btn-buscar-ferias" class="btn btn-primary btn-buscar">Buscar</button>
                     </div>
+
+                    <div class="ferias-selector" style="padding-top:0; border-top:none;">
+                        <div class="selector-group">
+                            <label for="ferias-status-filter">Status</label>
+                            <select id="ferias-status-filter" class="form-control">
+                                <option value="">Todos</option>
+                                <option value="PENDENTE">Pendente</option>
+                                <option value="EM ANALISE">Em análise</option>
+                                <option value="RESERVADO">Reservado</option>
+                                <option value="APROVADA">Aprovado</option>
+                                <option value="NEGADO">Negado / Rejeitado</option>
+                            </select>
+                        </div>
+                        <div class="selector-group">
+                            <label for="ferias-sort-order">Ordenar por</label>
+                            <select id="ferias-sort-order" class="form-control">
+                                <option value="date_desc">Mais recente para mais antigo</option>
+                                <option value="date_asc">Mais antigo para mais recente</option>
+                                <option value="name_asc">Nome A → Z</option>
+                                <option value="name_desc">Nome Z → A</option>
+                            </select>
+                        </div>
+                    </div>
     
                     <!-- LISTA DE FÉRIAS -->
                     <div id="ferias-lista" class="ferias-lista">
@@ -1441,6 +1464,80 @@ function aplicarFiltros() {
 
 // ===== FÉRIAS =====
 
+function normalizeFeriasStatus(value) {
+    const raw = (value || '').toString().trim().toUpperCase();
+    const norm = raw.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (norm.includes('APROV')) return 'APROVADA';
+    if (norm.includes('REPROV') || norm.includes('REJEIT') || norm.includes('NEGAD') || norm.includes('CANCEL')) return 'NEGADO';
+    if (norm.includes('ANALISE')) return 'EM ANALISE';
+    if (norm.includes('RESERV')) return 'RESERVADO';
+    if (norm.includes('PEND')) return 'PENDENTE';
+    return norm;
+}
+
+function parseBrDate(value) {
+    const m = /^([0-9]{2})\/([0-9]{2})\/([0-9]{4})$/.exec((value || '').trim());
+    if (!m) return 0;
+    return new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00`).getTime();
+}
+
+function renderFeriasList() {
+    const container = document.getElementById('ferias-lista');
+    if (!container) return;
+
+    const statusFilter = normalizeFeriasStatus(document.getElementById('ferias-status-filter')?.value || '');
+    const sortOrder = document.getElementById('ferias-sort-order')?.value || 'date_desc';
+
+    const items = [...feriasCache].filter(f => {
+        const itemStatus = normalizeFeriasStatus(f.status || 'PENDENTE');
+        return !statusFilter || itemStatus === statusFilter;
+    });
+
+    items.sort((a, b) => {
+        const nameCmp = (a.nome_completo || a.email || '').localeCompare((b.nome_completo || b.email || ''), 'pt-BR');
+        const dateA = parseBrDate(a.data_inicio || '');
+        const dateB = parseBrDate(b.data_inicio || '');
+        if (sortOrder === 'date_asc') return dateA - dateB;
+        if (sortOrder === 'name_asc') return nameCmp;
+        if (sortOrder === 'name_desc') return -nameCmp;
+        return dateB - dateA;
+    });
+
+    if (items.length === 0) {
+        container.innerHTML = '<p class="empty-state">Nenhuma solicitação encontrada para os filtros selecionados</p>';
+        return;
+    }
+
+    let out = '';
+    items.forEach((f) => {
+        const statusTextRaw = (f.status || 'PENDENTE').toString();
+        const statusSlug = statusTextRaw.toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .replace(/\s+/g, '-')
+            .replace(/[^a-z0-9-]/g, '');
+
+        let badgeClass = 'status-pendente';
+        if (statusSlug.includes('aprov')) badgeClass = 'status-aprovada';
+        else if (statusSlug.includes('reprov') || statusSlug.includes('cancel') || statusSlug.includes('rejeit') || statusSlug.includes('negad')) badgeClass = 'status-rejeitada';
+        else if (statusSlug.includes('analise')) badgeClass = 'status-pendente';
+
+        const statusText = f.status || 'Pendente';
+        const nomeFull = f.nome_completo || f.email;
+        const idx = feriasCache.indexOf(f);
+
+        out += `
+            <div class="ferias-item" data-idx="${idx}">
+                <div class="ferias-nome">${nomeFull}</div>
+                <div class="ferias-datas">📅 ${f.data_inicio} a ${f.data_fim} (${f.dias} dias)</div>
+                <div class="ferias-datas">💼 ${f.cargo || '-'} | 🏢 ${f.setor || '-'}</div>
+                <span class="ferias-status-badge ${badgeClass}">${statusText}</span>
+            </div>
+        `;
+    });
+
+    container.innerHTML = out;
+}
+
 async function carregarFeriasAtivas() {
     const mes = mesSelecionado;
     const ano = anoSelecionado;
@@ -1473,33 +1570,7 @@ async function carregarFeriasAtivas() {
             return;
         }
 
-        let out = '';
-        feriasCache.forEach((f, i) => {
-            const statusTextRaw = (f.status || 'PENDENTE').toString();
-            const statusSlug = statusTextRaw.toLowerCase()
-                .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                .replace(/\s+/g, '-')
-                .replace(/[^a-z0-9-]/g, '');
-
-            let badgeClass = 'status-pendente';
-            if (statusSlug.includes('aprov')) badgeClass = 'status-aprovada';
-            else if (statusSlug.includes('reprov') || statusSlug.includes('cancel') || statusSlug.includes('rejeit')) badgeClass = 'status-rejeitada';
-            else if (statusSlug.includes('analise')) badgeClass = 'status-pendente';
-
-            const statusText = f.status || 'Pendente';
-            const nomeFull = f.nome_completo || f.email;
-
-            out += `
-                <div class="ferias-item" data-idx="${i}">
-                    <div class="ferias-nome">${nomeFull}</div>
-                    <div class="ferias-datas">📅 ${f.data_inicio} a ${f.data_fim} (${f.dias} dias)</div>
-                    <div class="ferias-datas">💼 ${f.cargo || '-'} | 🏢 ${f.setor || '-'}</div>
-                    <span class="ferias-status-badge ${badgeClass}">${statusText}</span>
-                </div>
-            `;
-        });
-
-        if (container) container.innerHTML = out;
+        renderFeriasList();
     } catch (e) {
         console.error('Erro:', e);
         if (container) container.innerHTML = '<p class="empty-state">Erro ao carregar férias</p>';
@@ -1937,6 +2008,9 @@ document.querySelectorAll('.btn-mes').forEach(btn => {
 });
 
 document.getElementById('dp-status-salvar')?.addEventListener('click', atualizarStatusDP);
+
+document.getElementById('ferias-status-filter')?.addEventListener('change', renderFeriasList);
+document.getElementById('ferias-sort-order')?.addEventListener('change', renderFeriasList);
 
 document.getElementById('btn-buscar-ferias')?.addEventListener('click', () => {
     mesSelecionado = parseInt(document.getElementById('selector-mes').value);

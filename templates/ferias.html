@@ -204,6 +204,17 @@
   .badge-rejeitada{border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.12);}
   .badge-pendente{border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.12);}
   .badge-premium{border-style:dashed;}
+  .hist-toolbar{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:end;
+    margin-bottom:12px;
+  }
+  .hist-toolbar .form-group-inline{min-width:220px; flex:1;}
+  .hist-toolbar label{display:block;font-weight:700;margin-bottom:6px;font-size:12px;}
+  .hist-list{display:flex; flex-direction:column; gap:12px;}
+  .hist-empty{padding:12px 0; opacity:.8;}
 </style>
 
 <div class="content-narrow">
@@ -228,18 +239,18 @@
         </div>
       </div>
       <div class="kpi">
-        <div class="kicon">✈️</div>
-        <div>
-          <div class="klabel">Usados (aprovados)</div>
-          <div class="kvalue">{{ "%.1f"|format(dias_usados) }}</div>
-          <div class="kmeta">dias</div>
-        </div>
-      </div>
-      <div class="kpi">
         <div class="kicon">⏳</div>
         <div>
           <div class="klabel">Reservados (pend./análise)</div>
           <div class="kvalue">{{ "%.1f"|format(dias_reservados) }}</div>
+          <div class="kmeta">dias</div>
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="kicon">✈️</div>
+        <div>
+          <div class="klabel">Usados (aprovados)</div>
+          <div class="kvalue">{{ "%.1f"|format(dias_usados) }}</div>
           <div class="kmeta">dias</div>
         </div>
       </div>
@@ -266,18 +277,18 @@
         </div>
       </div>
       <div class="kpi premium">
-        <div class="kicon">✈️</div>
-        <div>
-          <div class="klabel">Usados (aprovados)</div>
-          <div class="kvalue">{{ "%.1f"|format(premium_usados) }}</div>
-          <div class="kmeta">dias</div>
-        </div>
-      </div>
-      <div class="kpi premium">
         <div class="kicon">⏳</div>
         <div>
           <div class="klabel">Reservados (pend./análise)</div>
           <div class="kvalue">{{ "%.1f"|format(premium_reservados) }}</div>
+          <div class="kmeta">dias</div>
+        </div>
+      </div>
+      <div class="kpi premium">
+        <div class="kicon">✈️</div>
+        <div>
+          <div class="klabel">Usados (aprovados)</div>
+          <div class="kvalue">{{ "%.1f"|format(premium_usados) }}</div>
           <div class="kmeta">dias</div>
         </div>
       </div>
@@ -372,7 +383,29 @@
     <div class="divider"></div>
 
     {% if solicitacoes and solicitacoes|length > 0 %}
-      <div style="display:flex; flex-direction:column; gap:12px;">
+      <div class="hist-toolbar">
+        <div class="form-group-inline">
+          <label for="hist-status-filter">Filtrar por status</label>
+          <select id="hist-status-filter" class="form-control">
+            <option value="">Todos</option>
+            <option value="PENDENTE">Pendente</option>
+            <option value="EM ANALISE">Em análise</option>
+            <option value="RESERVADO">Reservado</option>
+            <option value="APROVADA">Aprovado</option>
+            <option value="NEGADO">Negado / Rejeitado</option>
+          </select>
+        </div>
+        <div class="form-group-inline">
+          <label for="hist-sort-order">Ordenar por</label>
+          <select id="hist-sort-order" class="form-control">
+            <option value="date_desc">Mais recente para mais antigo</option>
+            <option value="date_asc">Mais antigo para mais recente</option>
+            <option value="name_asc">Nome A → Z</option>
+            <option value="name_desc">Nome Z → A</option>
+          </select>
+        </div>
+      </div>
+      <div id="hist-list" class="hist-list">
         {% for row_id, colab_email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs in solicitacoes %}
           {% set st = (status or '')|lower %}
           {% if 'aprov' in st %}
@@ -383,7 +416,10 @@
             {% set badge='badge-pendente' %}
           {% endif %}
 
-          <div class="hist-item">
+          <div class="hist-item"
+               data-status="{{ (status or '')|upper }}"
+               data-nome="{{ nome_por_email.get(colab_email, colab_email)|upper }}"
+               data-inicio="{{ inicio }}">
             <div class="hist-left">
               <div class="hist-range">📅 {{ inicio }} a {{ fim }}</div>
               <div class="muted" style="font-size:12px; margin-top:-2px;">👤 {{ nome_por_email.get(colab_email, colab_email) }}</div>
@@ -398,6 +434,7 @@
           </div>
         {% endfor %}
       </div>
+      <div id="hist-empty" class="hist-empty" style="display:none;">Nenhuma solicitação encontrada para os filtros selecionados.</div>
     {% else %}
       <div class="muted">Nenhuma solicitação encontrada.</div>
     {% endif %}
@@ -472,6 +509,57 @@ _applyTipoFerias();
 
   const form = document.getElementById('form-solicitacao');
   const resultado = document.getElementById('resultado');
+
+  function normalizeStatus(value){
+    const raw = (value || '').toString().trim().toUpperCase();
+    const norm = raw.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (norm.includes('APROV')) return 'APROVADA';
+    if (norm.includes('REPROV') || norm.includes('REJEIT') || norm.includes('NEGAD') || norm.includes('CANCEL')) return 'NEGADO';
+    if (norm.includes('ANALISE')) return 'EM ANALISE';
+    if (norm.includes('RESERV')) return 'RESERVADO';
+    if (norm.includes('PEND')) return 'PENDENTE';
+    return norm;
+  }
+
+  function parseBrDate(value){
+    const m = /^([0-9]{2})\/([0-9]{2})\/([0-9]{4})$/.exec((value || '').trim());
+    if (!m) return 0;
+    return new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00`).getTime();
+  }
+
+  function applyHistoricoFilters(){
+    const list = document.getElementById('hist-list');
+    if (!list) return;
+    const items = Array.from(list.querySelectorAll('.hist-item'));
+    const statusFilter = normalizeStatus(document.getElementById('hist-status-filter')?.value || '');
+    const sortOrder = document.getElementById('hist-sort-order')?.value || 'date_desc';
+
+    items.sort((a, b) => {
+      const nameA = (a.dataset.nome || '').localeCompare((b.dataset.nome || ''), 'pt-BR');
+      const dateA = parseBrDate(a.dataset.inicio || '');
+      const dateB = parseBrDate(b.dataset.inicio || '');
+      if (sortOrder === 'date_asc') return dateA - dateB;
+      if (sortOrder === 'name_asc') return nameA;
+      if (sortOrder === 'name_desc') return -nameA;
+      return dateB - dateA;
+    });
+
+    let visible = 0;
+    items.forEach(item => {
+      const itemStatus = normalizeStatus(item.dataset.status || '');
+      const show = !statusFilter || itemStatus === statusFilter;
+      item.style.display = show ? '' : 'none';
+      if (show) visible += 1;
+      list.appendChild(item);
+    });
+
+    const empty = document.getElementById('hist-empty');
+    if (empty) empty.style.display = visible ? 'none' : '';
+  }
+
+  document.getElementById('hist-status-filter')?.addEventListener('change', applyHistoricoFilters);
+  document.getElementById('hist-sort-order')?.addEventListener('change', applyHistoricoFilters);
+  applyHistoricoFilters();
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
