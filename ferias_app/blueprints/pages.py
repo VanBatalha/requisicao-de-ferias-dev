@@ -137,6 +137,9 @@ def ferias():
     premium_usados = resumo["premium"]["usados"]
     premium_reservados = resumo["premium"]["reservados"]
     premium_saldo = resumo["premium"]["saldo"]
+    regular_aquisitivo_atual = resumo["regular"].get("aquisitivo_atual")
+    regular_periodos = resumo["regular"].get("periodos", [])
+    regular_ajuste_bucket = resumo["regular"].get("ajuste_bucket", 0)
     
     # Histórico:
     # - Gestor: solicitações do gestor e de seus subordinados
@@ -166,6 +169,9 @@ def ferias():
         premium_usados=premium_usados,
         premium_reservados=premium_reservados,
         premium_saldo=premium_saldo,
+        regular_aquisitivo_atual=regular_aquisitivo_atual,
+        regular_periodos=regular_periodos,
+        regular_ajuste_bucket=regular_ajuste_bucket,
 
     )
 

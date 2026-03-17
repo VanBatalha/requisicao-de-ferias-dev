@@ -55,17 +55,18 @@
                         <button id="btn-buscar-ferias" class="btn btn-primary btn-buscar">Buscar</button>
                     </div>
 
-                    <div class="ferias-selector" style="padding-top:0; border-top:none;">
-                        <div class="selector-group">
-                            <label for="ferias-status-filter">Status</label>
-                            <select id="ferias-status-filter" class="form-control">
-                                <option value="">Todos</option>
-                                <option value="PENDENTE">Pendente</option>
-                                <option value="EM ANALISE">Em análise</option>
-                                <option value="RESERVADO">Reservado</option>
-                                <option value="APROVADA">Aprovado</option>
-                                <option value="NEGADO">Negado / Rejeitado</option>
-                            </select>
+                    <div class="ferias-selector" style="padding-top:0; border-top:none; align-items:end;">
+                        <div class="selector-group" style="flex:2; min-width:320px;">
+                            <label>Status</label>
+                            <div class="filter-chips" id="ferias-status-chips">
+                                <button type="button" class="filter-chip active" data-value="">Todos</button>
+                                <button type="button" class="filter-chip" data-value="PENDENTE">Pendente</button>
+                                <button type="button" class="filter-chip" data-value="EM ANALISE">Em análise</button>
+                                <button type="button" class="filter-chip" data-value="RESERVADO">Reservado</button>
+                                <button type="button" class="filter-chip" data-value="APROVADA">Aprovado</button>
+                                <button type="button" class="filter-chip" data-value="NEGADO">Negado / Rejeitado</button>
+                            </div>
+                            <input type="hidden" id="ferias-status-filter" value="">
                         </div>
                         <div class="selector-group">
                             <label for="ferias-sort-order">Ordenar por</label>
@@ -120,6 +121,14 @@
                         <div class="detalhes-campo">
                             <strong>Status</strong>
                             <span id="det-ferias-status"></span>
+                        </div>
+                        <div class="detalhes-campo">
+                            <strong>Período aquisitivo</strong>
+                            <span id="det-ferias-periodo-aquisitivo">-</span>
+                        </div>
+                        <div class="detalhes-campo">
+                            <strong>Observações</strong>
+                            <span id="det-ferias-observacoes">-</span>
                         </div>
                         <div class="detalhes-campo">
                             <strong>Alterar status</strong>
@@ -184,6 +193,8 @@
                   <div class="saldo-val" id="ajustes-saldo-premium">-</div>
                 </div>
               </div>
+              <div class="muted" id="ajustes-aquisitivo-atual" style="margin:8px 0 6px 0;">Período aquisitivo: -</div>
+              <div id="ajustes-aquisitivo-periodos" class="ajustes-aquisitivo-periodos"></div>
     
               <div class="form-group">
                 <label for="ajustes-dias">Dias (+/-)</label>
@@ -745,7 +756,10 @@
         .ajustes-right-body{display:grid;grid-template-columns:1fr 360px;gap:16px;padding:12px;}
         @media (max-width:1100px){.ajustes-right-body{grid-template-columns:1fr;}}
         .ajustes-sublista{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:12px;background:rgba(255,255,255,.02);}
-        .ajustes-form{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:12px;background:rgba(255,255,255,.02);}
+        
+        .ajustes-aquisitivo-periodos{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px;}
+        .ajustes-aquisitivo-chip{padding:6px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.25);background:rgba(255,255,255,.03);font-size:12px;}
+.ajustes-form{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:12px;background:rgba(255,255,255,.02);}
         
         .ajustes-saldos{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;}
         .saldo-box{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:10px;background:rgba(0,0,0,.12);}
@@ -1525,11 +1539,12 @@ function renderFeriasList() {
         const nomeFull = f.nome_completo || f.email;
         const idx = feriasCache.indexOf(f);
 
+        const saldoTipoBadge = (f.saldo_tipo === 'PREMIUM') ? 'CERTARIANA' : 'REGULAR';
         out += `
             <div class="ferias-item" data-idx="${idx}">
                 <div class="ferias-nome">${nomeFull}</div>
                 <div class="ferias-datas">📅 ${f.data_inicio} a ${f.data_fim} (${f.dias} dias)</div>
-                <div class="ferias-datas">💼 ${f.cargo || '-'} | 🏢 ${f.setor || '-'}</div>
+                <div class="ferias-datas">💼 ${f.cargo || '-'} | 🏢 ${f.setor || '-'} | ${saldoTipoBadge}</div>
                 <span class="ferias-status-badge ${badgeClass}">${statusText}</span>
             </div>
         `;
@@ -1610,13 +1625,15 @@ function bindFeriasListClick() {
             mesSelecionado,
             anoSelecionado,
             item,
-            f.row_id || 0
+            f.row_id || 0,
+            f.periodo_aquisitivo || '-',
+            f.observacoes || '-'
         );
     });
 }
 
 
-function mostrarFerias(nome, email, dataInicio, dataFim, dias, cargo, setor, status, mes, ano, cardElement, rowId) {
+function mostrarFerias(nome, email, dataInicio, dataFim, dias, cargo, setor, status, mes, ano, cardElement, rowId, periodoAquisitivo, observacoes) {
     // Remove seleção anterior
     document.querySelectorAll('.ferias-item.selecionado').forEach(el => {
         el.classList.remove('selecionado');
@@ -1637,6 +1654,8 @@ function mostrarFerias(nome, email, dataInicio, dataFim, dias, cargo, setor, sta
     document.getElementById('det-ferias-cargo').textContent = cargo;
     document.getElementById('det-ferias-setor').textContent = setor;
     document.getElementById('det-ferias-status').textContent = status;
+    document.getElementById('det-ferias-periodo-aquisitivo').textContent = periodoAquisitivo || '-';
+    document.getElementById('det-ferias-observacoes').textContent = observacoes || '-';
     const dpSel = document.getElementById('dp-status-select');
     const dpMsg = document.getElementById('dp-status-msg');
     if (dpMsg) dpMsg.textContent = '';
@@ -1681,9 +1700,7 @@ async function atualizarStatusDP() {
         const j = await r.json().catch(() => ({}));
         if (msg) msg.textContent = j.message || (r.ok ? 'Status atualizado.' : 'Erro ao atualizar.');
         if (r.ok && j.ok) {
-            // Atualiza badge/label sem recarregar tudo
             document.getElementById('det-ferias-status').textContent = status;
-            // recarrega lista para refletir badge
             carregarFeriasAtivas();
         }
     } catch (e) {
@@ -1838,8 +1855,12 @@ function aRenderSubordinados(){
 async function aAtualizarSaldos(email){
   const reg = document.getElementById("ajustes-saldo-regular");
   const prem = document.getElementById("ajustes-saldo-premium");
+  const aq = document.getElementById("ajustes-aquisitivo-atual");
+  const chips = document.getElementById("ajustes-aquisitivo-periodos");
   if (reg) reg.textContent = "…";
   if (prem) prem.textContent = "…";
+  if (aq) aq.textContent = "Período aquisitivo: …";
+  if (chips) chips.innerHTML = "";
 
   const resp = await fetch(`/api/dp/saldos/${encodeURIComponent(email)}`);
   const data = await resp.json().catch(() => ({}));
@@ -1847,6 +1868,20 @@ async function aAtualizarSaldos(email){
 
   if (reg) reg.textContent = (data.regular?.saldo ?? "-");
   if (prem) prem.textContent = (data.premium?.saldo ?? "-");
+  if (aq) aq.textContent = `Período aquisitivo: ${data.regular?.aquisitivo_atual || '-'}`;
+  if (chips){
+    const periodos = Array.isArray(data.regular?.periodos) ? data.regular.periodos : [];
+    const extras = [];
+    periodos.forEach((p) => {
+      if ((p?.saldo ?? 0) > 0){
+        extras.push(`<div class="ajustes-aquisitivo-chip">Período ${p.numero}: ${p.saldo} dia(s)</div>`);
+      }
+    });
+    if ((data.regular?.ajuste_bucket ?? 0) !== 0){
+      extras.push(`<div class="ajustes-aquisitivo-chip">Ajustes: ${data.regular.ajuste_bucket} dia(s)</div>`);
+    }
+    chips.innerHTML = extras.join("");
+  }
 }
 
 function aSelectGestor(gestorEmail){
@@ -1861,6 +1896,8 @@ function aSelectGestor(gestorEmail){
   document.getElementById("ajustes-sub-email").textContent = "";
   document.getElementById("ajustes-saldo-regular").textContent = "-";
   document.getElementById("ajustes-saldo-premium").textContent = "-";
+  document.getElementById("ajustes-aquisitivo-atual").textContent = "Período aquisitivo: -";
+  document.getElementById("ajustes-aquisitivo-periodos").innerHTML = "";
   document.getElementById("ajustes-msg").textContent = "";
   document.getElementById("ajustes-dias").value = "";
   document.getElementById("ajustes-obs").value = "";
@@ -2008,6 +2045,14 @@ document.querySelectorAll('.btn-mes').forEach(btn => {
 });
 
 document.getElementById('dp-status-salvar')?.addEventListener('click', atualizarStatusDP);
+
+document.querySelectorAll('#ferias-status-chips .filter-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.getElementById('ferias-status-filter').value = btn.dataset.value || '';
+        document.querySelectorAll('#ferias-status-chips .filter-chip').forEach(b => b.classList.toggle('active', b === btn));
+        renderFeriasList();
+    });
+});
 
 document.getElementById('ferias-status-filter')?.addEventListener('change', renderFeriasList);
 document.getElementById('ferias-sort-order')?.addEventListener('change', renderFeriasList);

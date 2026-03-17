@@ -214,7 +214,28 @@
   .hist-toolbar .form-group-inline{min-width:220px; flex:1;}
   .hist-toolbar label{display:block;font-weight:700;margin-bottom:6px;font-size:12px;}
   .hist-list{display:flex; flex-direction:column; gap:12px;}
-  .hist-empty{padding:12px 0; opacity:.8;}
+  
+  .aquisitivo-box{margin-top:14px;padding:12px 14px;border:1px dashed rgba(148,163,184,.35);border-radius:14px;background:rgba(255,255,255,.03);}
+  .aquisitivo-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;}
+  .aquisitivo-line{font-size:14px;margin-bottom:6px;}
+  .aquisitivo-periodos{display:flex;flex-wrap:wrap;gap:8px;}
+  .aquisitivo-chip{padding:8px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.28);font-size:12px;background:rgba(255,255,255,.04);}
+.hist-empty{padding:12px 0; opacity:.8;}
+
+.aquisitivo-actions{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;}
+.link-button{padding:8px 12px;border-radius:999px;border:1px solid rgba(59,130,246,.28);background:rgba(59,130,246,.08);cursor:pointer;font-weight:700;}
+.filter-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.filter-chip{padding:8px 12px;border-radius:999px;border:1px solid rgba(148,163,184,.28);background:rgba(255,255,255,.04);cursor:pointer;font-weight:700;font-size:12px;}
+.filter-chip.active{border-color:rgba(59,130,246,.38);background:rgba(59,130,246,.12);}
+.hist-detail{margin-top:6px;font-size:12px;opacity:.9;}
+.hist-detail strong{opacity:1;}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:1200;}
+.modal-overlay.open{display:flex;}
+.modal-card{width:min(760px,100%);max-height:80vh;overflow:auto;border-radius:18px;border:1px solid rgba(148,163,184,.28);background:#111827;padding:18px;}
+.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px;}
+.modal-close{border:none;background:transparent;color:inherit;font-size:22px;cursor:pointer;}
+.modal-list{display:flex;flex-direction:column;gap:10px;}
+.modal-item{padding:12px;border-radius:14px;border:1px solid rgba(148,163,184,.22);background:rgba(255,255,255,.03);}
 </style>
 
 <div class="content-narrow">
@@ -262,6 +283,14 @@
           <div class="kmeta">dias</div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="aquisitivo-box">
+    <div class="aquisitivo-title">Período aquisitivo</div>
+    <div class="aquisitivo-line">{{ regular_aquisitivo_atual if regular_aquisitivo_atual else 'Ainda não há período aquisitivo vigente disponível.' }}</div>
+    <div class="aquisitivo-actions">
+      <button type="button" class="link-button" id="btn-ver-aquisitivo">Ver detalhamento do saldo por período</button>
     </div>
   </div>
 
@@ -384,16 +413,17 @@
 
     {% if solicitacoes and solicitacoes|length > 0 %}
       <div class="hist-toolbar">
-        <div class="form-group-inline">
-          <label for="hist-status-filter">Filtrar por status</label>
-          <select id="hist-status-filter" class="form-control">
-            <option value="">Todos</option>
-            <option value="PENDENTE">Pendente</option>
-            <option value="EM ANALISE">Em análise</option>
-            <option value="RESERVADO">Reservado</option>
-            <option value="APROVADA">Aprovado</option>
-            <option value="NEGADO">Negado / Rejeitado</option>
-          </select>
+        <div class="form-group-inline" style="flex:2 1 420px;">
+          <label>Filtrar por status</label>
+          <div class="filter-chips" id="hist-status-chips">
+            <button type="button" class="filter-chip active" data-value="">Todos</button>
+            <button type="button" class="filter-chip" data-value="PENDENTE">Pendente</button>
+            <button type="button" class="filter-chip" data-value="EM ANALISE">Em análise</button>
+            <button type="button" class="filter-chip" data-value="RESERVADO">Reservado</button>
+            <button type="button" class="filter-chip" data-value="APROVADA">Aprovado</button>
+            <button type="button" class="filter-chip" data-value="NEGADO">Negado / Rejeitado</button>
+          </div>
+          <input type="hidden" id="hist-status-filter" value="">
         </div>
         <div class="form-group-inline">
           <label for="hist-sort-order">Ordenar por</label>
@@ -406,7 +436,7 @@
         </div>
       </div>
       <div id="hist-list" class="hist-list">
-        {% for row_id, colab_email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs in solicitacoes %}
+        {% for row_id, colab_email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs, periodo_aquisitivo in solicitacoes %}
           {% set st = (status or '')|lower %}
           {% if 'aprov' in st %}
             {% set badge='badge-aprovada' %}
@@ -429,6 +459,7 @@
                 <span class="badge {{ 'badge-premium' if saldo_tipo == 'PREMIUM' else '' }}">{{ 'CERTARIANA' if saldo_tipo == 'PREMIUM' else 'REGULAR' }}</span>
                 {% if obs %}<span title="{{ obs|e }}">📝 {{ obs|truncate(60, True, '…') }}</span>{% endif %}
               </div>
+              {% if periodo_aquisitivo %}<div class="hist-detail"><strong>Período aquisitivo:</strong> {{ periodo_aquisitivo }}</div>{% endif %}
             </div>
             <div class="badge {{ badge }}">{{ (status or 'Pendente')|upper }}</div>
           </div>
@@ -439,6 +470,34 @@
       <div class="muted">Nenhuma solicitação encontrada.</div>
     {% endif %}
   </div>
+
+
+<div class="modal-overlay" id="modal-aquisitivo">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <h3 style="margin:0;">Detalhamento do período aquisitivo</h3>
+        <div class="muted" style="margin-top:4px;">Consumo sempre do saldo mais antigo primeiro.</div>
+      </div>
+      <button type="button" class="modal-close" id="btn-fechar-aquisitivo">×</button>
+    </div>
+    <div class="modal-list">
+      {% if regular_periodos and regular_periodos|length > 0 %}
+        {% for periodo in regular_periodos %}
+          {% if periodo.saldo > 0 %}
+            <div class="modal-item">
+              <strong>{{ periodo.label_detalhado }}</strong>
+              <div class="muted" style="margin-top:6px;">Saldo disponível: {{ periodo.saldo }} dia(s)</div>
+            </div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <div class="modal-item">Nenhum saldo disponível por período aquisitivo no momento.</div>
+      {% endif %}
+      {% if regular_ajuste_bucket %}<div class="modal-item"><strong>Ajustes manuais</strong><div class="muted" style="margin-top:6px;">Saldo disponível: {{ regular_ajuste_bucket }} dia(s)</div></div>{% endif %}
+    </div>
+  </div>
+</div>
 
 </div><!-- /content-narrow -->
 
@@ -505,6 +564,19 @@ _applyTipoFerias();
     const url = new URL(window.location.href);
     url.searchParams.set('colaborador', email);
     window.location.href = url.toString();
+  });
+
+  const modalAquisitivo = document.getElementById('modal-aquisitivo');
+  document.getElementById('btn-ver-aquisitivo')?.addEventListener('click', () => modalAquisitivo?.classList.add('open'));
+  document.getElementById('btn-fechar-aquisitivo')?.addEventListener('click', () => modalAquisitivo?.classList.remove('open'));
+  modalAquisitivo?.addEventListener('click', (ev) => { if (ev.target === modalAquisitivo) modalAquisitivo.classList.remove('open'); });
+
+  document.querySelectorAll('#hist-status-chips .filter-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.getElementById('hist-status-filter').value = btn.dataset.value || '';
+      document.querySelectorAll('#hist-status-chips .filter-chip').forEach((b) => b.classList.toggle('active', b === btn));
+      applyHistoricoFilters();
+    });
   });
 
   const form = document.getElementById('form-solicitacao');

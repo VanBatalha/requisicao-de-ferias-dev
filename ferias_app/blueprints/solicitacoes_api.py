@@ -169,6 +169,13 @@ def api_solicitar_ferias():
     
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
+        periodo_aquisitivo_info = ""
+        if saldo_tipo_req == "REGULAR":
+            periodo_aquisitivo_info = montar_detalhamento_periodo_aquisitivo(
+                _colaborador_admissao(colaborador_email),
+                dias_novos,
+                saldo_total=reg_saldo,
+            ) or ((resumo.get("regular") or {}).get("aquisitivo_atual") or "")
         
         saldo_tipo_final = saldo_tipo_req
         
@@ -263,6 +270,7 @@ def api_solicitar_ferias():
         col_status = col_id_by_name(sheet_sol, "STATUS")
         col_obs = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
         col_saldo_tipo = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
+        col_periodo_aquisitivo = col_id_by_name(sheet_sol, "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
 
         rows_to_add = []
 
@@ -282,6 +290,7 @@ def api_solicitar_ferias():
                 add_cell_unique(cells, col_fim, seg["fim_str"])
                 add_cell_unique(cells, col_dias, seg["dias"])
                 add_cell_unique(cells, col_status, "PENDENTE")
+                add_cell_unique(cells, col_periodo_aquisitivo, periodo_aquisitivo_info)
 
                 obs_row = observacoes
                 obs_row = (obs_row + ("\n" if obs_row else "") + f"Saldo tipo: {saldo_tipo_final}").strip()
@@ -308,6 +317,7 @@ def api_solicitar_ferias():
             add_cell_unique(cells, col_fim, data_fim_str)
             add_cell_unique(cells, col_dias, dias_novos)
             add_cell_unique(cells, col_status, "PENDENTE")
+            add_cell_unique(cells, col_periodo_aquisitivo, periodo_aquisitivo_info)
 
             # Observações (opcional) -> coluna OBSERVAÇÕES
             add_cell_unique(cells, col_obs, observacoes)
@@ -322,7 +332,8 @@ def api_solicitar_ferias():
         print("[SOLICITAR-FERIAS] Col IDs:", {
             "colab": col_colab, "gestor": col_gestor,
             "solicitacao": col_solic, "inicio": col_inicio,
-            "fim": col_fim, "dias": col_dias, "status": col_status, "obs": col_obs, "saldo_tipo": col_saldo_tipo
+            "fim": col_fim, "dias": col_dias, "status": col_status, "obs": col_obs, "saldo_tipo": col_saldo_tipo,
+            "periodo_aquisitivo": col_periodo_aquisitivo
         })
 
         inserted_ids = add_rows_rest(ID_FOLHA_SOLICITACOES, rows_to_add, timeout=25)
