@@ -56,6 +56,7 @@ from .legacy.core_legacy import (  # noqa: F401
     _get_sheet_cadastro,
     _col_id_by_name as _legacy_col_id_by_name,
     _invalidate_sheet_cache as _legacy_invalidate_sheet_cache,
+    _serialize_periodo_aquisitivo_alloc as _legacy_serialize_periodo_aquisitivo_alloc,
 )
 
 
@@ -104,6 +105,15 @@ def col_id_by_name(sheet, *candidate_names):
 
     return _legacy_col_id_by_name(sheet, *candidate_names)
 
+
+
+
+def serialize_periodo_aquisitivo_alloc(alloc: list[dict]) -> str:
+    """Alias público para `_serialize_periodo_aquisitivo_alloc` (legado).
+
+    Necessário porque `from module import *` não expõe nomes iniciados com `_`.
+    """
+    return _legacy_serialize_periodo_aquisitivo_alloc(alloc)
 
 def invalidate_sheet_cache(sheet_id: int | str) -> None:
     """Invalida o cache interno de um sheet (usado para reduzir chamadas na API)."""

@@ -215,12 +215,6 @@
   .hist-toolbar label{display:block;font-weight:700;margin-bottom:6px;font-size:12px;}
   .hist-list{display:flex; flex-direction:column; gap:12px;}
   .hist-empty{padding:12px 0; opacity:.8;}
-
-  .periodo-box{margin-top:10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.25);background:rgba(0,0,0,.10);} 
-  .periodo-box summary{cursor:pointer;font-weight:800;}
-  .periodo-box ul{margin:8px 0 0 18px;padding:0;}
-  .periodo-box li{margin:4px 0;}
-  .periodo-tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;opacity:.88;margin-top:6px;}
 </style>
 
 <div class="content-narrow">
@@ -266,34 +260,27 @@
           <div class="klabel">Saldo disponível</div>
           <div class="kvalue" id="saldo-regular">{{ "%.1f"|format(saldo) }}</div>
           <div class="kmeta">dias</div>
-          {% if periodo_aquisitivo_atual and periodo_aquisitivo_atual.inicio %}
-            <div class="periodo-tag">Período aquisitivo atual: {{ periodo_aquisitivo_atual.inicio }} a {{ periodo_aquisitivo_atual.fim }}</div>
+          {% if periodo_aquisitivo_atual %}
+          <div class="kmeta" style="margin-top:6px; max-width:260px; line-height:1.35;">
+            Período aquisitivo: {{ periodo_aquisitivo_atual.label }}
+          </div>
+          {% endif %}
+          {% if regular_periodos %}
+          <details style="margin-top:8px;">
+            <summary style="cursor:pointer; color:#0f766e;">Ver saldo por período aquisitivo</summary>
+            <div style="margin-top:8px; display:grid; gap:6px;">
+              {% for p in regular_periodos %}
+              <div style="font-size:13px; color:#334155;">
+                <strong>Período {{ p.numero }}</strong> — {{ p.inicio.strftime('%d/%m/%Y') }} a {{ p.fim.strftime('%d/%m/%Y') }}<br>
+                Direito: {{ p.direito }} dias | Reservados: {{ p.reservados }} | Usados: {{ p.usados }} | Saldo: {{ p.saldo }}
+              </div>
+              {% endfor %}
+            </div>
+          </details>
           {% endif %}
         </div>
       </div>
     </div>
-
-    <div class="periodo-box">
-      <details>
-        <summary>Ver detalhamento por período aquisitivo</summary>
-        {% if periodo_aquisitivo_atual and periodo_aquisitivo_atual.inicio %}
-          <div class="hint">Período aquisitivo atual: {{ periodo_aquisitivo_atual.inicio }} a {{ periodo_aquisitivo_atual.fim }}.</div>
-        {% endif %}
-        {% if periodos_aquisitivos %}
-          <ul>
-            {% for p in periodos_aquisitivos %}
-              <li>Período {{ p.periodo }} — {{ p.inicio }} a {{ p.fim }} — <strong>{{ p.saldo }} dia(s)</strong></li>
-            {% endfor %}
-          </ul>
-          {% if modo_migracao_periodo %}
-            <div class="hint">Detalhamento temporário montado automaticamente para a fase de implantação, até que as solicitações passem a registrar a coluna PERIODO_AQUISITIVO.</div>
-          {% endif %}
-        {% else %}
-          <div class="hint">Nenhum período aquisitivo com saldo disponível no momento.</div>
-        {% endif %}
-      </details>
-    </div>
-
   </div>
 
   <div class="card">
