@@ -260,28 +260,36 @@
           <div class="klabel">Saldo disponível</div>
           <div class="kvalue" id="saldo-regular">{{ "%.1f"|format(saldo) }}</div>
           <div class="kmeta">dias</div>
-          {% if periodo_aquisitivo_atual %}
-          <div class="kmeta" style="margin-top:6px; max-width:260px; line-height:1.35;">
-            Período aquisitivo: {{ periodo_aquisitivo_atual.label }}
-          </div>
-          {% endif %}
-          {% if regular_periodos %}
-          <details style="margin-top:8px;">
-            <summary style="cursor:pointer; color:#0f766e;">Ver saldo por período aquisitivo</summary>
-            <div style="margin-top:8px; display:grid; gap:6px;">
-              {% for p in regular_periodos %}
-              <div style="font-size:13px; color:#334155;">
-                <strong>Período {{ p.numero }}</strong> — {{ p.inicio.strftime('%d/%m/%Y') }} a {{ p.fim.strftime('%d/%m/%Y') }}<br>
-                Direito: {{ p.direito }} dias | Reservados: {{ p.reservados }} | Usados: {{ p.usados }} | Saldo: {{ p.saldo }}
-              </div>
-              {% endfor %}
-            </div>
-          </details>
-          {% endif %}
         </div>
       </div>
     </div>
   </div>
+
+  {% if periodo_aquisitivo_atual or regular_periodos %}
+  <div class="card" style="padding:14px 16px; margin-top:-10px;">
+    <div style="display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+      <div style="font-size:22px; line-height:1;">ℹ️</div>
+      <div style="flex:1; min-width:260px;">
+        {% if periodo_aquisitivo_atual %}
+        <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">{{ periodo_aquisitivo_atual.label }}</div>
+        {% endif %}
+        {% if regular_periodos %}
+        <details>
+          <summary style="cursor:pointer; color:#0f766e; font-weight:600;">Ver saldo por período aquisitivo</summary>
+          <div style="margin-top:10px; display:grid; gap:8px;">
+            {% for p in regular_periodos %}
+            <div style="font-size:13px; color:#334155; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc;">
+              <strong>Período {{ p.numero }}</strong>{% if p.atual %} <span style="color:#0f766e;">(atual)</span>{% endif %} — {{ p.inicio.strftime('%d/%m/%Y') }} a {{ p.fim.strftime('%d/%m/%Y') }}<br>
+              Direito: {{ p.direito }} dias | Reservados: {{ p.reservados }} | Usados: {{ p.usados }} | Saldo: {{ p.saldo }}
+            </div>
+            {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="card">
     <div class="section-title">🟦 Licença Certariana</div>
