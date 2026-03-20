@@ -169,19 +169,19 @@ def api_solicitar_ferias():
     
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
-        periodo_aquisitivo_info = ""
-        if saldo_tipo_req == "REGULAR":
-            periodo_aquisitivo_info = montar_detalhamento_periodo_aquisitivo(
-                _colaborador_admissao(colaborador_email),
-                dias_novos,
-                saldo_total=reg_saldo,
-            ) or ((resumo.get("regular") or {}).get("aquisitivo_atual") or "")
         
         saldo_tipo_final = saldo_tipo_req
         
+        periodos_alloc_regular = []
+        periodo_aquisitivo_texto = ""
         if saldo_tipo_req == "REGULAR":
             if dias_novos <= reg_saldo:
                 saldo_tipo_final = "REGULAR"
+                try:
+                    periodos_alloc_regular = plan_regular_period_allocation(colaborador_email, dias_novos)
+                    periodo_aquisitivo_texto = _serialize_periodo_aquisitivo_alloc(periodos_alloc_regular)
+                except Exception as alloc_err:
+                    return jsonify({"ok": False, "message": f"Não foi possível distribuir a solicitação por período aquisitivo: {alloc_err}"}), 400
             else:
                 return jsonify({
                     "ok": False,
@@ -270,7 +270,7 @@ def api_solicitar_ferias():
         col_status = col_id_by_name(sheet_sol, "STATUS")
         col_obs = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
         col_saldo_tipo = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
-        col_periodo_aquisitivo = col_id_by_name(sheet_sol, "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
+        col_periodo_aquisitivo = col_id_by_name(sheet_sol, "PERIODO_AQUISITIVO", "PERÍODO_AQUISITIVO", "PERIODO AQUISITIVO", "PERÍODO AQUISITIVO")
 
         rows_to_add = []
 
@@ -290,7 +290,6 @@ def api_solicitar_ferias():
                 add_cell_unique(cells, col_fim, seg["fim_str"])
                 add_cell_unique(cells, col_dias, seg["dias"])
                 add_cell_unique(cells, col_status, "PENDENTE")
-                add_cell_unique(cells, col_periodo_aquisitivo, periodo_aquisitivo_info)
 
                 obs_row = observacoes
                 obs_row = (obs_row + ("\n" if obs_row else "") + f"Saldo tipo: {saldo_tipo_final}").strip()
@@ -317,10 +316,11 @@ def api_solicitar_ferias():
             add_cell_unique(cells, col_fim, data_fim_str)
             add_cell_unique(cells, col_dias, dias_novos)
             add_cell_unique(cells, col_status, "PENDENTE")
-            add_cell_unique(cells, col_periodo_aquisitivo, periodo_aquisitivo_info)
 
             # Observações (opcional) -> coluna OBSERVAÇÕES
             add_cell_unique(cells, col_obs, observacoes)
+            if saldo_tipo_final == "REGULAR" and periodo_aquisitivo_texto and col_periodo_aquisitivo:
+                add_cell_unique(cells, col_periodo_aquisitivo, periodo_aquisitivo_texto)
 
             new_row.cells = build_cells(cells)
 
@@ -356,7 +356,8 @@ def api_solicitar_ferias():
     return jsonify({
         "ok": True,
         "message": f"Solicitação registrada ({tipo_solicitacao_out}) com {dias_novos} dia(s). Saldo restante: {saldo_atualizado}.",
-        "saldo_atualizado": saldo_atualizado
+        "saldo_atualizado": saldo_atualizado,
+        "periodo_aquisitivo": periodo_aquisitivo_texto
     })
 
 @bp.route("/api/editar-solicitacao", methods=["POST"])

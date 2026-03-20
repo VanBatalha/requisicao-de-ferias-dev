@@ -87,6 +87,156 @@ RUNTIME_SETTINGS_PATH = os.getenv(
     "/tmp/requisicao_ferias_runtime_settings.json",
 )
 
+
+
+FERIAS_MIGRATION_GAMBIARRA_UNTIL_YEAR = int(os.getenv("FERIAS_MIGRATION_GAMBIARRA_UNTIL_YEAR", "2027"))
+
+
+def _add_years_safe(d: dt.date, years: int) -> dt.date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        # Trata 29/02
+        return d.replace(month=2, day=28, year=d.year + years)
+
+
+def _format_periodo_aquisitivo_label(periodo_num: int, dias: int) -> str:
+    return f"Período {int(periodo_num)} - {int(dias)} dia(s)"
+
+
+def _serialize_periodo_aquisitivo_alloc(allocs: list[dict]) -> str:
+    partes = []
+    for a in (allocs or []):
+        try:
+            partes.append(_format_periodo_aquisitivo_label(int(a.get("periodo")), int(a.get("dias"))))
+        except Exception:
+            continue
+    return "; ".join(partes)
+
+
+def _parse_periodo_aquisitivo_alloc(value) -> list[dict]:
+    s = str(value or "").strip()
+    if not s:
+        return []
+    out = []
+    for m in re.finditer(r"(?:periodo|período|p)\s*[-:# ]*\s*(\d+)\D+(\d+)\s*dia", s, flags=re.I):
+        try:
+            out.append({"periodo": int(m.group(1)), "dias": int(m.group(2))})
+        except Exception:
+            pass
+    return out
+
+
+def _build_periodos_aquisitivos(admissao: dt.date, hoje=None) -> list[dict]:
+    if not admissao:
+        return []
+    hoje = hoje or dt.date.today()
+    if hoje < admissao:
+        return []
+    periodos = []
+    idx = 1
+    inicio = admissao
+    while inicio <= hoje:
+        prox = _add_years_safe(inicio, 1)
+        fim = prox - dt.timedelta(days=1)
+        completo = hoje >= fim
+        periodos.append({
+            "periodo": idx,
+            "inicio": inicio,
+            "fim": fim,
+            "completo": bool(completo),
+            "direito": 30 if completo else 0,
+        })
+        inicio = prox
+        idx += 1
+        if idx > 100:
+            break
+    return periodos
+
+
+def _distribuir_saldo_gambiarra(periodos_full: list[dict], saldo_total: int) -> list[dict]:
+    saldo_total = max(0, int(saldo_total or 0))
+    out = []
+    for p in reversed(periodos_full or []):
+        if saldo_total <= 0:
+            break
+        dias = min(30, saldo_total)
+        if dias > 0:
+            out.append({
+                "periodo": int(p["periodo"]),
+                "inicio": p["inicio"],
+                "fim": p["fim"],
+                "saldo": dias,
+                "direito": 30,
+                "origem": "gambiarra",
+            })
+            saldo_total -= dias
+    out.reverse()
+    return out
+
+
+def _aplicar_consumo_fifo(periodos_full: list[dict], consumo_total: int, reservado_total: int = 0) -> list[dict]:
+    slots = []
+    for p in (periodos_full or []):
+        slots.append({
+            "periodo": int(p["periodo"]),
+            "inicio": p["inicio"],
+            "fim": p["fim"],
+            "direito": 30,
+            "saldo": 30,
+            "consumido": 0,
+            "reservado": 0,
+            "origem": "fifo",
+        })
+    for campo, total in (("consumido", consumo_total), ("reservado", reservado_total)):
+        restante = max(0, int(total or 0))
+        for s in slots:
+            if restante <= 0:
+                break
+            usar = min(s["saldo"], restante)
+            s[campo] += usar
+            s["saldo"] -= usar
+            restante -= usar
+    return [s for s in slots if s.get("saldo", 0) > 0 or s.get("consumido", 0) > 0 or s.get("reservado", 0) > 0]
+
+
+def _periodo_aquisitivo_atual(admissao: dt.date, hoje=None):
+    periodos = _build_periodos_aquisitivos(admissao, hoje=hoje)
+    if not periodos:
+        return None
+    for p in periodos:
+        if p["inicio"] <= (hoje or dt.date.today()) <= p["fim"]:
+            return p
+    return periodos[-1]
+
+
+def plan_regular_period_allocation(email: str, dias_solicitados: int) -> list[dict]:
+    resumo = get_resumo_ferias(email)
+    disponiveis = []
+    for p in ((resumo.get("regular") or {}).get("periodos") or []):
+        saldo_p = int(p.get("saldo", 0) or 0)
+        if saldo_p > 0:
+            disponiveis.append({
+                "periodo": int(p.get("periodo")),
+                "dias": saldo_p,
+                "inicio": p.get("inicio"),
+                "fim": p.get("fim"),
+            })
+    restante = int(dias_solicitados or 0)
+    if restante <= 0:
+        return []
+    allocs = []
+    for p in disponiveis:
+        if restante <= 0:
+            break
+        usar = min(int(p["dias"]), restante)
+        if usar > 0:
+            allocs.append({"periodo": int(p["periodo"]), "dias": int(usar)})
+            restante -= usar
+    if restante > 0:
+        raise ValueError(f"Saldo insuficiente por período aquisitivo. Faltam {restante} dia(s).")
+    return allocs
+
 _DEFAULT_RUNTIME_SETTINGS = {
     "same_month": {
         # Liberação excepcional para permitir solicitações/edições no mês vigente
@@ -1169,139 +1319,16 @@ def _colaborador_admissao(email: str):
             return _parse_date_value(c.get(k))
     return None
 
-def calcular_periodos_aquisitivos(admissao: dt.date, hoje=None) -> dict:
-    """Calcula períodos aquisitivos anuais de férias.
-
-    Regra aplicada:
-    - cada 12 meses completos concede 30 dias;
-    - não há mais acúmulo proporcional mensal de 2,5 dias.
-    """
-    hoje = hoje or dt.date.today()
-    if not admissao or hoje < admissao:
-        return {"concluidos": [], "atual": None, "completos": 0}
-
-    concluidos = []
-    inicio = admissao
-    numero = 1
-    while True:
-        prox_inicio = _add_months(inicio, 12)
-        if prox_inicio > hoje:
-            atual = {
-                "numero": numero,
-                "inicio": inicio,
-                "fim": prox_inicio - dt.timedelta(days=1),
-                "completo": False,
-            }
-            break
-        concluidos.append({
-            "numero": numero,
-            "inicio": inicio,
-            "fim": prox_inicio - dt.timedelta(days=1),
-            "direito": 30,
-            "completo": True,
-        })
-        inicio = prox_inicio
-        numero += 1
-
-    return {"concluidos": concluidos, "atual": atual, "completos": len(concluidos)}
-
-
 def calcular_dias_ferias_real_time(admissao: dt.date, hoje=None) -> int:
-    """Direito-base de férias por período aquisitivo completo.
-
-    Compatibilidade de nome: o sistema antigo chamava esta função para cálculo
-    em tempo real. Agora ela retorna 30 dias por período aquisitivo anual já
-    concluído, sem proporcionalidade mensal.
-    """
-    info = calcular_periodos_aquisitivos(admissao, hoje=hoje)
-    return int(info.get("completos", 0)) * 30
-
-
-def _montar_saldos_por_periodo_aquisitivo(admissao: dt.date | None, saldo_total: int) -> dict:
-    """Distribui o saldo disponível entre os períodos aquisitivos concluídos.
-
-    Assume consumo do período mais antigo primeiro. Ajustes manuais que extrapolem
-    a soma-base dos períodos são exibidos em um bucket separado.
-    """
+    """Direito de férias apenas por períodos aquisitivos completos (30 dias por período)."""
     if not admissao:
-        return {"periodos": [], "atual": None, "ajuste_bucket": 0}
-
-    info = calcular_periodos_aquisitivos(admissao)
-    periodos = info.get("concluidos", [])
-    base_total = len(periodos) * 30
-    saldo_total = int(saldo_total or 0)
-
-    saldo_base_disponivel = min(base_total, max(0, saldo_total))
-    consumido_da_base = max(0, base_total - saldo_base_disponivel)
-
-    detalhados = []
-    restante_consumido = consumido_da_base
-    for per in periodos:
-        abate = min(30, restante_consumido)
-        saldo_periodo = 30 - abate
-        restante_consumido -= abate
-        detalhados.append({
-            "numero": per["numero"],
-            "inicio": per["inicio"],
-            "fim": per["fim"],
-            "direito": 30,
-            "saldo": max(0, saldo_periodo),
-            "label": f"Período {per['numero']}: {per['inicio'].strftime('%d/%m/%Y')} a {per['fim'].strftime('%d/%m/%Y')}",
-        })
-
-    ajuste_bucket = saldo_total - saldo_base_disponivel
-    return {"periodos": detalhados, "atual": info.get("atual"), "ajuste_bucket": int(ajuste_bucket)}
-
-
-def _ordinal_periodo(numero: int) -> str:
-    try:
-        return f"{int(numero)}º"
-    except Exception:
-        return str(numero)
-
-
-def montar_detalhamento_periodo_aquisitivo(admissao: dt.date | None, dias_solicitados: int, saldo_total: int | None = None) -> str:
-    """Distribui os dias solicitados entre os períodos aquisitivos disponíveis.
-
-    Regra: consumir sempre do período mais antigo primeiro.
-    Retorna texto para gravar na coluna PERIODO AQUISITIVO.
-    """
-    try:
-        dias_solicitados = int(dias_solicitados or 0)
-    except Exception:
-        dias_solicitados = 0
-    if dias_solicitados <= 0 or not admissao:
-        return ""
-
-    if saldo_total is None:
-        try:
-            saldo_total = calcular_dias_ferias_real_time(admissao)
-        except Exception:
-            saldo_total = 0
-
-    periodos_info = _montar_saldos_por_periodo_aquisitivo(admissao, int(saldo_total or 0))
-    restante = dias_solicitados
-    partes = []
-
-    for periodo in periodos_info.get("periodos", []):
-        disponivel = int(periodo.get("saldo") or 0)
-        if disponivel <= 0 or restante <= 0:
-            continue
-        usar = min(disponivel, restante)
-        partes.append(f"{usar} dia(s) referente{'s' if usar != 1 else ''} ao {_ordinal_periodo(periodo.get('numero'))} Período aquisitivo")
-        restante -= usar
-
-    ajuste_bucket = int(periodos_info.get("ajuste_bucket") or 0)
-    if restante > 0 and ajuste_bucket > 0:
-        usar = min(ajuste_bucket, restante)
-        partes.append(f"{usar} dia(s) referente{'s' if usar != 1 else ''} a ajuste manual")
-        restante -= usar
-
-    if restante > 0:
-        partes.append(f"{restante} dia(s) sem período identificado")
-
-    return "; ".join(partes)
-
+        return 0
+    hoje = hoje or dt.date.today()
+    if hoje < admissao:
+        return 0
+    periodos = _build_periodos_aquisitivos(admissao, hoje=hoje)
+    completos = sum(1 for p in periodos if p.get("completo"))
+    return max(0, int(completos) * 30)
 
 def get_resumo_ferias(email: str):
     """
@@ -1321,13 +1348,10 @@ def get_resumo_ferias(email: str):
 
     # ===== DIREITOS BASE (cadastro) =====
     regular_base = 0
-    adm = None
-    aquisitivo_info = {"concluidos": [], "atual": None, "completos": 0}
     try:
         colab = _colaborador_por_email(email) or {}
         adm = _colaborador_admissao(email)
         if adm:
-            aquisitivo_info = calcular_periodos_aquisitivos(adm)
             regular_base = calcular_dias_ferias_real_time(adm)
         else:
             regular_base = colab.get("DIAS DE DIREITO") or colab.get("DIAS DIREITO") or 0
@@ -1371,8 +1395,6 @@ def get_resumo_ferias(email: str):
         col_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
         col_obs = _col_id(colsN, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
         col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
-        col_periodo_aq = _col_id(colsN, "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
-        col_periodo_aq = _col_id(colsN, "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
         col_inicio = _col_id(colsN, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL", "INICIO", "INÍCIO")
 
         for row in sheet_sol.rows:
@@ -1438,11 +1460,72 @@ def get_resumo_ferias(email: str):
     regular_saldo = regular_direito - int(regular_usados) - int(regular_reservados)
     premium_saldo = premium_direito - int(premium_usados) - int(premium_reservados)
 
-    periodos_regular = _montar_saldos_por_periodo_aquisitivo(adm, regular_saldo)
-    aquisitivo_atual = periodos_regular.get("atual")
-    aquisitivo_atual_fmt = None
-    if aquisitivo_atual:
-        aquisitivo_atual_fmt = f"{aquisitivo_atual['inicio'].strftime('%d/%m/%Y')} a {aquisitivo_atual['fim'].strftime('%d/%m/%Y')}"
+    adm = _colaborador_admissao(email)
+    periodo_atual = _periodo_aquisitivo_atual(adm)
+    periodos_all = _build_periodos_aquisitivos(adm)
+    periodos_full = [p for p in periodos_all if p.get("completo")]
+
+    # Detalhamento por período aquisitivo
+    periodos_regular = []
+    migracao_modo = False
+    if periodos_full:
+        # Repassa solicitações com PERIODO_AQUISITIVO explícito, quando existir.
+        explicit_usados = 0
+        explicit_reservados = 0
+        has_missing_period_tag = False
+        try:
+            sheet_sol = _get_sheet_solicitacoes(client)
+            cols = get_col_map(sheet_sol)
+            colsN = _cols_norm_map(cols)
+            col_colab = _col_id(colsN, "COLABORADOR")
+            col_status = _col_id(colsN, "STATUS")
+            col_dias = _col_id(colsN, "DIAS")
+            col_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
+            col_obs = _col_id(colsN, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
+            col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
+            col_periodo = _col_id(colsN, "PERIODO_AQUISITIVO", "PERÍODO_AQUISITIVO", "PERIODO AQUISITIVO", "PERÍODO AQUISITIVO")
+            for row in sheet_sol.rows:
+                row_key = next((c.value for c in row.cells if c.column_id == (col_colab or -1)), None)
+                if not row_key or safe_lower(str(row_key)) != email:
+                    continue
+                solicit = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+                if _is_ajuste(solicit):
+                    continue
+                status = next((c.value for c in row.cells if c.column_id == (col_status or -1)), "") or ""
+                dias = next((c.value for c in row.cells if c.column_id == (col_dias or -1)), 0) or 0
+                obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
+                explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
+                if _infer_saldo_tipo(obs, explicit_tipo) != "REGULAR":
+                    continue
+                try:
+                    dias = int(float(dias or 0))
+                except Exception:
+                    dias = 0
+                st = _norm_status(status)
+                if st not in (STATUS_APROVADA | STATUS_RESERVA):
+                    continue
+                periodo_raw = next((c.value for c in row.cells if c.column_id == (col_periodo or -1)), "") if col_periodo else ""
+                allocs = _parse_periodo_aquisitivo_alloc(periodo_raw)
+                if allocs:
+                    total_alloc = sum(int(a.get("dias", 0) or 0) for a in allocs)
+                    if st in STATUS_APROVADA:
+                        explicit_usados += total_alloc
+                    else:
+                        explicit_reservados += total_alloc
+                elif dias > 0:
+                    has_missing_period_tag = True
+        except Exception:
+            has_missing_period_tag = True
+
+        if has_missing_period_tag and dt.date.today().year <= FERIAS_MIGRATION_GAMBIARRA_UNTIL_YEAR:
+            migracao_modo = True
+            periodos_regular = _distribuir_saldo_gambiarra(periodos_full, regular_saldo)
+        else:
+            periodos_regular = _aplicar_consumo_fifo(
+                periodos_full,
+                max(0, int(regular_usados)),
+                max(0, int(regular_reservados)),
+            )
 
     return {
         "regular": {
@@ -1451,24 +1534,24 @@ def get_resumo_ferias(email: str):
             "reservados": int(regular_reservados),
             "saldo": int(regular_saldo),
             "ajustes": int(ajuste_regular),
-            "aquisitivo_atual": aquisitivo_atual_fmt,
-            "aquisitivo_atual_inicio": aquisitivo_atual.get("inicio").isoformat() if aquisitivo_atual and aquisitivo_atual.get("inicio") else None,
-            "aquisitivo_atual_fim": aquisitivo_atual.get("fim").isoformat() if aquisitivo_atual and aquisitivo_atual.get("fim") else None,
             "periodos": [
                 {
-                    "numero": p["numero"],
-                    "inicio": p["inicio"].isoformat(),
-                    "fim": p["fim"].isoformat(),
-                    "direito": int(p["direito"]),
-                    "saldo": int(p["saldo"]),
-                    "label": p["label"],
-                    "label_curta": f"{_ordinal_periodo(p['numero'])} período",
-                    "label_detalhado": f"{_ordinal_periodo(p['numero'])} Período aquisitivo ({p['inicio'].strftime('%d/%m/%Y')} a {p['fim'].strftime('%d/%m/%Y')})",
+                    "periodo": int(p.get("periodo")),
+                    "inicio": p.get("inicio").strftime("%d/%m/%Y") if p.get("inicio") else "",
+                    "fim": p.get("fim").strftime("%d/%m/%Y") if p.get("fim") else "",
+                    "saldo": int(p.get("saldo", 0) or 0),
+                    "direito": int(p.get("direito", 0) or 0),
+                    "origem": p.get("origem") or ("gambiarra" if migracao_modo else "fifo"),
                 }
-                for p in periodos_regular.get("periodos", [])
+                for p in (periodos_regular or []) if int(p.get("saldo", 0) or 0) > 0
             ],
-            "ajuste_bucket": int(periodos_regular.get("ajuste_bucket") or 0),
-            "periodos_completos": int(aquisitivo_info.get("completos") or 0),
+            "periodo_atual": {
+                "periodo": int(periodo_atual.get("periodo")) if periodo_atual else 0,
+                "inicio": periodo_atual.get("inicio").strftime("%d/%m/%Y") if periodo_atual and periodo_atual.get("inicio") else "",
+                "fim": periodo_atual.get("fim").strftime("%d/%m/%Y") if periodo_atual and periodo_atual.get("fim") else "",
+                "completo": bool(periodo_atual.get("completo")) if periodo_atual else False,
+            } if periodo_atual else None,
+            "modo_migracao": bool(migracao_modo),
         },
         "premium": {
             "direito": int(premium_direito),
@@ -1842,7 +1925,6 @@ def get_ferias_mes(mes, ano):
             status = _canonical_status(status)
             obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
             explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
-            periodo_aq = next((c.value for c in row.cells if c.column_id == (col_periodo_aq or -1)), "") or ""
             saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
 
             colab = _colaborador_por_email(email) or {}
@@ -1862,8 +1944,6 @@ def get_ferias_mes(mes, ano):
                 "status": status,
                 "solicitacao": solicit,
                 "saldo_tipo": saldo_tipo,
-                "periodo_aquisitivo": periodo_aq or "",
-                "observacoes": obs or "",
             })
 
         # ordena por início
@@ -1904,7 +1984,6 @@ def listar_solicitacoes(email):
         col_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
         col_obs = _col_id(colsN, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
         col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
-        col_periodo_aq = _col_id(colsN, "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
 
         dados = []
         for row in sheet_sol.rows:
@@ -1922,14 +2001,13 @@ def listar_solicitacoes(email):
             status = next((c.value for c in row.cells if c.column_id == (col_status or -1)), "") or ""
             obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
             explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
-            periodo_aq = next((c.value for c in row.cells if c.column_id == (col_periodo_aq or -1)), "") or ""
 
             inicio_br = formatar_data_br(inicio_raw)
             fim_br = formatar_data_br(fim_raw)
 
             saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
 
-            dados.append((row.id, inicio_br, fim_br, dias, status, (solicit or ""), saldo_tipo, (obs or ""), (periodo_aq or "")))
+            dados.append((row.id, inicio_br, fim_br, dias, status, (solicit or ""), saldo_tipo, (obs or "")))
 
         return dados
     except Exception as e:
@@ -1966,7 +2044,6 @@ def listar_solicitacoes_equipes(emails: list[str]):
         col_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
         col_obs = _col_id(colsN, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
         col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
-        col_periodo_aq = _col_id(colsN, "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
 
         dados = []
         for row in sheet_sol.rows:
@@ -1985,13 +2062,12 @@ def listar_solicitacoes_equipes(emails: list[str]):
             status = next((c.value for c in row.cells if c.column_id == (col_status or -1)), "") or ""
             obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
             explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
-            periodo_aq = next((c.value for c in row.cells if c.column_id == (col_periodo_aq or -1)), "") or ""
 
             inicio_br = formatar_data_br(inicio_raw)
             fim_br = formatar_data_br(fim_raw)
             saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
 
-            dados.append((row.id, row_email_n, inicio_br, fim_br, dias, status, (solicit or ""), saldo_tipo, (obs or ""), (periodo_aq or "")))
+            dados.append((row.id, row_email_n, inicio_br, fim_br, dias, status, (solicit or ""), saldo_tipo, (obs or "")))
 
         return dados
     except Exception as e:
@@ -2040,13 +2116,12 @@ def listar_solicitacoes_todas():
             status = next((c.value for c in row.cells if c.column_id == (col_status or -1)), "") or ""
             obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
             explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
-            periodo_aq = next((c.value for c in row.cells if c.column_id == (col_periodo_aq or -1)), "") or ""
 
             inicio_br = formatar_data_br(inicio_raw)
             fim_br = formatar_data_br(fim_raw)
             saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
 
-            dados.append((row.id, row_email_n, inicio_br, fim_br, dias, status, (solicit or ""), saldo_tipo, (obs or ""), (periodo_aq or "")))
+            dados.append((row.id, row_email_n, inicio_br, fim_br, dias, status, (solicit or ""), saldo_tipo, (obs or "")))
 
         return dados
     except Exception as e:
