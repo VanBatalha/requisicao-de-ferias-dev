@@ -717,16 +717,29 @@ def get_user_role(email: str) -> str:
 
 
 def _is_ativo(colab: dict) -> bool:
-    """Define se colaborador está ativo com base no campo Status/STATUS."""
+    """Define se colaborador está ativo com base em colunas de status/situação.
+
+    Aceita títulos como Status, STATUS, Situação, Situacao etc.
+    Se o valor existir, somente "ativo" é considerado ativo.
+    Se nenhuma coluna de status/situação existir, mantém compatibilidade e
+    considera ativo.
+    """
     if not isinstance(colab, dict):
         return False
-    val = colab.get("Status")
+
+    val = None
+    for k, v in colab.items():
+        nk = _norm_title(k)
+        if nk in {"status", "situacao", "situação"}:
+            val = v
+            break
+
     if val is None:
-        val = colab.get("STATUS")
-    if val is None:
-        # Se a planilha não tiver coluna de status, considera ativo
+        # Se a planilha não tiver coluna de status/situação, considera ativo
         return True
-    return str(val).strip().lower() == "ativo"
+
+    norm = str(val).strip().lower()
+    return norm == "ativo"
 
 
 

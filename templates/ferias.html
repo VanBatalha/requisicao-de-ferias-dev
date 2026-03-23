@@ -402,7 +402,7 @@
       </div>
 
       <div class="btn-row">
-        <button type="submit" class="btn-primary">➕ Fazer Solicitação</button>
+        <button type="submit" class="btn-primary" id="btn-submit-solicitacao">➕ Fazer Solicitação</button>
       </div>
       <div id="resultado" class="msg muted"></div>
     </form>
@@ -539,6 +539,7 @@ _applyTipoFerias();
 
   const form = document.getElementById('form-solicitacao');
   const resultado = document.getElementById('resultado');
+  const btnSubmitSolicitacao = document.getElementById('btn-submit-solicitacao');
 
   function normalizeStatus(value){
     const raw = (value || '').toString().trim().toUpperCase();
@@ -593,7 +594,13 @@ _applyTipoFerias();
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (btnSubmitSolicitacao?.disabled) return;
     if (resultado) resultado.textContent = 'Enviando...';
+    if (btnSubmitSolicitacao) {
+      btnSubmitSolicitacao.disabled = true;
+      btnSubmitSolicitacao.dataset.originalText = btnSubmitSolicitacao.textContent || '➕ Fazer Solicitação';
+      btnSubmitSolicitacao.textContent = 'Enviando...';
+    }
 
     try {
       const fd = new FormData(form);
@@ -602,9 +609,15 @@ _applyTipoFerias();
       if (resultado) resultado.textContent = data.message || 'Solicitação enviada.';
       if (resp.ok && data.ok) {
         setTimeout(() => window.location.reload(), 900);
+        return;
       }
     } catch (err) {
       if (resultado) resultado.textContent = 'Erro ao enviar solicitação. Tente novamente.';
+    }
+
+    if (btnSubmitSolicitacao) {
+      btnSubmitSolicitacao.disabled = false;
+      btnSubmitSolicitacao.textContent = btnSubmitSolicitacao.dataset.originalText || '➕ Fazer Solicitação';
     }
   });
 </script>

@@ -262,6 +262,76 @@ def api_solicitar_ferias():
             cells_by_id[cid] = value
 
 
+    def _is_duplicate_solicitacao(sheet_sol, *, colaborador_email, tipo_solicitacao, saldo_tipo, data_inicio_str, data_fim_str, dias_novos):
+        """Evita lançar a mesma solicitação duas vezes.
+
+        Considera duplicada uma linha existente com os mesmos dados-chave para o
+        mesmo colaborador, desde que o status não seja cancelado/reprovado.
+        """
+        try:
+            cols = get_col_map(sheet_sol)
+            colsN = _cols_norm_map(cols)
+            col_colab = _col_id(colsN, "COLABORADOR")
+            col_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
+            col_inicio = _col_id(colsN, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
+            col_fim = _col_id(colsN, "DATA FIM", "DATA FINAL")
+            col_dias = _col_id(colsN, "DIAS")
+            col_status = _col_id(colsN, "STATUS")
+            col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO", "TIPO DE FERIAS", "TIPO DE FÉRIAS")
+
+            alvo_email = safe_lower(colaborador_email)
+            alvo_tipo = str(tipo_solicitacao or "").strip().upper()
+            alvo_saldo = str(saldo_tipo or "").strip().upper()
+            alvo_inicio = str(data_inicio_str or "").strip()
+            alvo_fim = str(data_fim_str or "").strip()
+            alvo_dias = int(float(dias_novos or 0))
+
+            for row in sheet_sol.rows:
+                def _cell(cid):
+                    return next((c.value for c in row.cells if c.column_id == (cid or -1)), None)
+
+                row_email = safe_lower(str(_cell(col_colab) or ""))
+                if row_email != alvo_email:
+                    continue
+
+                row_status = _norm_status(_cell(col_status) or "")
+                if row_status not in (STATUS_RESERVA | STATUS_APROVADA):
+                    # Ignora linhas canceladas/reprovadas e afins.
+                    continue
+
+                row_tipo = str(_cell(col_solic) or "").strip().upper()
+                row_saldo = str(_cell(col_tipo) or "").strip().upper()
+                row_inicio = _cell(col_inicio)
+                row_fim = _cell(col_fim)
+                row_dias = _cell(col_dias) or 0
+                try:
+                    row_dias = int(float(row_dias or 0))
+                except Exception:
+                    row_dias = 0
+
+                if _parse_date_value(row_inicio):
+                    row_inicio = _parse_date_value(row_inicio).strftime("%d/%m/%Y")
+                else:
+                    row_inicio = str(row_inicio or "").strip()
+                if _parse_date_value(row_fim):
+                    row_fim = _parse_date_value(row_fim).strftime("%d/%m/%Y")
+                else:
+                    row_fim = str(row_fim or "").strip()
+
+                if (
+                    row_tipo == alvo_tipo
+                    and row_saldo == alvo_saldo
+                    and row_inicio == alvo_inicio
+                    and row_fim == alvo_fim
+                    and row_dias == alvo_dias
+                ):
+                    return True
+        except Exception:
+            # Em caso de erro, não bloqueia a solicitação.
+            return False
+        return False
+
+
     try:
         client = get_smartsheet_client()
         if not client:
@@ -282,6 +352,20 @@ def api_solicitar_ferias():
         col_periodo_aq = col_id_by_name(sheet_sol, "PERIODO_AQUISITIVO", "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
 
         rows_to_add = []
+
+        if _is_duplicate_solicitacao(
+            sheet_sol,
+            colaborador_email=colaborador_email,
+            tipo_solicitacao=tipo_solicitacao_out,
+            saldo_tipo=saldo_tipo_final,
+            data_inicio_str=data_inicio_str,
+            data_fim_str=data_fim_str,
+            dias_novos=dias_novos,
+        ):
+            return jsonify({
+                "ok": False,
+                "message": "Já existe uma solicitação igual para este colaborador nesse período. A duplicidade foi bloqueada.",
+            }), 400
 
         if saldo_tipo_final == "PREMIUM" and certariana_segmentos:
             total_parcelas = len(certariana_segmentos)

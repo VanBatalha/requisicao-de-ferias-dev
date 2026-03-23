@@ -122,6 +122,7 @@ def ferias():
                 disponiveis.append(e)
 
     opcoes = [{"email": e, "nome": (nome_por_email.get(e) or e)} for e in disponiveis]
+    opcoes.sort(key=lambda x: ((x.get("nome") or "").casefold(), (x.get("email") or "").casefold()))
 
     selecionado = safe_lower(request.args.get("colaborador") or (opcoes[0]["email"] if opcoes else ""))
     if selecionado not in [o["email"] for o in opcoes]:
