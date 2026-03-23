@@ -20,8 +20,8 @@ def _tipo_afastamento_info(tipo_raw: str):
     if not dias:
         return None
     if "MATERN" in upper:
-        return {"tipo": "Licença Maternidade", "dias": 120}
-    return {"tipo": "Licença Paternidade", "dias": 5}
+        return {"tipo": "LICENÇA MATERNIDADE", "dias": 120}
+    return {"tipo": "LICENÇA PATERNIDADE", "dias": 5}
 
 @bp.route("/api/solicitar-ferias", methods=["POST"])
 def api_solicitar_ferias():
@@ -210,7 +210,12 @@ def api_solicitar_ferias():
         saldo_tipo_final = saldo_tipo_req
 
         if is_afastamento:
+            # Afastamentos não consomem nem incrementam saldo.
+            # Mantemos SALDO TIPO como REGULAR apenas por compatibilidade histórica,
+            # mas sem qualquer abatimento de saldo ou distribuição por período.
             saldo_tipo_final = "REGULAR"
+            periodo_alloc = []
+            periodo_alloc_txt = tipo_solicitacao_out
         elif saldo_tipo_req == "REGULAR":
             if dias_novos <= reg_saldo:
                 saldo_tipo_final = "REGULAR"
@@ -449,7 +454,7 @@ def api_solicitar_ferias():
 
             # Observações (opcional) -> coluna OBSERVAÇÕES
             add_cell_unique(cells, col_obs, observacoes)
-            if saldo_tipo_final == "REGULAR" and periodo_alloc_txt:
+            if col_periodo_aq and periodo_alloc_txt:
                 add_cell_unique(cells, col_periodo_aq, periodo_alloc_txt)
 
             new_row.cells = build_cells(cells)
@@ -472,7 +477,7 @@ def api_solicitar_ferias():
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao salvar solicitação: {e}"}), 500
 
-    saldo_atualizado = saldo_base - dias_novos
+    saldo_atualizado = saldo_base if is_afastamento else (saldo_base - dias_novos)
 
     if saldo_tipo_final == "PREMIUM" and certariana_segmentos:
         return jsonify({
