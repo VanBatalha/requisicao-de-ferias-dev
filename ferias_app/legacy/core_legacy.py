@@ -1448,7 +1448,12 @@ def get_resumo_ferias(email: str):
                         ajuste_regular += dias
                 continue
 
-            # ===== SOLICITAÇÕES DE FÉRIAS =====
+            # ===== SOLICITAÇÕES DE FÉRIAS / AFASTAMENTOS =====
+            ns_solic = _norm_solicitacao(solicit)
+            if ("licenca maternidade" in ns_solic) or ("licenca paternidade" in ns_solic):
+                # Afastamentos não impactam saldo de férias.
+                continue
+
             total_solicitacoes += 1
             saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
 

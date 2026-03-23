@@ -4,6 +4,25 @@ from .base import bp
 from ..core import *  # noqa: F401,F403
 from ..rules import RuleError, validate_licenca_certariana
 
+
+AFASTAMENTO_DIAS = {
+    "LICENCA MATERNIDADE": 120,
+    "LICENÇA MATERNIDADE": 120,
+    "LICENCA PATERNIDADE": 5,
+    "LICENÇA PATERNIDADE": 5,
+}
+
+
+def _tipo_afastamento_info(tipo_raw: str):
+    tipo = (tipo_raw or "").strip()
+    upper = tipo.upper()
+    dias = AFASTAMENTO_DIAS.get(upper)
+    if not dias:
+        return None
+    if "MATERN" in upper:
+        return {"tipo": "Licença Maternidade", "dias": 120}
+    return {"tipo": "Licença Paternidade", "dias": 5}
+
 @bp.route("/api/solicitar-ferias", methods=["POST"])
 def api_solicitar_ferias():
     user = session.get("user")
@@ -61,10 +80,16 @@ def api_solicitar_ferias():
     elif tipo_norm in ("venda", "vender"):
         tipo_solicitacao_out = "Venda"
     else:
-        # aceita exatamente o que veio, mas valida mínimo
-        if tipo_norm not in ("venda", "gozo"):
-            return jsonify({"ok": False, "message": "Tipo inválido. Use Venda ou Gozo."}), 400
-        tipo_solicitacao_out = tipo_solicitacao.title()
+        afast_info = _tipo_afastamento_info(tipo_solicitacao)
+        if afast_info:
+            tipo_solicitacao_out = afast_info["tipo"]
+        else:
+            # aceita exatamente o que veio, mas valida mínimo
+            if tipo_norm not in ("venda", "gozo"):
+                return jsonify({"ok": False, "message": "Tipo inválido. Use Venda, Gozo, Licença Maternidade ou Licença Paternidade."}), 400
+            tipo_solicitacao_out = tipo_solicitacao.title()
+
+    is_afastamento = tipo_solicitacao_out in ("Licença Maternidade", "Licença Paternidade")
 
     # valida se colaborador está no escopo
     if is_dp_or_admin:
@@ -79,7 +104,19 @@ def api_solicitar_ferias():
     # =============================
     # Datas / Segmentos
     # =============================
-    if saldo_tipo_req == "PREMIUM":
+    if is_afastamento:
+        if not data_inicio_str:
+            return jsonify({"ok": False, "message": "Para este afastamento, informe a Data início."}), 400
+        try:
+            dt_inicio = dt.datetime.strptime(data_inicio_str, "%Y-%m-%d").date()
+        except Exception:
+            return jsonify({"ok": False, "message": "Data início inválida."}), 400
+        dias_afastamento = 120 if tipo_solicitacao_out == "Licença Maternidade" else 5
+        dt_fim = dt_inicio + dt.timedelta(days=dias_afastamento - 1)
+        data_fim_str = dt_fim.strftime("%Y-%m-%d")
+        certariana_segmentos = []
+        cert_total_dias = 0
+    elif saldo_tipo_req == "PREMIUM":
         # Licença Certariana: 1 período por solicitação (respeitando regras de fracionamento)
         tipo_solicitacao_out = "Gozo"
 
@@ -99,8 +136,6 @@ def api_solicitar_ferias():
         if not ok_periodo:
             return jsonify({"ok": False, "message": msg}), 400
 
-        # Mantido por compatibilidade: não usamos mais os 'cert_inicio_*' (formato fixo),
-        # mas a variável segue existindo para não quebrar outros trechos.
         certariana_segmentos = []
         cert_total_dias = 0
 
@@ -118,7 +153,7 @@ def api_solicitar_ferias():
         ok_periodo, msg = periodo_permitido(dt_inicio, dt_fim, requester_email=gestor_email)
         if not ok_periodo:
             return jsonify({"ok": False, "message": msg}), 400
-    if not is_dp_or_admin:
+    if (not is_dp_or_admin) and (not is_afastamento):
 
         # Regra adicional (cadastro 3609445264215940):
         # - Se REGIME DE CONTRATAÇÃO == CLT e for a 1ª solicitação, só permitir a partir de 1 ano e 9 meses (21 meses) de empresa.
@@ -173,8 +208,10 @@ def api_solicitar_ferias():
         periodo_alloc_txt = ""
         
         saldo_tipo_final = saldo_tipo_req
-        
-        if saldo_tipo_req == "REGULAR":
+
+        if is_afastamento:
+            saldo_tipo_final = "REGULAR"
+        elif saldo_tipo_req == "REGULAR":
             if dias_novos <= reg_saldo:
                 saldo_tipo_final = "REGULAR"
                 try:
@@ -205,7 +242,7 @@ def api_solicitar_ferias():
         return jsonify({"ok": False, "message": f"Erro ao montar resumo/validações: {e}"}), 500
 
     # saldo base usado para o cálculo final
-    saldo_base = reg_saldo if saldo_tipo_final == "REGULAR" else prem_saldo
+    saldo_base = 0 if is_afastamento else (reg_saldo if saldo_tipo_final == "REGULAR" else prem_saldo)
 
     # Validação extra: Licença Certariana não é cumulativa e só pode ser usada dentro da janela vigente (2 anos)
     # (Regra aplicada para USER; DP/Admin podem registrar exceções.)
@@ -446,12 +483,18 @@ def api_solicitar_ferias():
             "saldo_atualizado": saldo_atualizado
         })
 
+    mensagem = f"Solicitação registrada ({tipo_solicitacao_out}) com {dias_novos} dia(s)."
+    if not is_afastamento:
+        mensagem += f" Saldo restante: {saldo_atualizado}."
+
     return jsonify({
         "ok": True,
-        "message": f"Solicitação registrada ({tipo_solicitacao_out}) com {dias_novos} dia(s). Saldo restante: {saldo_atualizado}.",
+        "message": mensagem,
         "saldo_atualizado": saldo_atualizado,
         "periodo_aquisitivo": periodo_alloc_txt,
         "periodos_consumidos": periodo_alloc,
+        "data_fim": data_fim_str,
+        "dias": dias_novos,
     })
 
 @bp.route("/api/editar-solicitacao", methods=["POST"])

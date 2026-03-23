@@ -359,6 +359,8 @@
             <option value="">Selecione…</option>
             <option value="Gozo">Gozo</option>
             <option value="Venda">Venda</option>
+            <option value="Licença Maternidade">Licença Maternidade</option>
+            <option value="Licença Paternidade">Licença Paternidade</option>
           </select>
         </div>
 
@@ -392,6 +394,10 @@
         </div>
       </div>
 
+
+      <div class="hint" id="afastamento-hint" style="display:none; margin-top:8px;">
+        Para afastamentos, informe apenas a Data início. A Data fim é calculada automaticamente pelo sistema (120 dias para Licença Maternidade e 5 dias para Licença Paternidade).
+      </div>
 
       <!-- Observações -->
       <div style="margin-top:12px;">
@@ -497,17 +503,47 @@ function _setDisplay(el, show){
   el.style.display = show ? '' : 'none';
 }
 
+const hintAfast = document.getElementById('afastamento-hint');
+const grupoSaldoTipo = document.querySelector('label[for="saldo_tipo"]')?.closest('.form-group');
+
+function isAfastamentoTipo(){
+  const v = (selTipoSolic?.value || '').trim().toLowerCase();
+  return v === 'licença maternidade'.toLowerCase() || v === 'licenca maternidade' || v === 'licença paternidade'.toLowerCase() || v === 'licenca paternidade';
+}
+
+function applyAfastamentoDates(){
+  if (!inpInicio || !inpFim) return;
+  if (!isAfastamentoTipo()) {
+    inpFim.readOnly = false;
+    return;
+  }
+  const raw = (inpInicio.value || '').trim();
+  if (!raw) {
+    inpFim.value = '';
+    inpFim.readOnly = true;
+    return;
+  }
+  const dias = (selTipoSolic?.value || '').toLowerCase().includes('matern') ? 120 : 5;
+  const dt = new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return;
+  dt.setDate(dt.getDate() + dias - 1);
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  inpFim.value = `${yyyy}-${mm}-${dd}`;
+  inpFim.readOnly = true;
+}
+
 function _applyTipoFerias(){
   const isCert = (selTipoFerias?.value || 'REGULAR') === 'PREMIUM';
+  const isAfast = isAfastamentoTipo();
 
-  // Datas são sempre preenchidas (tanto regular quanto certariana)
   if (inpInicio) inpInicio.required = true;
   if (inpFim) inpFim.required = true;
 
-  // Hint de regras
   _setDisplay(hintCert, isCert);
+  _setDisplay(hintAfast, isAfast);
 
-  // Licença Certariana sempre é Gozo
   if (selTipoSolic){
     const optVenda = selTipoSolic.querySelector('option[value="Venda"]');
     const optGozo = selTipoSolic.querySelector('option[value="Gozo"]');
@@ -520,11 +556,19 @@ function _applyTipoFerias(){
     }
   }
 
-  // Mantém o campo visível (para transparência)
+  if (selTipoFerias){
+    selTipoFerias.disabled = isAfast;
+    if (isAfast) selTipoFerias.value = 'REGULAR';
+  }
+  if (grupoSaldoTipo) grupoSaldoTipo.style.opacity = isAfast ? '0.65' : '1';
+
   _setDisplay(grupoTipoSolic, true);
+  applyAfastamentoDates();
 }
 
 selTipoFerias?.addEventListener('change', _applyTipoFerias);
+selTipoSolic?.addEventListener('change', _applyTipoFerias);
+inpInicio?.addEventListener('change', applyAfastamentoDates);
 _applyTipoFerias();
 
   // Atualiza o painel ao trocar o colaborador (recarrega a página com ?colaborador=...)
