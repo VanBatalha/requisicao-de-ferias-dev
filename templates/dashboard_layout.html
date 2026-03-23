@@ -1,46 +1,51 @@
 {% extends "base.html" %}
 
 {% block app_shell %}
-<div class="dash">
-  <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-mark"></div>
-      <div>
-        <div class="brand-name">Gestão de Férias</div>
-        <div class="muted" style="margin-top:2px;">Portal interno</div>
+<div class="dash" id="dash-shell">
+  <aside class="sidebar" id="app-sidebar">
+    <div class="sidebar-top">
+      <div class="brand brand-compact">
+        <div class="brand-mark"></div>
+        <div class="brand-copy">
+          <div class="brand-name">Gestão de Férias</div>
+          <div class="muted" style="margin-top:2px;">Portal interno</div>
+        </div>
       </div>
+      <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="Abrir menu" aria-expanded="false">☰</button>
     </div>
 
-    <div class="userbox">
-      <div class="avatar">{{ user_avatar }}</div>
-      <div>
-        <div class="name">{{ user_display_name }}</div>
-        {% if user_email %}<div class="muted" style="font-size:12px; margin-top:2px;">{{ user_email }}</div>{% endif %}
-        <div class="role">{{ user_role_label }}</div>
+    <div class="sidebar-panel">
+      <div class="userbox">
+        <div class="avatar">{{ user_avatar }}</div>
+        <div class="userbox-meta">
+          <div class="name" title="{{ user_display_name }}">{{ user_display_name }}</div>
+          {% if user_email %}<div class="muted user-email-truncate" title="{{ user_email }}">{{ user_email }}</div>{% endif %}
+          <div class="role">{{ user_role_label }}</div>
+        </div>
       </div>
+
+      <ul class="nav">
+        <li>
+          <a href="{{ url_for('ferias.ferias') }}" class="{{ 'active' if active_page == 'ferias' else '' }}"><span class="nav-icon">📝</span><span class="nav-label">Solicitações</span></a>
+        </li>
+
+        {% if 'DP' in user_grupos or 'Administrador' in user_grupos %}
+        <li>
+          <a href="{{ url_for('ferias.painel_dp') }}" class="{{ 'active' if active_page == 'dp' else '' }}"><span class="nav-icon">📋</span><span class="nav-label">Painel DP</span></a>
+        </li>
+        {% endif %}
+
+        {% if 'Administrador' in user_grupos %}
+        <li>
+          <a href="{{ url_for('ferias.painel_admin') }}" class="{{ 'active' if active_page == 'admin' else '' }}"><span class="nav-icon">🛠️</span><span class="nav-label">Admin</span></a>
+        </li>
+        {% endif %}
+
+        <li style="margin-top:8px;">
+          <a href="{{ url_for('ferias.logout') }}"><span class="nav-icon">🚪</span><span class="nav-label">Sair</span></a>
+        </li>
+      </ul>
     </div>
-
-    <ul class="nav">
-      <li>
-        <a href="{{ url_for('ferias.ferias') }}" class="{{ 'active' if active_page == 'ferias' else '' }}">📝 Solicitações</a>
-      </li>
-
-      {% if 'DP' in user_grupos or 'Administrador' in user_grupos %}
-      <li>
-        <a href="{{ url_for('ferias.painel_dp') }}" class="{{ 'active' if active_page == 'dp' else '' }}">📋 Painel DP</a>
-      </li>
-      {% endif %}
-
-      {% if 'Administrador' in user_grupos %}
-      <li>
-        <a href="{{ url_for('ferias.painel_admin') }}" class="{{ 'active' if active_page == 'admin' else '' }}">🛠️ Admin</a>
-      </li>
-      {% endif %}
-
-      <li style="margin-top:8px;">
-        <a href="{{ url_for('ferias.logout') }}">🚪 Sair</a>
-      </li>
-    </ul>
   </aside>
 
   <main class="main">
@@ -53,4 +58,26 @@
     </div>
   </main>
 </div>
+
+<script>
+(function(){
+  const shell = document.getElementById('dash-shell');
+  const btn = document.getElementById('sidebar-toggle');
+  if (!shell || !btn) return;
+  btn.addEventListener('click', function(){
+    const open = shell.classList.toggle('sidebar-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  document.addEventListener('click', function(ev){
+    if (!shell.classList.contains('sidebar-open')) return;
+    const sidebar = document.getElementById('app-sidebar');
+    if (!sidebar) return;
+    const clickedInside = sidebar.contains(ev.target);
+    if (!clickedInside) {
+      shell.classList.remove('sidebar-open');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+})();
+</script>
 {% endblock %}

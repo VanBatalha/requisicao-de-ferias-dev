@@ -49,6 +49,11 @@ def api_dp_colaboradores():
         elif status_filter == "INATIVO":
             colaboradores = [c for c in colaboradores if not is_colaborador_ativo(c)]
 
+        colaboradores = sorted(
+            colaboradores,
+            key=lambda c: (str(c.get("NOME COMPLETO") or c.get("nome") or "").casefold(), str(c.get("EMAIL DA EMPRESA") or "").casefold())
+        )
+
         return jsonify({
             "ok": True,
             "colaboradores": colaboradores

@@ -140,17 +140,47 @@
       }
 
       .sidebar {
-        width: 260px;
+        width: 78px;
         background: #fff;
         border-right: 1px solid var(--border);
-        padding: 16px;
+        padding: 16px 12px;
         position: sticky;
         top: 0;
         height: 100vh;
+        transition: width 0.22s ease, box-shadow 0.22s ease;
+        overflow: hidden;
+        z-index: 30;
+      }
+
+      .sidebar-top {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:10px;
+        margin-bottom: 8px;
       }
 
       .sidebar .brand {
-        margin-bottom: 10px;
+        margin-bottom: 0;
+      }
+
+      .brand-compact { min-width: 0; }
+      .brand-copy { display:none; min-width:0; }
+
+      .sidebar-toggle {
+        border: 1px solid var(--border);
+        background: #fff;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 18px;
+      }
+
+      .sidebar-panel {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s ease;
       }
 
       .userbox {
@@ -175,6 +205,8 @@
       }
       .userbox .name { font-weight: 700; font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .userbox .role { font-size: 12px; color: var(--text-muted); }
+      .userbox-meta { min-width: 0; }
+      .user-email-truncate { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display:block; }
 
       .nav {
         list-style: none;
@@ -202,6 +234,25 @@
         border-color: rgba(27,106,90,0.18);
         color: var(--primary);
         font-weight: 700;
+      }
+
+            .nav-icon { width: 22px; text-align: center; flex: 0 0 22px; }
+      .nav-label { white-space: nowrap; }
+
+      .dash.sidebar-open .sidebar {
+        width: 280px;
+        box-shadow: 12px 0 30px rgba(0,0,0,0.10);
+      }
+      .dash.sidebar-open .brand-copy { display:block; }
+      .dash.sidebar-open .sidebar-panel {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      @media (max-width: 900px) {
+        .sidebar { position: fixed; left: 0; }
+        .main { padding-left: 96px; }
+        .dash.sidebar-open .sidebar { width: 280px; }
       }
 
       .main {

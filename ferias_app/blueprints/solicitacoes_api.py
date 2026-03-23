@@ -76,9 +76,9 @@ def api_solicitar_ferias():
 
     tipo_norm = tipo_solicitacao.strip().lower()
     if tipo_norm in ("usufruir", "usufruto", "gozar", "gozo"):
-        tipo_solicitacao_out = "Gozo"
+        tipo_solicitacao_out = "GOZO"
     elif tipo_norm in ("venda", "vender"):
-        tipo_solicitacao_out = "Venda"
+        tipo_solicitacao_out = "VENDA"
     else:
         afast_info = _tipo_afastamento_info(tipo_solicitacao)
         if afast_info:
@@ -87,9 +87,9 @@ def api_solicitar_ferias():
             # aceita exatamente o que veio, mas valida mínimo
             if tipo_norm not in ("venda", "gozo"):
                 return jsonify({"ok": False, "message": "Tipo inválido. Use Venda, Gozo, Licença Maternidade ou Licença Paternidade."}), 400
-            tipo_solicitacao_out = tipo_solicitacao.title()
+            tipo_solicitacao_out = tipo_solicitacao.upper()
 
-    is_afastamento = tipo_solicitacao_out in ("Licença Maternidade", "Licença Paternidade")
+    is_afastamento = tipo_solicitacao_out in ("LICENÇA MATERNIDADE", "LICENÇA PATERNIDADE")
 
     # valida se colaborador está no escopo
     if is_dp_or_admin:
@@ -111,14 +111,14 @@ def api_solicitar_ferias():
             dt_inicio = dt.datetime.strptime(data_inicio_str, "%Y-%m-%d").date()
         except Exception:
             return jsonify({"ok": False, "message": "Data início inválida."}), 400
-        dias_afastamento = 120 if tipo_solicitacao_out == "Licença Maternidade" else 5
+        dias_afastamento = 120 if tipo_solicitacao_out == "LICENÇA MATERNIDADE" else 5
         dt_fim = dt_inicio + dt.timedelta(days=dias_afastamento - 1)
         data_fim_str = dt_fim.strftime("%Y-%m-%d")
         certariana_segmentos = []
         cert_total_dias = 0
     elif saldo_tipo_req == "PREMIUM":
         # Licença Certariana: 1 período por solicitação (respeitando regras de fracionamento)
-        tipo_solicitacao_out = "Gozo"
+        tipo_solicitacao_out = "GOZO"
 
         if not data_inicio_str or not data_fim_str:
             return jsonify({"ok": False, "message": "Para Licença Certariana, informe Data início e Data fim do período (mínimo 10 dias)."}), 400
@@ -415,7 +415,7 @@ def api_solicitar_ferias():
                 add_cell_unique(cells, col_colab, colaborador_email)
                 add_cell_unique(cells, col_gestor, gestor_email)
                 add_cell_unique(cells, col_saldo_tipo, saldo_tipo_final)
-                add_cell_unique(cells, col_solic, "Gozo")
+                add_cell_unique(cells, col_solic, "GOZO")
                 add_cell_unique(cells, col_inicio, seg["ini_str"])
                 add_cell_unique(cells, col_fim, seg["fim_str"])
                 add_cell_unique(cells, col_dias, seg["dias"])

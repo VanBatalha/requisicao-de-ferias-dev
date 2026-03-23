@@ -136,7 +136,6 @@
                             <div id="dp-status-msg" class="muted" style="margin-top:8px;"></div>
                         </div>
 
-                        <div id="det-ferias-calendario" class="calendario-container"></div>
                     </div>
                 </aside>
             </div>
@@ -1343,7 +1342,7 @@ function renderListaSubordinados() {
 // ===== COLABORADORES =====
 async function carregarColaboradores() {
     try {
-        const resp = await fetch('/api/dp/colaboradores');
+        const resp = await fetch('/api/dp/colaboradores?status=ATIVO');
         const data = await resp.json();
         
         if (!data.ok) {
@@ -1352,7 +1351,7 @@ async function carregarColaboradores() {
             return;
         }
         
-        colaboradores = data.colaboradores || [];
+        colaboradores = (data.colaboradores || []).sort((a, b) => ((a['NOME COMPLETO'] || a.nome || '').localeCompare((b['NOME COMPLETO'] || b.nome || ''), 'pt-BR', {sensitivity:'base'})));
         renderizarColaboradores();
     } catch (e) {
         console.error('Erro:', e);
@@ -1648,12 +1647,6 @@ function mostrarFerias(nome, email, dataInicio, dataFim, dias, cargo, setor, sta
                      'APROVADA':'APROVADA', 'CANCELADA':'CANCELADA', 'REPROVADO':'REPROVADO' };
         dpSel.value = map[st] || st;
     }
-
-    const calendario = criarCalendario(dataInicio, dataFim, mes, ano);
-    document.getElementById('det-ferias-calendario').innerHTML = `
-        <h4>📆 Calendário ${nomeMes(mes)} de ${ano}</h4>
-        ${calendario}
-    `;
 
     document.getElementById('painel-vazio-ferias').style.display = 'none';
     document.getElementById('detalhes-conteudo-ferias').classList.add('show');
