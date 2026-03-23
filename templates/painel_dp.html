@@ -110,6 +110,14 @@
                             <span id="det-ferias-dias"></span>
                         </div>
                         <div class="detalhes-campo">
+                            <strong>Tipo da solicitação</strong>
+                            <span id="det-ferias-solicitacao"></span>
+                        </div>
+                        <div class="detalhes-campo">
+                            <strong>Saldo tipo</strong>
+                            <span id="det-ferias-saldo-tipo"></span>
+                        </div>
+                        <div class="detalhes-campo">
                             <strong>Cargo</strong>
                             <span id="det-ferias-cargo"></span>
                         </div>
@@ -1603,6 +1611,8 @@ function bindFeriasListClick() {
             f.data_inicio,
             f.data_fim,
             f.dias,
+            f.solicitacao || '-',
+            f.saldo_tipo || '-',
             f.cargo || '-',
             f.setor || '-',
             statusText,
@@ -1615,7 +1625,7 @@ function bindFeriasListClick() {
 }
 
 
-function mostrarFerias(nome, email, dataInicio, dataFim, dias, cargo, setor, status, mes, ano, cardElement, rowId) {
+function mostrarFerias(nome, email, dataInicio, dataFim, dias, solicitacao, saldoTipo, cargo, setor, status, mes, ano, cardElement, rowId) {
     // Remove seleção anterior
     document.querySelectorAll('.ferias-item.selecionado').forEach(el => {
         el.classList.remove('selecionado');
@@ -1633,6 +1643,8 @@ function mostrarFerias(nome, email, dataInicio, dataFim, dias, cargo, setor, sta
     document.getElementById('det-ferias-email').textContent = email;
     document.getElementById('det-ferias-periodo').textContent = `${dataInicio} a ${dataFim}`;
     document.getElementById('det-ferias-dias').textContent = dias;
+    document.getElementById('det-ferias-solicitacao').textContent = (solicitacao && String(solicitacao).trim()) ? String(solicitacao).trim() : '-';
+    document.getElementById('det-ferias-saldo-tipo').textContent = (saldoTipo && String(saldoTipo).trim()) ? String(saldoTipo).trim() : '-';
     document.getElementById('det-ferias-cargo').textContent = cargo;
     document.getElementById('det-ferias-setor').textContent = setor;
     document.getElementById('det-ferias-status').textContent = status;

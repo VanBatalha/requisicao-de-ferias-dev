@@ -1841,7 +1841,8 @@ def get_ferias_mes(mes, ano):
                 continue
             email = safe_lower(email)
 
-            solicit = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit_raw = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit = str(solicit_raw).strip()
             if _is_ajuste(solicit):
                 continue
 
@@ -1866,8 +1867,9 @@ def get_ferias_mes(mes, ano):
             # padroniza valores para exibição e regras
             status = _canonical_status(status)
             obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
-            explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
-            saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
+            explicit_tipo_raw = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
+            explicit_tipo = str(explicit_tipo_raw).strip()
+            saldo_tipo = str(_infer_saldo_tipo(obs, explicit_tipo) or explicit_tipo or "-").strip() or "-"
 
             colab = _colaborador_por_email(email) or {}
             nome = colab.get("NOME COMPLETO") or colab.get("NOME") or email
@@ -1884,8 +1886,8 @@ def get_ferias_mes(mes, ano):
                 "data_fim": formatar_data_br(dt_fim),
                 "dias": dias,
                 "status": status,
-                "solicitacao": solicit,
-                "saldo_tipo": saldo_tipo,
+                "solicitacao": solicit or "-",
+                "saldo_tipo": saldo_tipo or "-",
             })
 
         # ordena por início
@@ -1933,7 +1935,8 @@ def listar_solicitacoes(email):
             if not row_email or safe_lower(row_email) != safe_lower(email):
                 continue
 
-            solicit = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit_raw = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit = str(solicit_raw).strip()
             if _is_ajuste(solicit):
                 continue
 
@@ -1994,7 +1997,8 @@ def listar_solicitacoes_equipes(emails: list[str]):
             if not row_email_n or row_email_n not in allowed:
                 continue
 
-            solicit = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit_raw = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit = str(solicit_raw).strip()
             if _is_ajuste(solicit):
                 continue
 
@@ -2048,7 +2052,8 @@ def listar_solicitacoes_todas():
             if not row_email_n:
                 continue
 
-            solicit = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit_raw = next((c.value for c in row.cells if c.column_id == (col_solic or -1)), "") or ""
+            solicit = str(solicit_raw).strip()
             if _is_ajuste(solicit):
                 continue
 
