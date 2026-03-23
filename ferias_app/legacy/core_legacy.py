@@ -1218,72 +1218,70 @@ def _current_partial_period(admissao: dt.date | None, hoje: dt.date | None = Non
 
 
 def _allocate_period_balance(total_direito: int, total_usados: int, total_reservados: int, admissao: dt.date | None, hoje: dt.date | None = None):
-    """Monta detalhamento FIFO por período aquisitivo.
+    """Monta o saldo disponível por período aquisitivo para a fase de transição.
 
-    Observações:
-    - Cada período completo gera 30 dias.
-    - Ajustes positivos/negativos são distribuídos como complemento no período mais recente.
-    - O consumo segue FIFO: períodos mais antigos são abatidos primeiro.
+    Regra temporária até a base histórica ficar totalmente saneada:
+    - considera apenas períodos aquisitivos COMPLETOS como fonte de saldo;
+    - distribui o saldo disponível atual (direito - usados - reservados) dos
+      períodos completos mais recentes para trás;
+    - mantém o consumo FIFO: ao solicitar, o sistema usa primeiro o período mais
+      antigo entre os que ainda possuem saldo.
+
+    Exemplo:
+    - colaborador com 7 períodos completos e saldo disponível de 45 dias;
+    - detalhamento gerado: P6=15 e P7=30;
+    - solicitação de 21 dias: consome P6:15 | P7:6.
     """
     hoje = hoje or dt.date.today()
-    total_direito = int(total_direito or 0)
-    total_usados = int(total_usados or 0)
-    total_reservados = int(total_reservados or 0)
-    completos = _completed_aquisitive_periods(admissao, hoje) if admissao else 0
+    total_direito = max(0, int(total_direito or 0))
+    total_usados = max(0, int(total_usados or 0))
+    total_reservados = max(0, int(total_reservados or 0))
+    saldo_disponivel = max(0, total_direito - total_usados - total_reservados)
+
+    if not admissao or saldo_disponivel <= 0:
+        return []
+
+    completos = _completed_aquisitive_periods(admissao, hoje)
+    if completos <= 0:
+        return []
+
+    qtd_periodos = max(1, (saldo_disponivel + 29) // 30)
+    ultimo_num = completos
+    primeiro_num = max(1, ultimo_num - qtd_periodos + 1)
+
+    numeros = list(range(primeiro_num, ultimo_num + 1))
+    saldos_map = {n: 0 for n in numeros}
+    restante = saldo_disponivel
+
+    # Preenche dos períodos completos mais recentes para trás, deixando eventual
+    # saldo parcial no período mais antigo dentre os que ainda têm saldo.
+    for n in reversed(numeros):
+        if restante <= 0:
+            break
+        alocar = min(30, restante)
+        saldos_map[n] = alocar
+        restante -= alocar
 
     periodos = []
-    for n in range(1, completos + 1):
+    for n in numeros:
         ini, fim = _periodo_bounds(admissao, n)
+        saldo = int(saldos_map.get(n, 0))
+        if saldo <= 0:
+            continue
         periodos.append({
             "numero": n,
             "inicio": ini,
             "fim": fim,
-            "direito": 30,
+            "direito": saldo,
             "usados": 0,
             "reservados": 0,
-            "saldo": 30,
+            "saldo": saldo,
             "completo": True,
+            "atual": False,
+            "origem_transitoria": True,
         })
 
-    base_direito = completos * 30
-    extra = total_direito - base_direito
-    if extra != 0:
-        # Gambiarra temporária: joga diferença no período mais recente disponível.
-        alvo = periodos[-1] if periodos else None
-        if alvo is None and admissao:
-            atual = _current_partial_period(admissao, hoje)
-            if atual:
-                alvo = {
-                    "numero": atual["numero"],
-                    "inicio": atual["inicio"],
-                    "fim": atual["fim"],
-                    "direito": 0,
-                    "usados": 0,
-                    "reservados": 0,
-                    "saldo": 0,
-                    "completo": False,
-                }
-                periodos.append(alvo)
-        if alvo is not None:
-            alvo["direito"] += extra
-            alvo["saldo"] += extra
-
-    remaining_usados = total_usados
-    remaining_reservados = total_reservados
-    for p in periodos:
-        cap = max(0, int(p["saldo"]))
-        usados = min(cap, remaining_usados)
-        p["usados"] += usados
-        p["saldo"] -= usados
-        remaining_usados -= usados
-
-        cap = max(0, int(p["saldo"]))
-        reserv = min(cap, remaining_reservados)
-        p["reservados"] += reserv
-        p["saldo"] -= reserv
-        remaining_reservados -= reserv
-
-    return [p for p in periodos if int(p.get("direito", 0)) or int(p.get("usados", 0)) or int(p.get("reservados", 0)) or int(p.get("saldo", 0))]
+    return periodos
 
 
 def _serialize_periodo_aquisitivo_alloc(alloc: list[dict]) -> str:
@@ -1333,7 +1331,7 @@ def get_periodo_aquisitivo_atual(email: str, hoje: dt.date | None = None):
         "numero": atual["numero"],
         "inicio": atual["inicio"],
         "fim": atual["fim"],
-        "label": f"{atual['inicio'].strftime('%d/%m/%Y')} a {atual['fim'].strftime('%d/%m/%Y')}",
+        "label": f"Período {atual['numero']} — {atual['inicio'].strftime('%d/%m/%Y')} a {atual['fim'].strftime('%d/%m/%Y')}",
     }
 
 def get_resumo_ferias(email: str):

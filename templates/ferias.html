@@ -280,7 +280,11 @@
             {% for p in regular_periodos %}
             <div style="font-size:13px; color:#334155; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc;">
               <strong>Período {{ p.numero }}</strong>{% if p.atual %} <span style="color:#0f766e;">(atual)</span>{% endif %} — {{ p.inicio.strftime('%d/%m/%Y') }} a {{ p.fim.strftime('%d/%m/%Y') }}<br>
+              {% if p.origem_transitoria %}
+              Saldo disponível atribuído neste período: {{ p.saldo }} dia(s)
+              {% else %}
               Direito: {{ p.direito }} dias | Reservados: {{ p.reservados }} | Usados: {{ p.usados }} | Saldo: {{ p.saldo }}
+              {% endif %}
             </div>
             {% endfor %}
           </div>
