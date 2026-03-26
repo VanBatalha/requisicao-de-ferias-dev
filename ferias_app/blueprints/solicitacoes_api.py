@@ -34,7 +34,6 @@ from ..legacy.core_legacy import (
     _janela_licenca_certariana,
     _norm_status,
     _parse_date_value,
-    ok_periodo,
     periodo_permitido,
 )
 from ..rules import RuleError, validate_licenca_certariana
