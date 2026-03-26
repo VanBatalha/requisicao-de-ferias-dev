@@ -127,3 +127,313 @@ def criar_solicitacao_padrao(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
     return {"ok": True, "inserted_ids": inserted}
+
+AFASTAMENTO_DIAS = {
+    "LICENCA MATERNIDADE": 120,
+    "LICENÇA MATERNIDADE": 120,
+    "LICENCA PATERNIDADE": 5,
+    "LICENÇA PATERNIDADE": 5,
+}
+
+
+def _tipo_afastamento_info(tipo_raw: str):
+    tipo = (tipo_raw or "").strip()
+    upper = tipo.upper()
+    dias = AFASTAMENTO_DIAS.get(upper)
+    if not dias:
+        return None
+    if "MATERN" in upper:
+        return {"tipo": "LICENÇA MATERNIDADE", "dias": 120}
+    return {"tipo": "LICENÇA PATERNIDADE", "dias": 5}
+
+
+
+def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
+    """Processa a criação de solicitação mantendo o blueprint fino.
+
+    Retorna `(payload_json, status_code)`.
+    """
+    from ..legacy.core_legacy import (
+        STATUS_APROVADA,
+        STATUS_RESERVA,
+        _add_months,
+        _col_id,
+        _colaborador_admissao,
+        _colaborador_regime,
+        _cols_norm_map,
+        _infer_saldo_tipo,
+        _janela_licenca_certariana,
+        _norm_status,
+        _parse_date_value,
+        add_rows_rest,
+        ensure_primary_cell,
+        get_col_map,
+        get_smartsheet_client,
+        listar_emails_colaboradores,
+        periodo_permitido,
+        safe_lower,
+    )
+    from .permissions_service import get_user_role, is_gestor, get_subordinados
+    from .saldo_service import get_resumo_ferias, distribuir_solicitacao_por_periodo
+    from .periodo_aquisitivo_service import serialize_periodo_aquisitivo_alloc
+    from .smartsheet_adapter import get_sheet_solicitacoes, col_id_by_name, invalidate_sheet_cache
+    from ..config import get_settings
+    from ..rules import RuleError, validate_licenca_certariana
+
+    if not user:
+        return {"ok": False, "message": "Não autenticado."}, 401
+
+    gestor_email = safe_lower(user.get("email") or "")
+    if not gestor_email:
+        return {"ok": False, "message": "Usuário inválido."}, 400
+
+    role = get_user_role(gestor_email)
+    is_dp_or_admin = role in ("DP", "admin")
+    if not (is_dp_or_admin or is_gestor(gestor_email)):
+        return {"ok": False, "message": "Apenas gestores (ou DP/Admin) podem solicitar férias."}, 403
+
+    colaborador_email = safe_lower(payload.get("colaborador_email") or payload.get("colaborador") or "")
+    tipo_solicitacao = (payload.get("tipo_solicitacao") or payload.get("tipo_solicitacao_out") or "").strip()
+    data_inicio_str = payload.get("data_inicio")
+    data_fim_str = payload.get("data_fim")
+    observacoes = (payload.get("observacoes") or "").strip()
+    saldo_tipo_req = (payload.get("saldo_tipo") or payload.get("tipo_ferias") or "REGULAR").strip().upper()
+    if saldo_tipo_req not in ("REGULAR", "PREMIUM"):
+        saldo_tipo_req = "REGULAR"
+
+    certariana_segmentos = []
+    cert_total_dias = 0
+
+    if not colaborador_email:
+        return {"ok": False, "message": "Selecione o colaborador."}, 400
+
+    if not tipo_solicitacao:
+        if saldo_tipo_req == "PREMIUM":
+            tipo_solicitacao = "Gozo"
+        else:
+            return {"ok": False, "message": "Selecione o tipo de solicitação (Venda ou Gozo)."}, 400
+
+    tipo_norm = tipo_solicitacao.strip().lower()
+    if tipo_norm in ("usufruir", "usufruto", "gozar", "gozo"):
+        tipo_solicitacao_out = "GOZO"
+    elif tipo_norm in ("venda", "vender"):
+        tipo_solicitacao_out = "VENDA"
+    else:
+        afast_info = _tipo_afastamento_info(tipo_solicitacao)
+        if afast_info:
+            tipo_solicitacao_out = afast_info["tipo"]
+        else:
+            return {"ok": False, "message": "Tipo inválido. Use Venda, Gozo, Licença Maternidade ou Licença Paternidade."}, 400
+
+    is_afastamento = tipo_solicitacao_out in ("LICENÇA MATERNIDADE", "LICENÇA PATERNIDADE")
+
+    if is_dp_or_admin:
+        permitidos = set(listar_emails_colaboradores(only_ativos=True))
+        if colaborador_email not in permitidos:
+            return {"ok": False, "message": "Colaborador não encontrado (ou não está Ativo no cadastro)."}, 400
+    else:
+        permitidos = set(get_subordinados(gestor_email))
+        if colaborador_email not in permitidos:
+            return {"ok": False, "message": "Colaborador não pertence à sua equipe (ou não está vinculado ao seu gestor)."}, 403
+
+    try:
+        if is_afastamento:
+            if not data_inicio_str:
+                return {"ok": False, "message": "Para este afastamento, informe a Data início."}, 400
+            dt_inicio = parse_date(data_inicio_str)
+            if not dt_inicio:
+                return {"ok": False, "message": "Data início inválida."}, 400
+            dias_afastamento = 120 if tipo_solicitacao_out == "LICENÇA MATERNIDADE" else 5
+            dt_fim = dt_inicio + dt.timedelta(days=dias_afastamento - 1)
+            data_fim_str = format_date(dt_fim)
+        else:
+            dt_inicio = parse_date(data_inicio_str or "")
+            dt_fim = parse_date(data_fim_str or "")
+            if not dt_inicio or not dt_fim:
+                return {"ok": False, "message": "Datas obrigatórias."}, 400
+            if dt_fim < dt_inicio:
+                return {"ok": False, "message": "Data fim não pode ser menor que data início."}, 400
+            ok_periodo, msg = periodo_permitido(dt_inicio, dt_fim, requester_email=gestor_email)
+            if not ok_periodo:
+                return {"ok": False, "message": msg}, 400
+    except Exception:
+        return {"ok": False, "message": "Datas inválidas."}, 400
+
+    if (not is_dp_or_admin) and (not is_afastamento):
+        try:
+            regime = (_colaborador_regime(colaborador_email) or "").strip().upper()
+            adm = _colaborador_admissao(colaborador_email)
+            if regime == "CLT" and adm:
+                resumo_tmp = get_resumo_ferias(colaborador_email)
+                if resumo_tmp.get("total_solicitacoes", 0) <= 0:
+                    liberado_em = _add_months(adm, 21)
+                    if dt_inicio < liberado_em:
+                        return {
+                            "ok": False,
+                            "message": f"Para regime CLT, a 1ª solicitação só é permitida a partir de {liberado_em.strftime('%d/%m/%Y')} (1 ano e 9 meses de empresa).",
+                        }, 400
+        except Exception:
+            pass
+
+    try:
+        resumo = get_resumo_ferias(colaborador_email)
+        dias_novos = (dt_fim - dt_inicio).days + 1
+        if saldo_tipo_req == "PREMIUM":
+            include_statuses = STATUS_APROVADA | STATUS_RESERVA
+            try:
+                validate_licenca_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio, dt_fim=dt_fim, include_statuses=include_statuses)
+            except RuleError as ve:
+                return {"ok": False, "message": str(ve)}, 400
+            except Exception as e:
+                return {"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}, 500
+
+        reg_saldo = int(resumo["regular"]["saldo"])
+        prem_saldo = int(resumo["premium"]["saldo"])
+        periodo_alloc = []
+        periodo_alloc_txt = ""
+        saldo_tipo_final = saldo_tipo_req
+
+        if is_afastamento:
+            saldo_tipo_final = "REGULAR"
+            periodo_alloc_txt = tipo_solicitacao_out
+        elif saldo_tipo_req == "REGULAR":
+            if dias_novos > reg_saldo:
+                return {"ok": False, "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias e informe um período válido conforme a regra: até 3 períodos, mínimo de 10 dias por período; se forem 3, deve ser 3×10."}, 400
+            try:
+                periodo_alloc = distribuir_solicitacao_por_periodo(colaborador_email, dias_novos)
+                periodo_alloc_txt = serialize_periodo_aquisitivo_alloc(periodo_alloc)
+            except Exception as e:
+                return {"ok": False, "message": f"Não foi possível distribuir a solicitação por período aquisitivo: {e}"}, 400
+        else:
+            if dias_novos > prem_saldo:
+                return {"ok": False, "message": f"Saldo da Licença Certariana insuficiente: {prem_saldo} dias."}, 400
+            saldo_tipo_final = "PREMIUM"
+    except Exception as e:
+        return {"ok": False, "message": f"Erro ao montar resumo/validações: {e}"}, 500
+
+    if saldo_tipo_final == "PREMIUM" and not is_dp_or_admin:
+        try:
+            adm_c = _colaborador_admissao(colaborador_email)
+            if not adm_c and prem_saldo <= 0:
+                return {"ok": False, "message": "Licença Certariana ainda não está disponível para este colaborador."}, 400
+            dias_base, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio) if adm_c else (0, None, None)
+            _ = dias_base
+            if not (win_start and win_end):
+                if prem_saldo <= 0:
+                    return {"ok": False, "message": "Licença Certariana ainda não está disponível para este colaborador."}, 400
+            elif not (win_start <= dt_inicio < win_end and win_start <= dt_fim < win_end):
+                return {"ok": False, "message": f"Licença Certariana só pode ser utilizada entre {win_start.strftime('%d/%m/%Y')} e {(win_end - dt.timedelta(days=1)).strftime('%d/%m/%Y')} (não cumulativa e válida por 2 anos após a conquista)."}, 400
+        except Exception:
+            pass
+
+    marker = f"Saldo: {saldo_tipo_final}"
+    if marker.lower() not in observacoes.lower():
+        observacoes = (observacoes + ("\n" if observacoes else "") + marker).strip()
+
+    def add_cell_unique(cells_by_id: dict, col_id, value):
+        try:
+            cid = int(col_id) if col_id is not None else 0
+        except Exception:
+            cid = 0
+        if cid > 0:
+            cells_by_id[cid] = value
+
+    def build_cells(cells_dict: dict):
+        return [smartsheet.models.Cell({"column_id": cid, "value": value}) for cid, value in cells_dict.items()]
+
+    def is_duplicate_solicitacao(sheet_sol):
+        try:
+            cols = get_col_map(sheet_sol)
+            colsN = _cols_norm_map(cols)
+            col_colab = _col_id(colsN, "COLABORADOR")
+            col_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
+            col_inicio = _col_id(colsN, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
+            col_fim = _col_id(colsN, "DATA FIM", "DATA FINAL")
+            col_dias = _col_id(colsN, "DIAS")
+            col_status = _col_id(colsN, "STATUS")
+            col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO", "TIPO DE FERIAS", "TIPO DE FÉRIAS")
+            alvo_email = safe_lower(colaborador_email)
+            alvo_tipo = str(tipo_solicitacao_out or "").strip().upper()
+            alvo_saldo = str(saldo_tipo_final or "").strip().upper()
+            alvo_inicio = str(data_inicio_str or "").strip()
+            alvo_fim = str(data_fim_str or "").strip()
+            alvo_dias = int(float(dias_novos or 0))
+            for row in sheet_sol.rows:
+                def _cell(cid):
+                    return next((c.value for c in row.cells if c.column_id == (cid or -1)), None)
+                row_email = safe_lower(str(_cell(col_colab) or ""))
+                if row_email != alvo_email:
+                    continue
+                row_status = _norm_status(_cell(col_status) or "")
+                if row_status not in (STATUS_RESERVA | STATUS_APROVADA):
+                    continue
+                row_tipo = str(_cell(col_solic) or "").strip().upper()
+                row_saldo = str(_cell(col_tipo) or "").strip().upper()
+                row_inicio = _parse_date_value(_cell(col_inicio))
+                row_fim = _parse_date_value(_cell(col_fim))
+                row_dias = _cell(col_dias) or 0
+                try:
+                    row_dias = int(float(row_dias or 0))
+                except Exception:
+                    row_dias = 0
+                row_inicio = row_inicio.strftime("%Y-%m-%d") if row_inicio else str(_cell(col_inicio) or "").strip()
+                row_fim = row_fim.strftime("%Y-%m-%d") if row_fim else str(_cell(col_fim) or "").strip()
+                if row_tipo == alvo_tipo and row_saldo == alvo_saldo and row_inicio == alvo_inicio and row_fim == alvo_fim and row_dias == alvo_dias:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    try:
+        client = get_smartsheet_client()
+        if not client:
+            return {"ok": False, "message": "Smartsheet client não inicializado (sem token)."}, 500
+        sheet_sol = get_sheet_solicitacoes(client)
+        col_colab = col_id_by_name(sheet_sol, "COLABORADOR")
+        col_gestor = col_id_by_name(sheet_sol, "GESTOR SOLICITANTE")
+        col_solic = col_id_by_name(sheet_sol, "SOLICITAÇÃO", "SOLICITACAO")
+        col_inicio = col_id_by_name(sheet_sol, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
+        col_fim = col_id_by_name(sheet_sol, "DATA FIM", "DATA FINAL")
+        col_dias = col_id_by_name(sheet_sol, "DIAS")
+        col_status = col_id_by_name(sheet_sol, "STATUS")
+        col_obs = col_id_by_name(sheet_sol, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVAÇÃO", "OBSERVACAO")
+        col_saldo_tipo = col_id_by_name(sheet_sol, "SALDO TIPO", "SALDO_TIPO", "TIPO DE FERIAS", "TIPO DE FÉRIAS", "TIPO FERIAS")
+        col_periodo_aq = col_id_by_name(sheet_sol, "PERIODO_AQUISITIVO", "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
+        rows_to_add = []
+        if is_duplicate_solicitacao(sheet_sol):
+            return {"ok": False, "message": "Já existe uma solicitação igual para este colaborador nesse período. A duplicidade foi bloqueada."}, 400
+        new_row = smartsheet.models.Row()
+        new_row.to_top = True
+        cells = {}
+        add_cell_unique(cells, col_colab, colaborador_email)
+        add_cell_unique(cells, col_gestor, gestor_email)
+        add_cell_unique(cells, col_saldo_tipo, saldo_tipo_final)
+        add_cell_unique(cells, col_solic, tipo_solicitacao_out)
+        add_cell_unique(cells, col_inicio, data_inicio_str)
+        add_cell_unique(cells, col_fim, data_fim_str)
+        add_cell_unique(cells, col_dias, dias_novos)
+        add_cell_unique(cells, col_status, "PENDENTE")
+        add_cell_unique(cells, col_obs, observacoes)
+        if col_periodo_aq and periodo_alloc_txt:
+            add_cell_unique(cells, col_periodo_aq, periodo_alloc_txt)
+        new_row.cells = build_cells(cells)
+        ensure_primary_cell(sheet_sol, new_row, colaborador_email)
+        rows_to_add.append(new_row)
+        inserted_ids = add_rows_rest(get_settings().id_folha_solicitacoes, rows_to_add, timeout=25)
+        invalidate_sheet_cache(get_settings().id_folha_solicitacoes)
+    except Exception as e:
+        return {"ok": False, "message": f"Erro ao salvar solicitação: {e}"}, 500
+
+    saldo_base = 0 if is_afastamento else (reg_saldo if saldo_tipo_final == "REGULAR" else prem_saldo)
+    saldo_atualizado = saldo_base if is_afastamento else (saldo_base - dias_novos)
+    return {
+        "ok": True,
+        "sheet_id": get_settings().id_folha_solicitacoes,
+        "inserted_ids": inserted_ids,
+        "row_id": inserted_ids[0] if inserted_ids else None,
+        "message": f"Solicitação registrada com sucesso. Saldo restante: {saldo_atualizado}.",
+        "saldo_atualizado": saldo_atualizado,
+        "saldo_tipo": saldo_tipo_final,
+        "periodo_aquisitivo": periodo_alloc_txt,
+        "periodos_consumidos": periodo_alloc,
+    }, 200

@@ -44,6 +44,29 @@ from .services.solicitacoes_service import (
     validar_licenca_cerariana,
 )  # noqa: F401
 
+from .services.smartsheet_adapter import (
+    get_sheet_solicitacoes as svc_get_sheet_solicitacoes,
+    get_sheet_cadastro as svc_get_sheet_cadastro,
+    col_id_by_name as svc_col_id_by_name,
+    invalidate_sheet_cache as svc_invalidate_sheet_cache,
+)  # noqa: F401
+
+from .services.periodo_aquisitivo_service import (
+    serialize_periodo_aquisitivo_alloc as svc_serialize_periodo_aquisitivo_alloc,
+)  # noqa: F401
+
+from .services.saldo_service import (
+    get_resumo_ferias as svc_get_resumo_ferias,
+    distribuir_solicitacao_por_periodo as svc_distribuir_solicitacao_por_periodo,
+)  # noqa: F401
+
+from .services.solicitacao_query_service import (
+    listar_solicitacoes as svc_listar_solicitacoes,
+    listar_solicitacoes_equipes as svc_listar_solicitacoes_equipes,
+    listar_solicitacoes_todas as svc_listar_solicitacoes_todas,
+    get_ferias_mes as svc_get_ferias_mes,
+)  # noqa: F401
+
 # Fallback: expõe tudo do legado para não quebrar pontos ainda não migrados
 from .legacy.core_legacy import *  # noqa: F401,F403
 
@@ -163,6 +186,20 @@ get_user_type = _svc_get_user_type  # type: ignore[assignment]
 tem_grupo = _svc_tem_grupo  # type: ignore[assignment]
 is_gestor = _svc_is_gestor  # type: ignore[assignment]
 get_subordinados = _svc_get_subordinados  # type: ignore[assignment]
+
+
+# serviços novos para férias/DP/smartsheet sobrescrevem o legado
+get_sheet_solicitacoes = svc_get_sheet_solicitacoes  # type: ignore[assignment]
+get_sheet_cadastro = svc_get_sheet_cadastro  # type: ignore[assignment]
+col_id_by_name = svc_col_id_by_name  # type: ignore[assignment]
+invalidate_sheet_cache = svc_invalidate_sheet_cache  # type: ignore[assignment]
+serialize_periodo_aquisitivo_alloc = svc_serialize_periodo_aquisitivo_alloc  # type: ignore[assignment]
+get_resumo_ferias = svc_get_resumo_ferias  # type: ignore[assignment]
+distribuir_solicitacao_por_periodo = svc_distribuir_solicitacao_por_periodo  # type: ignore[assignment]
+listar_solicitacoes = svc_listar_solicitacoes  # type: ignore[assignment]
+listar_solicitacoes_equipes = svc_listar_solicitacoes_equipes  # type: ignore[assignment]
+listar_solicitacoes_todas = svc_listar_solicitacoes_todas  # type: ignore[assignment]
+get_ferias_mes = svc_get_ferias_mes  # type: ignore[assignment]
 
 def get_user_grupos(email: str):
     """Retorna lista de grupos compatível com o legado do sistema.
