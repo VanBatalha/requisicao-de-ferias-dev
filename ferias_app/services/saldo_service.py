@@ -10,7 +10,6 @@ from ..legacy.core_legacy import (
     _get_sheet_solicitacoes,
     _infer_saldo_tipo,
     _is_ajuste,
-    _is_ajuste_premium,
     _janela_licenca_certariana,
     _norm_status,
     _parse_date_value,
@@ -85,7 +84,7 @@ def get_resumo_ferias(email: str):
                 dias = 0
 
             if _is_ajuste(solicit):
-                if _is_ajuste_premium(solicit):
+                if _infer_saldo_tipo(str(obs or ""), str(solicit or "")) == "PREMIUM" or "premium" in str(solicit or "").lower() or "certariana" in str(solicit or "").lower():
                     ajuste_premium += dias
                 else:
                     ajuste_regular += dias
