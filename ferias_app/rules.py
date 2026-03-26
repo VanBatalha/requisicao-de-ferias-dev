@@ -23,6 +23,60 @@ class RuleError(ValueError):
     """Erro de validação de regra (deve virar 400 no endpoint)."""
 
 
+AFASTAMENTO_DIAS = {
+    "LICENCA MATERNIDADE": 120,
+    "LICENÇA MATERNIDADE": 120,
+    "LICENCA PATERNIDADE": 5,
+    "LICENÇA PATERNIDADE": 5,
+}
+
+
+def normalize_tipo_solicitacao(tipo_raw: str) -> str:
+    """Normaliza o tipo de solicitação para um dos valores canônicos."""
+    tipo = (tipo_raw or "").strip()
+    tipo_norm = tipo.lower()
+    if tipo_norm in ("usufruir", "usufruto", "gozar", "gozo"):
+        return "GOZO"
+    if tipo_norm in ("venda", "vender"):
+        return "VENDA"
+
+    upper = tipo.upper()
+    if upper in AFASTAMENTO_DIAS:
+        if "MATERN" in upper:
+            return "LICENÇA MATERNIDADE"
+        return "LICENÇA PATERNIDADE"
+
+    raise RuleError(
+        "Tipo inválido. Use Venda, Gozo, Licença Maternidade ou Licença Paternidade."
+    )
+
+
+def get_afastamento_dias(tipo_solicitacao: str) -> int:
+    """Retorna a quantidade de dias de um afastamento canônico."""
+    upper = (tipo_solicitacao or "").strip().upper()
+    if upper not in ("LICENÇA MATERNIDADE", "LICENÇA PATERNIDADE"):
+        return 0
+    return 120 if "MATERN" in upper else 5
+
+
+def validate_intervalo_datas(dt_inicio: dt.date | None, dt_fim: dt.date | None) -> int:
+    if not dt_inicio or not dt_fim:
+        raise RuleError("Datas obrigatórias.")
+    if dt_fim < dt_inicio:
+        raise RuleError("Data fim não pode ser menor que data início.")
+    return (dt_fim - dt_inicio).days + 1
+
+
+def validate_premium_balance(prem_saldo: int, dias_novos: int) -> None:
+    if dias_novos > prem_saldo:
+        raise RuleError(f"Saldo da Licença Certariana insuficiente: {prem_saldo} dias.")
+    restante_premium = int(prem_saldo) - int(dias_novos)
+    if restante_premium != 0 and restante_premium < 10:
+        raise RuleError(
+            "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar)."
+        )
+
+
 def validate_licenca_certariana(
     email: str,
     dias_novos: float,

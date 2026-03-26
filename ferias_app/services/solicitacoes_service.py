@@ -128,25 +128,6 @@ def criar_solicitacao_padrao(payload: Dict[str, Any]) -> Dict[str, Any]:
         pass
     return {"ok": True, "inserted_ids": inserted}
 
-AFASTAMENTO_DIAS = {
-    "LICENCA MATERNIDADE": 120,
-    "LICENÇA MATERNIDADE": 120,
-    "LICENCA PATERNIDADE": 5,
-    "LICENÇA PATERNIDADE": 5,
-}
-
-
-def _tipo_afastamento_info(tipo_raw: str):
-    tipo = (tipo_raw or "").strip()
-    upper = tipo.upper()
-    dias = AFASTAMENTO_DIAS.get(upper)
-    if not dias:
-        return None
-    if "MATERN" in upper:
-        return {"tipo": "LICENÇA MATERNIDADE", "dias": 120}
-    return {"tipo": "LICENÇA PATERNIDADE", "dias": 5}
-
-
 
 def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     """Processa a criação de solicitação mantendo o blueprint fino.
@@ -178,7 +159,14 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     from .periodo_aquisitivo_service import serialize_periodo_aquisitivo_alloc
     from .smartsheet_adapter import get_sheet_solicitacoes, col_id_by_name, invalidate_sheet_cache
     from ..config import get_settings
-    from ..rules import RuleError, validate_licenca_certariana
+    from ..rules import (
+        RuleError,
+        get_afastamento_dias,
+        normalize_tipo_solicitacao,
+        validate_intervalo_datas,
+        validate_licenca_certariana,
+        validate_premium_balance,
+    )
 
     if not user:
         return {"ok": False, "message": "Não autenticado."}, 401
@@ -213,17 +201,10 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         else:
             return {"ok": False, "message": "Selecione o tipo de solicitação (Venda ou Gozo)."}, 400
 
-    tipo_norm = tipo_solicitacao.strip().lower()
-    if tipo_norm in ("usufruir", "usufruto", "gozar", "gozo"):
-        tipo_solicitacao_out = "GOZO"
-    elif tipo_norm in ("venda", "vender"):
-        tipo_solicitacao_out = "VENDA"
-    else:
-        afast_info = _tipo_afastamento_info(tipo_solicitacao)
-        if afast_info:
-            tipo_solicitacao_out = afast_info["tipo"]
-        else:
-            return {"ok": False, "message": "Tipo inválido. Use Venda, Gozo, Licença Maternidade ou Licença Paternidade."}, 400
+    try:
+        tipo_solicitacao_out = normalize_tipo_solicitacao(tipo_solicitacao)
+    except RuleError as ve:
+        return {"ok": False, "message": str(ve)}, 400
 
     is_afastamento = tipo_solicitacao_out in ("LICENÇA MATERNIDADE", "LICENÇA PATERNIDADE")
 
@@ -243,16 +224,13 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             dt_inicio = parse_date(data_inicio_str)
             if not dt_inicio:
                 return {"ok": False, "message": "Data início inválida."}, 400
-            dias_afastamento = 120 if tipo_solicitacao_out == "LICENÇA MATERNIDADE" else 5
+            dias_afastamento = get_afastamento_dias(tipo_solicitacao_out)
             dt_fim = dt_inicio + dt.timedelta(days=dias_afastamento - 1)
             data_fim_str = format_date(dt_fim)
         else:
             dt_inicio = parse_date(data_inicio_str or "")
             dt_fim = parse_date(data_fim_str or "")
-            if not dt_inicio or not dt_fim:
-                return {"ok": False, "message": "Datas obrigatórias."}, 400
-            if dt_fim < dt_inicio:
-                return {"ok": False, "message": "Data fim não pode ser menor que data início."}, 400
+            dias_novos = validate_intervalo_datas(dt_inicio, dt_fim)
             ok_periodo, msg = periodo_permitido(dt_inicio, dt_fim, requester_email=gestor_email)
             if not ok_periodo:
                 return {"ok": False, "message": msg}, 400
@@ -305,14 +283,10 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             except Exception as e:
                 return {"ok": False, "message": f"Não foi possível distribuir a solicitação por período aquisitivo: {e}"}, 400
         else:
-            restante_premium = int(prem_saldo) - int(dias_novos)
-            if dias_novos > prem_saldo:
-                return {"ok": False, "message": f"Saldo da Licença Certariana insuficiente: {prem_saldo} dias."}, 400
-            if restante_premium != 0 and restante_premium < 10:
-                return {
-                    "ok": False,
-                    "message": "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar).",
-                }, 400
+            try:
+                validate_premium_balance(int(prem_saldo), int(dias_novos))
+            except RuleError as ve:
+                return {"ok": False, "message": str(ve)}, 400
             saldo_tipo_final = "PREMIUM"
     except Exception as e:
         return {"ok": False, "message": f"Erro ao montar resumo/validações: {e}"}, 500

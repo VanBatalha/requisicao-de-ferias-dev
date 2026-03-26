@@ -15,6 +15,7 @@ from __future__ import annotations
 # Novos módulos (preferidos)
 from .config import get_settings, Settings  # noqa: F401
 from .utils import *  # noqa: F401,F403
+from .services.normalization_service import *  # noqa: F401,F403
 
 from .services.auth_service import (
     build_authorize_url,
@@ -132,21 +133,18 @@ def col_id_by_name(sheet, *candidate_names):
 
 
 def load_runtime_settings() -> dict:
-    """Wrapper público para carregar configurações runtime."""
-    from .services.core_support import _load_runtime_settings
-    return _load_runtime_settings()
+    from .services.runtime_settings_service import load_runtime_settings as _svc
+    return _svc()
 
 
 def save_runtime_settings(payload: dict) -> None:
-    """Wrapper público para salvar configurações runtime."""
-    from .services.core_support import _save_runtime_settings
-    _save_runtime_settings(payload)
+    from .services.runtime_settings_service import save_runtime_settings as _svc
+    _svc(payload)
 
 
 def parse_iso_date(s: str):
-    """Wrapper público para parse de data ISO (YYYY-MM-DD)."""
-    from .services.core_support import _parse_iso_date
-    return _parse_iso_date(s)
+    from .services.runtime_settings_service import parse_iso_date as _svc
+    return _svc(s)
 
 
 def serialize_periodo_aquisitivo_alloc(alloc: list[dict]) -> str:

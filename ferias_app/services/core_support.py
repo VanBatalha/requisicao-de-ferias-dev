@@ -106,55 +106,23 @@ _DEFAULT_RUNTIME_SETTINGS = {
 
 
 def _load_runtime_settings() -> dict:
-    """Carrega configurações de runtime (com fallback no default)."""
-    data = {}
-    try:
-        if os.path.exists(RUNTIME_SETTINGS_PATH):
-            with open(RUNTIME_SETTINGS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-    except Exception:
-        data = {}
-
-    # Merge raso com defaults
-    out = json.loads(json.dumps(_DEFAULT_RUNTIME_SETTINGS))
-    try:
-        for k, v in (data or {}).items():
-            if isinstance(v, dict) and isinstance(out.get(k), dict):
-                out[k].update(v)
-            else:
-                out[k] = v
-    except Exception:
-        pass
-    return out
+    from .runtime_settings_service import load_runtime_settings
+    return load_runtime_settings()
 
 
 def _save_runtime_settings(payload: dict) -> None:
-    """Salva configurações de runtime."""
-    try:
-        with open(RUNTIME_SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload or {}, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"ERRO ao salvar runtime settings: {e}")
+    from .runtime_settings_service import save_runtime_settings
+    save_runtime_settings(payload)
 
 
 def _parse_iso_date(s: str) -> dt.date | None:
-    if not s:
-        return None
-    try:
-        return dt.datetime.strptime(str(s).strip()[:10], "%Y-%m-%d").date()
-    except Exception:
-        return None
+    from .runtime_settings_service import parse_iso_date
+    return parse_iso_date(s)
 
 
 def _same_month_override_allowed(requester_email: str) -> bool:
-    """Define se o usuário pode solicitar/editar férias no mês vigente (exceção).
-
-    - DP e Administrador: sempre liberados
-    - Demais: depende de configuração de runtime + data limite
-    """
-    requester_email = safe_lower(requester_email)
-    if not requester_email:
-        return False
+    from .runtime_settings_service import same_month_override_allowed
+    return same_month_override_allowed(requester_email)
 
     # DP/Admin sempre liberados
     if tem_grupo(requester_email, "DP") or tem_grupo(requester_email, "Administrador"):
@@ -187,159 +155,33 @@ def _same_month_override_allowed(requester_email: str) -> bool:
     return False
 
 def _invalidate_sheet_cache(sheet_id=None):
-    """Invalida cache de sheets (chame após qualquer escrita)."""
-    try:
-        if sheet_id is None:
-            _SHEET_CACHE.clear()
-        else:
-            _SHEET_CACHE.pop(sheet_id, None)
-
-        # Também invalida o cache por-request (Flask.g) quando existir.
-        # Isso é importante quando fazemos escrita e, no mesmo request,
-        # recalculamos saldos lendo novamente a planilha.
-        try:
-            if sheet_id in (None, ID_FOLHA_SOLICITACOES):
-                if hasattr(g, "_sheet_solicitacoes"):
-                    delattr(g, "_sheet_solicitacoes")
-        except Exception:
-            pass
-    except Exception:
-        pass
+    from .sheet_helpers_service import invalidate_sheet_cache
+    return invalidate_sheet_cache(sheet_id)
 
 
 def get_smartsheet_client(force_user_token: bool = False):
-    """Cria cliente Smartsheet.
+    from .sheet_helpers_service import get_smartsheet_client as _svc
+    return _svc(force_user_token=force_user_token)
 
-    Prioriza token de serviço (env) para que permissões do app não dependam do OAuth do usuário.
-    Mantém OAuth como fallback (ex.: ambiente local sem token de serviço).
-    """
-    service_token = (
-        os.getenv("SMARTSHEET_SERVICE_TOKEN")
-        or os.getenv("SMARTSHEET_API_TOKEN")
-        or os.getenv("SMARTSHEET_ACCESS_TOKEN")
-    )
-    if service_token and not force_user_token:
-        return smartsheet.Smartsheet(service_token)
-
-    access_token = session.get("access_token")
-    if access_token:
-        return smartsheet.Smartsheet(access_token)
-    return None
 
 def _get_smartsheet_token() -> str | None:
-    """Obtém token Smartsheet (prioriza token de serviço; fallback OAuth em session)."""
-    service_token = (
-        os.getenv("SMARTSHEET_SERVICE_TOKEN")
-        or os.getenv("SMARTSHEET_API_TOKEN")
-        or os.getenv("SMARTSHEET_ACCESS_TOKEN")
-    )
-    if service_token:
-        return service_token
-    return session.get("access_token")
+    from .sheet_helpers_service import get_smartsheet_token
+    return get_smartsheet_token()
 
 
 def add_rows_rest(sheet_id: int, rows_to_add: list, *, timeout: int = 25) -> list[int]:
-    """Adiciona linhas via REST com timeout (evita travas do SDK/urllib3 em produção).
-
-    Retorna lista de row_ids inseridos (quando disponível).
-    """
-    token = _get_smartsheet_token()
-    if not token:
-        raise RuntimeError("Token Smartsheet ausente.")
-
-    url = f"https://api.smartsheet.com/2.0/sheets/{int(sheet_id)}/rows"
-    payload_rows = []
-    for r in rows_to_add or []:
-        # converte Row model -> dict esperado pela API
-        cells = []
-        for c in getattr(r, "cells", []) or []:
-            try:
-                cid = getattr(c, "column_id", None) or c.get("column_id") or c.get("columnId")
-            except Exception:
-                cid = getattr(c, "column_id", None)
-            if not cid:
-                continue
-            # value pode ser None (Smartsheet aceita)
-            val = getattr(c, "value", None) if hasattr(c, "value") else c.get("value")
-            cell = {"columnId": int(cid), "value": val}
-            # preserva "strict" se existir (evita auto-conversões)
-            if hasattr(c, "strict"):
-                cell["strict"] = bool(getattr(c, "strict"))
-            cells.append(cell)
-
-        row_dict = {"toBottom": True, "cells": cells}
-        payload_rows.append(row_dict)
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    # 1 tentativa + 1 retry rápido (Smartsheet às vezes tem picos)
-    last_err = None
-    for attempt in (1, 2):
-        try:
-            resp = requests.post(url, headers=headers, json=payload_rows, timeout=timeout)
-            if resp.status_code >= 400:
-                raise RuntimeError(f"Smartsheet HTTP {resp.status_code}: {resp.text[:500]}")
-            data = resp.json() if resp.text else {}
-            inserted = []
-            try:
-                for rr in (data.get("result") or []):
-                    rid = rr.get("id")
-                    if rid:
-                        inserted.append(int(rid))
-            except Exception:
-                pass
-            return inserted
-        except Exception as e:
-            last_err = e
-            # retry apenas uma vez
-            if attempt == 1:
-                time.sleep(0.8)
-                continue
-            raise
-
+    from .sheet_helpers_service import add_rows_rest as _svc
+    return _svc(sheet_id, rows_to_add, timeout=timeout)
 
 
 def get_col_map(sheet):
-    """Retorna mapa de colunas com tratamento de erro"""
-    try:
-        if sheet is None or not hasattr(sheet, 'columns'):
-            print("ERRO: sheet é None ou não tem columns")
-            return {}
-        return {col.title: col.id for col in sheet.columns}
-    except Exception as e:
-        print(f"ERRO em get_col_map: {e}")
-        return {}
-      
+    from .sheet_helpers_service import get_col_map as _svc
+    return _svc(sheet)
 
 
 def ensure_primary_cell(sheet, row, value):
-    """Garante que a coluna primária do Smartsheet receba um valor.
-    Se a planilha tiver como coluna primária algo diferente (ex.: antes era EMAIL),
-    o Smartsheet pode rejeitar a inserção ou criar linhas confusas.
-    """
-    try:
-        if not sheet or not getattr(sheet, "columns", None) or not row:
-            return
-        primary = next((c for c in sheet.columns if getattr(c, "primary", False)), None)
-        if not primary or not getattr(primary, "id", None):
-            return
-        pid = primary.id
-        # se já existe célula para a coluna primária, não faz nada
-        for cell in (row.cells or []):
-            if isinstance(cell, dict) and cell.get("column_id") == pid:
-                return
-            try:
-                if getattr(cell, "column_id", None) == pid:
-                    return
-            except Exception:
-                pass
-        # insere no começo para ficar visível mesmo com to_top
-        row.cells = ([{"column_id": pid, "value": (value or "").strip() or "-"}] + (row.cells or []))
-    except Exception:
-        return
+    from .sheet_helpers_service import ensure_primary_cell as _svc
+    return _svc(sheet, row, value)
 
 
 def _get_sheet_solicitacoes(client=None, *, force_refresh: bool = False):
@@ -748,78 +590,44 @@ def _is_ativo(colab: dict) -> bool:
 # ============================================
 
 def _norm_email(email: str) -> str:
-    return safe_lower(email)
+    from .normalization_service import norm_email
+    return norm_email(email)
+
 
 def _norm_title(s: str) -> str:
-    """Normaliza títulos/labels para comparação de colunas.
-
-    - remove acentos
-    - trata _, hífen e pontuação como separadores
-    - lower + colapsa espaços
-    """
-    s = "" if s is None else str(s)
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    # separadores comuns em títulos de coluna
-    s = re.sub(r"[\_\-]+", " ", s)
-    # remove pontuação (mantém letras/números/espaço)
-    s = re.sub(r"[^0-9a-zA-Z\s]+", " ", s)
-    s = " ".join(s.strip().lower().split())
-    return s
+    from .normalization_service import norm_title
+    return norm_title(s)
 
 
 def _cols_norm_map(cols: dict) -> dict:
-    """Map {normalized_title: col_id}"""
-    out = {}
-    for k, v in (cols or {}).items():
-        try:
-            out[_norm_title(k)] = v
-        except Exception:
-            continue
-    return out
+    from .normalization_service import cols_norm_map
+    return cols_norm_map(cols)
+
 
 def _col_id(cols_norm: dict, *candidates: str):
-    for name in candidates:
-        cid = cols_norm.get(_norm_title(name))
-        if cid:
-            return cid
-    return None
+    from .normalization_service import col_id
+    return col_id(cols_norm, *candidates)
+
 
 def _norm_solicitacao(s: str) -> str:
-    """Normaliza SOLICITAÇÃO: remove acentos, caixa baixa, reduz espaços."""
-    return _norm_title(s)
+    from .normalization_service import norm_solicitacao
+    return norm_solicitacao(s)
 
 
 def _norm(s: str | None) -> str:
-    """Compat: normalizador genérico usado em versões antigas."""
-    return _norm_title((s or "").strip())
+    from .normalization_service import norm
+    return norm(s)
+
 
 def _is_ajuste(solic: str) -> bool:
-    t = _norm_solicitacao(solic)
-    return "ajuste" in t
+    from .normalization_service import is_ajuste
+    return is_ajuste(solic)
+
 
 def _infer_saldo_tipo(obs: str, explicit: str = "") -> str:
-    """Define se a linha é REGULAR ou PREMIUM (Licença Certariana).
+    from .normalization_service import infer_saldo_tipo
+    return infer_saldo_tipo(obs, explicit=explicit)
 
-    Mantém compatibilidade com registros antigos ("Premium").
-    """
-    exp = (_norm_title(explicit) if explicit else "")
-    if exp in (
-        "premium", "licenca premium",
-        "licenca certariana", "licença certariana", "certariana",
-        "licenca certareana", "licença certareana",
-    ):
-        return "PREMIUM"
-    if exp in ("regular", "ferias", "férias", "ferias regulares", "férias regulares"):
-        return "REGULAR"
-
-    o = _norm_title(obs or "")
-    if (
-        "saldo: premium" in o or "saldo premium" in o or "[premium]" in o or "premium" in o
-        or "saldo: certariana" in o or "saldo certariana" in o or "[certariana]" in o or "certariana" in o
-    ):
-        return "PREMIUM"
-    return "REGULAR"
 
 def _add_years(d: dt.date, years: int) -> dt.date:
     """Soma anos em uma data, ajustando 29/02 para 28/02 quando necessário."""
@@ -906,40 +714,17 @@ def _add_months(d: dt.date, months: int) -> dt.date:
     day = min(d.day, last_day)
     return dt.date(y, m, day)
 
+from .normalization_service import STATUS_APROVADA, STATUS_CANON, STATUS_RESERVA
+
+
 def _norm_status(s: str) -> str:
-    """Normaliza status: remove acentos, caixa baixa, reduz espaços."""
-    if not s:
-        return ""
-    try:
-        import unicodedata
-        t = unicodedata.normalize("NFD", str(s))
-        t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
-    except Exception:
-        t = str(s)
-    t = t.strip().lower()
-    t = re.sub(r"\s+", " ", t)
-    return t
+    from .normalization_service import norm_status
+    return norm_status(s)
 
-STATUS_CANON = {
-    "pendente": "PENDENTE",
-    "em analise": "EM ANÁLISE",
-    "em análise": "EM ANÁLISE",
-    "aprovada": "APROVADA",
-    "aprovado": "APROVADA",
-    "cancelada": "CANCELADA",
-    "cancelado": "CANCELADA",
-    "reprovado": "REPROVADO",
-    "reprovada": "REPROVADO",
-    "rejeitada": "REPROVADO",
-    "rejeitado": "REPROVADO",
-}
-
-STATUS_APROVADA = {"aprovada", "aprovado"}
-STATUS_RESERVA = {"pendente", "em analise", "em análise"}
 
 def _canonical_status(s: str) -> str:
-    n = _norm_status(s)
-    return STATUS_CANON.get(n, (s or "").strip().upper())
+    from .normalization_service import canonical_status
+    return canonical_status(s)
 def _listar_segmentos_premium(
     email: str,
     win_start: dt.date,
