@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 
 from ..legacy.core_legacy import (
+    STATUS_APROVADA,
+    STATUS_RESERVA,
     _col_id,
     _colaborador_admissao,
     _colaborador_por_email,
@@ -11,6 +13,7 @@ from ..legacy.core_legacy import (
     _infer_saldo_tipo,
     _is_ajuste,
     _janela_licenca_certariana,
+    _norm_solicitacao,
     _norm_status,
     _parse_date_value,
     get_col_map,
@@ -43,11 +46,15 @@ def get_resumo_ferias(email: str):
         regular_base = 0
 
     premium_base = 0
+    prem_win_start = None
+    prem_win_end = None
     try:
         adm = _colaborador_admissao(email)
-        premium_base, _, _ = _janela_licenca_certariana(adm) if adm else (0, None, None)
+        premium_base, prem_win_start, prem_win_end = _janela_licenca_certariana(adm) if adm else (0, None, None)
     except Exception:
         premium_base = 0
+        prem_win_start = None
+        prem_win_end = None
 
     regular_usados = regular_reservados = premium_usados = premium_reservados = 0
     total_solicitacoes = 0
@@ -83,24 +90,35 @@ def get_resumo_ferias(email: str):
             except Exception:
                 dias = 0
 
+            inicio_val = next((c.value for c in row.cells if c.column_id == (col_inicio or -1)), None)
+            dt_ini_row = _parse_date_value(inicio_val) if inicio_val else None
+
             if _is_ajuste(solicit):
-                if _infer_saldo_tipo(str(obs or ""), str(solicit or "")) == "PREMIUM" or "premium" in str(solicit or "").lower() or "certariana" in str(solicit or "").lower():
-                    ajuste_premium += dias
-                else:
-                    ajuste_regular += dias
+                if status in STATUS_APROVADA:
+                    solicit_norm = _norm_solicitacao(solicit)
+                    if ("premium" in solicit_norm) or ("certariana" in solicit_norm):
+                        ajuste_premium += dias
+                    else:
+                        ajuste_regular += dias
+                continue
+
+            solicit_norm = _norm_solicitacao(solicit)
+            if ("licenca maternidade" in solicit_norm) or ("licenca paternidade" in solicit_norm):
                 continue
 
             total_solicitacoes += 1
 
             if saldo_tipo == "PREMIUM":
-                if status == "APROVADA":
+                if prem_win_start and prem_win_end and dt_ini_row and not (prem_win_start <= dt_ini_row < prem_win_end):
+                    continue
+                if status in STATUS_APROVADA:
                     premium_usados += dias
-                elif status in ("PENDENTE", "EM ANÁLISE", "EM ANALISE"):
+                elif status in STATUS_RESERVA:
                     premium_reservados += dias
             else:
-                if status == "APROVADA":
+                if status in STATUS_APROVADA:
                     regular_usados += dias
-                elif status in ("PENDENTE", "EM ANÁLISE", "EM ANALISE"):
+                elif status in STATUS_RESERVA:
                     regular_reservados += dias
 
         _ = col_inicio  # mantido para paridade/robustez de mapeamento
