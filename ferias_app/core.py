@@ -108,6 +108,24 @@ def col_id_by_name(sheet, *candidate_names):
 
 
 
+def load_runtime_settings() -> dict:
+    """Wrapper público para carregar configurações runtime."""
+    from .legacy.core_legacy import _load_runtime_settings
+    return _load_runtime_settings()
+
+
+def save_runtime_settings(payload: dict) -> None:
+    """Wrapper público para salvar configurações runtime."""
+    from .legacy.core_legacy import _save_runtime_settings
+    _save_runtime_settings(payload)
+
+
+def parse_iso_date(s: str):
+    """Wrapper público para parse de data ISO (YYYY-MM-DD)."""
+    from .legacy.core_legacy import _parse_iso_date
+    return _parse_iso_date(s)
+
+
 def serialize_periodo_aquisitivo_alloc(alloc: list[dict]) -> str:
     """Alias público para `_serialize_periodo_aquisitivo_alloc` (legado).
 

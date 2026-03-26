@@ -8,9 +8,9 @@ from flask import g, jsonify, request, session
 from .base import bp
 from ..core import (
     ID_FOLHA_CADASTRO,
-    _load_runtime_settings,
-    _parse_iso_date,
-    _save_runtime_settings,
+    load_runtime_settings,
+    parse_iso_date,
+    save_runtime_settings,
     col_id_by_name,
     get_sheet_cadastro,
     get_smartsheet_client,
@@ -179,7 +179,7 @@ def api_admin_get_same_month():
     if not user or not tem_grupo(user.get("email"), "Administrador"):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
-    cfg = _load_runtime_settings().get("same_month", {})
+    cfg = load_runtime_settings().get("same_month", {})
     return jsonify({"ok": True, "same_month": cfg})
 
 
@@ -194,7 +194,7 @@ def api_admin_set_same_month():
     enabled = bool(payload.get("enabled", False))
     until_raw = (payload.get("until") or "").strip()
     # valida data (mantém string original no formato ISO)
-    until_dt = _parse_iso_date(until_raw)
+    until_dt = parse_iso_date(until_raw)
     until = until_dt.strftime("%Y-%m-%d") if until_dt else ""
 
     scope_in = payload.get("scope") or {}
@@ -205,13 +205,13 @@ def api_admin_set_same_month():
         "users": [safe_lower(u) for u in (scope_in.get("users") or []) if safe_lower(u)],
     }
 
-    settings = _load_runtime_settings()
+    settings = load_runtime_settings()
     settings["same_month"] = {
         "enabled": enabled,
         "until": until,
         "scope": scope,
     }
-    _save_runtime_settings(settings)
+    save_runtime_settings(settings)
 
     return jsonify({"ok": True, "same_month": settings["same_month"]})
 
