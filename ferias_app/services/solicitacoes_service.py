@@ -151,7 +151,6 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         get_col_map,
         get_smartsheet_client,
         listar_emails_colaboradores,
-        periodo_permitido,
         safe_lower,
     )
     from .permissions_service import get_user_role, is_gestor, get_subordinados
@@ -166,6 +165,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         validate_intervalo_datas,
         validate_licenca_certariana,
         validate_premium_balance,
+        validate_request_period,
     )
 
     if not user:
@@ -231,7 +231,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             dt_inicio = parse_date(data_inicio_str or "")
             dt_fim = parse_date(data_fim_str or "")
             dias_novos = validate_intervalo_datas(dt_inicio, dt_fim)
-            ok_periodo, msg = periodo_permitido(dt_inicio, dt_fim, requester_email=gestor_email)
+            ok_periodo, msg = validate_request_period(dt_inicio, dt_fim, requester_email=gestor_email)
             if not ok_periodo:
                 return {"ok": False, "message": msg}, 400
     except Exception:

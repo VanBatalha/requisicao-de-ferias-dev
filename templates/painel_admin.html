@@ -42,9 +42,10 @@
 </div>
 
 <div class="card" style="margin-top:16px;">
-  <h2>Liberação excepcional: solicitações no mês vigente</h2>
+  <h2>Liberação excepcional das regras de período</h2>
   <p class="muted">
-    Permite solicitar/editar férias dentro do <strong>mês vigente</strong> por um período limitado.
+    Permite liberar temporariamente solicitações <strong>retroativas</strong>, no <strong>mês vigente</strong>
+    e também no <strong>mês seguinte após o dia de corte</strong>, para usuários, grupos ou gestores específicos.
     O DP e Admin já ficam sempre liberados por padrão.
   </p>
 
@@ -62,8 +63,13 @@
         <input id="smUntil" class="input" type="date" />
       </div>
 
+      <div style="margin-top:12px;">
+        <label class="muted" style="display:block; margin-bottom:6px;">Dia de corte para bloquear o mês seguinte</label>
+        <input id="smCutoffDay" class="input" type="number" min="1" max="31" placeholder="21" />
+      </div>
+
       <div style="margin-top:14px;" class="checkboxes">
-        <label class="chk"><input type="checkbox" id="smScopeAll" /> Aplicar para todos (Gestores/DP/Admin)</label>
+        <label class="chk"><input type="checkbox" id="smScopeAll" /> Aplicar para todos que já podem solicitar</label>
         <label class="chk"><input type="checkbox" id="smScopeGestores" /> Aplicar para todos os gestores</label>
       </div>
     </div>
@@ -75,7 +81,7 @@
       </div>
 
       <div style="margin-top:12px;">
-        <label class="muted" style="display:block; margin-bottom:6px;">Gestores liberados (um e-mail por linha)</label>
+        <label class="muted" style="display:block; margin-bottom:6px;">Usuários liberados (um e-mail por linha)</label>
         <textarea id="smUsers" class="input" style="height:120px; resize:vertical;" placeholder="ex.: gestor@empresa.com"></textarea>
       </div>
     </div>
@@ -266,6 +272,7 @@
     const scope = cfg.scope || {};
     $("smEnabled").checked = !!cfg.enabled;
     $("smUntil").value = (cfg.until || "").toString().slice(0, 10);
+    $("smCutoffDay").value = cfg.cutoff_day || 21;
     $("smScopeAll").checked = !!scope.all;
     $("smScopeGestores").checked = !!scope.gestores;
     $("smGroups").value = (scope.groups || []).join(", ");
@@ -294,6 +301,7 @@
       const payload = {
         enabled: $("smEnabled").checked,
         until: $("smUntil").value || "",
+        cutoff_day: parseInt($("smCutoffDay").value || "21", 10),
         scope: {
           all: $("smScopeAll").checked,
           gestores: $("smScopeGestores").checked,

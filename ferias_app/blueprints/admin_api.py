@@ -9,7 +9,6 @@ from .base import bp
 from ..core import (
     ID_FOLHA_CADASTRO,
     load_runtime_settings,
-    parse_iso_date,
     save_runtime_settings,
     col_id_by_name,
     get_sheet_cadastro,
@@ -22,6 +21,8 @@ from ..core import (
     safe_lower,
     tem_grupo,
 )
+from ..rules import build_request_window_override_settings
+
 @bp.route("/api/admin/listar-usuarios")
 def api_admin_listar_usuarios():
     user = session.get("user")
@@ -170,7 +171,7 @@ def api_admin_atualizar_grupos():
 
 
 # ============================================
-# API: ADMIN - LIBERAÇÃO EXCEPCIONAL (MÊS VIGENTE)
+# API: ADMIN - LIBERAÇÃO EXCEPCIONAL DAS REGRAS DE PERÍODO
 # ============================================
 
 @bp.route("/api/admin/same-month", methods=["GET"])
@@ -179,7 +180,7 @@ def api_admin_get_same_month():
     if not user or not tem_grupo(user.get("email"), "Administrador"):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
-    cfg = load_runtime_settings().get("same_month", {})
+    cfg = build_request_window_override_settings(load_runtime_settings().get("same_month", {}) or {})
     return jsonify({"ok": True, "same_month": cfg})
 
 
@@ -190,27 +191,8 @@ def api_admin_set_same_month():
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     payload = request.get_json(silent=True) or {}
-
-    enabled = bool(payload.get("enabled", False))
-    until_raw = (payload.get("until") or "").strip()
-    # valida data (mantém string original no formato ISO)
-    until_dt = parse_iso_date(until_raw)
-    until = until_dt.strftime("%Y-%m-%d") if until_dt else ""
-
-    scope_in = payload.get("scope") or {}
-    scope = {
-        "all": bool(scope_in.get("all", False)),
-        "gestores": bool(scope_in.get("gestores", False)),
-        "groups": [str(g).strip() for g in (scope_in.get("groups") or []) if str(g).strip()],
-        "users": [safe_lower(u) for u in (scope_in.get("users") or []) if safe_lower(u)],
-    }
-
     settings = load_runtime_settings()
-    settings["same_month"] = {
-        "enabled": enabled,
-        "until": until,
-        "scope": scope,
-    }
+    settings["same_month"] = build_request_window_override_settings(payload)
     save_runtime_settings(settings)
 
     return jsonify({"ok": True, "same_month": settings["same_month"]})

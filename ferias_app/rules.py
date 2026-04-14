@@ -1,22 +1,31 @@
 """Regras de negócio centralizadas.
 
-Objetivo: manter TODAS as validações que bloqueiam uma ação em um único lugar,
+Objetivo: manter as validações que bloqueiam uma ação em um único lugar,
 para evitar espalhar lógica por blueprints/serviços.
 
-Regra atual implementada aqui:
-- Licença Certariana (PREMIUM): até 3 períodos, mínimo 10 dias por período;
-  se 3 períodos, deve ser 10/10/10 (total 30);
-  se 2 períodos, ambos devem ter >= 10 dias, e o saldo restante deve ser 0 ou >= 10;
-  não pode sobrar saldo entre 1 e 9.
+Regras centralizadas aqui:
+- Período permitido para solicitação de férias
+  - bloqueio retroativo
+  - bloqueio no mês vigente
+  - bloqueio do mês seguinte após o dia de corte
+  - exceção temporária por usuário/grupo/gestores
+- Licença Certariana (PREMIUM)
+  - até 3 períodos, mínimo 10 dias por período;
+  - se 3 períodos, deve ser 10/10/10 (total 30);
+  - se 2 períodos, ambos devem ter >= 10 dias, e o saldo restante deve ser 0 ou >= 10;
+  - não pode sobrar saldo entre 1 e 9.
 """
 
 from __future__ import annotations
+
 import datetime as dt
 import logging
+from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
 
-from typing import Iterable, Optional, Set
+DEFAULT_REQUEST_CUTOFF_DAY = 21
+_ALLOWED_SCOPE_GROUPS = {"Administrador", "DP", "USER"}
 
 
 class RuleError(ValueError):
@@ -77,6 +86,180 @@ def validate_premium_balance(prem_saldo: int, dias_novos: int) -> None:
         )
 
 
+def _safe_cutoff_day(value) -> int:
+    try:
+        day = int(value)
+    except Exception:
+        day = DEFAULT_REQUEST_CUTOFF_DAY
+    return min(31, max(1, day))
+
+
+def normalize_override_scope(scope_in: dict | None) -> dict:
+    scope_in = scope_in or {}
+    groups = []
+    for raw_group in (scope_in.get("groups") or []):
+        group = str(raw_group).strip()
+        if not group:
+            continue
+        if group == "RH":
+            group = "DP"
+        if group in _ALLOWED_SCOPE_GROUPS and group not in groups:
+            groups.append(group)
+
+    users = []
+    seen_users = set()
+    for raw_user in (scope_in.get("users") or []):
+        from .utils import safe_lower
+
+        user = safe_lower(raw_user)
+        if not user or user in seen_users:
+            continue
+        seen_users.add(user)
+        users.append(user)
+
+    return {
+        "all": bool(scope_in.get("all", False)),
+        "gestores": bool(scope_in.get("gestores", False)),
+        "groups": groups,
+        "users": users,
+    }
+
+
+def get_request_window_override_config() -> dict:
+    """Lê e normaliza a configuração de exceção temporária do admin."""
+    from .services.runtime_settings_service import load_runtime_settings, parse_iso_date
+
+    cfg = (load_runtime_settings().get("same_month") or {}).copy()
+    until_raw = (cfg.get("until") or "").strip()
+    until_dt = parse_iso_date(until_raw)
+    until = until_dt.strftime("%Y-%m-%d") if until_dt else ""
+
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "until": until,
+        "cutoff_day": _safe_cutoff_day(cfg.get("cutoff_day", DEFAULT_REQUEST_CUTOFF_DAY)),
+        "scope": normalize_override_scope(cfg.get("scope") or {}),
+    }
+
+
+def build_request_window_override_settings(payload: dict | None) -> dict:
+    payload = payload or {}
+    from .services.runtime_settings_service import parse_iso_date
+
+    until_raw = (payload.get("until") or "").strip()
+    until_dt = parse_iso_date(until_raw)
+    until = until_dt.strftime("%Y-%m-%d") if until_dt else ""
+
+    return {
+        "enabled": bool(payload.get("enabled", False)),
+        "until": until,
+        "cutoff_day": _safe_cutoff_day(payload.get("cutoff_day", DEFAULT_REQUEST_CUTOFF_DAY)),
+        "scope": normalize_override_scope(payload.get("scope") or {}),
+    }
+
+
+def request_window_override_allowed(
+    requester_email: str,
+    *,
+    today: dt.date | None = None,
+) -> bool:
+    """Retorna se o solicitante possui exceção temporária às travas de período."""
+    from .services.permissions_service import get_user_type, is_gestor
+    from .utils import safe_lower
+
+    requester_email = safe_lower(requester_email)
+    if not requester_email:
+        return False
+
+    user_type = get_user_type(requester_email)
+    if user_type in {"ADMIN", "DP"}:
+        return True
+
+    cfg = get_request_window_override_config()
+    if not cfg["enabled"]:
+        return False
+
+    today = today or dt.date.today()
+    until_raw = cfg.get("until") or ""
+    until = None
+    if until_raw:
+        try:
+            until = dt.datetime.strptime(until_raw, "%Y-%m-%d").date()
+        except Exception:
+            until = None
+    if until and today > until:
+        return False
+
+    scope = cfg["scope"]
+    if scope.get("all"):
+        return True
+    if scope.get("gestores") and is_gestor(requester_email):
+        return True
+    if requester_email in set(scope.get("users") or []):
+        return True
+
+    user_groups = set()
+    if user_type == "ADMIN":
+        user_groups.add("Administrador")
+    elif user_type == "DP":
+        user_groups.add("DP")
+    else:
+        user_groups.add("USER")
+
+    allowed_groups = set(scope.get("groups") or [])
+    return bool(user_groups.intersection(allowed_groups))
+
+
+def validate_request_period(
+    dt_inicio: dt.date | None,
+    dt_fim: dt.date | None,
+    *,
+    requester_email: str | None = None,
+    today: dt.date | None = None,
+) -> tuple[bool, str]:
+    """Valida retroativo, mês vigente e mês seguinte após corte.
+
+    Exceções temporárias configuradas pelo Admin são avaliadas sobre o
+    solicitante (gestor/usuário que está fazendo a ação).
+    """
+    if not dt_inicio or not dt_fim:
+        return False, "Datas inválidas."
+
+    today = today or dt.date.today()
+    override_allowed = bool(requester_email) and request_window_override_allowed(
+        requester_email,
+        today=today,
+    )
+
+    primeiro_dia_mes_atual = today.replace(day=1)
+    if dt_inicio < primeiro_dia_mes_atual or dt_fim < primeiro_dia_mes_atual:
+        if not override_allowed:
+            return False, "Não é permitido solicitar ou editar férias retroativas ou no passado."
+
+    ym_hoje = (today.year, today.month)
+    ym_inicio = (dt_inicio.year, dt_inicio.month)
+    ym_fim = (dt_fim.year, dt_fim.month)
+
+    if ym_inicio == ym_hoje or ym_fim == ym_hoje:
+        if not override_allowed:
+            return False, "Não é permitido solicitar ou editar férias no mês vigente."
+
+    cfg = get_request_window_override_config()
+    cutoff_day = int(cfg.get("cutoff_day") or DEFAULT_REQUEST_CUTOFF_DAY)
+    if today.day >= cutoff_day:
+        prox_ano = today.year + 1 if today.month == 12 else today.year
+        prox_mes = 1 if today.month == 12 else today.month + 1
+        ym_proximo = (prox_ano, prox_mes)
+        if ym_inicio == ym_proximo or ym_fim == ym_proximo:
+            if not override_allowed:
+                return (
+                    False,
+                    f"Não é permitido solicitar ou editar férias do mês seguinte após o dia {cutoff_day}.",
+                )
+
+    return True, ""
+
+
 def validate_licenca_certariana(
     email: str,
     dias_novos: float,
@@ -87,12 +270,12 @@ def validate_licenca_certariana(
     include_statuses: Optional[Set[str]] = None,
 ) -> None:
     """Valida fracionamento da Licença Certariana.
-    
+
     Regras:
     - 1 período: >= 10 dias, restante deve ser 0 ou >= 10
     - 2 períodos: ambos >= 10 dias, restante deve ser 0 ou >= 10
     - 3 períodos: obrigatoriamente 10+10+10 (total 30)
-    
+
     Levanta RuleError quando a regra for violada.
     """
     # imports locais para evitar ciclos
@@ -117,6 +300,7 @@ def validate_licenca_certariana(
         # Usa o mesmo conceito exibido no painel (direito base + ajustes aprovados),
         # para não invalidar casos em que a Certariana foi concedida por ajuste manual.
         from .services.saldo_service import get_resumo_ferias
+
         resumo_premium_direito = int((get_resumo_ferias(email) or {}).get("premium", {}).get("direito", 0) or 0)
     except Exception:
         resumo_premium_direito = 0
@@ -207,7 +391,7 @@ def validate_licenca_certariana(
                     )
 
     total = sum(segs) + int(round(dias))
-    
+
     # Validação 2: Não pode exceder direito total
     if total > direito_total:
         raise RuleError(
@@ -215,13 +399,13 @@ def validate_licenca_certariana(
         )
 
     periodos = len(segs) + 1
-    
+
     # Validação 3: Máximo 3 períodos
     if periodos > 3:
         raise RuleError("Licença Certariana permite no máximo 3 períodos na janela atual.")
 
     restante = direito_total - total
-    
+
     # Validação 4: Saldo restante deve ser 0 ou >= 10 (nunca entre 1 e 9)
     if restante != 0 and restante < 10:
         raise RuleError(

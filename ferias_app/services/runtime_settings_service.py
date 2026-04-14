@@ -4,9 +4,6 @@ import datetime as dt
 import json
 import os
 
-from ..utils import safe_lower
-from .permissions_service import get_user_type, is_gestor
-
 RUNTIME_SETTINGS_PATH = os.getenv(
     "RUNTIME_SETTINGS_PATH",
     "/tmp/requisicao_ferias_runtime_settings.json",
@@ -14,16 +11,27 @@ RUNTIME_SETTINGS_PATH = os.getenv(
 
 DEFAULT_RUNTIME_SETTINGS = {
     "same_month": {
-        "enabled": True,
-        "until": "2026-02-11",
+        "enabled": False,
+        "until": "",
+        "cutoff_day": 21,
         "scope": {
-            "all": True,
+            "all": False,
             "gestores": False,
             "groups": [],
             "users": [],
         },
     }
 }
+
+
+def _deep_merge_dict(base: dict, extra: dict) -> dict:
+    out = json.loads(json.dumps(base or {}))
+    for key, value in (extra or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge_dict(out.get(key) or {}, value)
+        else:
+            out[key] = value
+    return out
 
 
 def load_runtime_settings() -> dict:
@@ -35,16 +43,7 @@ def load_runtime_settings() -> dict:
     except Exception:
         data = {}
 
-    out = json.loads(json.dumps(DEFAULT_RUNTIME_SETTINGS))
-    try:
-        for key, value in (data or {}).items():
-            if isinstance(value, dict) and isinstance(out.get(key), dict):
-                out[key].update(value)
-            else:
-                out[key] = value
-    except Exception:
-        pass
-    return out
+    return _deep_merge_dict(DEFAULT_RUNTIME_SETTINGS, data or {})
 
 
 def save_runtime_settings(payload: dict) -> None:
@@ -61,44 +60,8 @@ def parse_iso_date(value: str) -> dt.date | None:
         return None
 
 
-def _user_groups_for_scope(email: str) -> set[str]:
-    user_type = get_user_type(email)
-    if user_type == "ADMIN":
-        return {"Administrador"}
-    if user_type == "DP":
-        return {"DP"}
-    return {"USER"}
-
-
 def same_month_override_allowed(requester_email: str) -> bool:
-    requester_email = safe_lower(requester_email)
-    if not requester_email:
-        return False
+    # Compatibilidade com o nome antigo.
+    from ..rules import request_window_override_allowed
 
-    user_type = get_user_type(requester_email)
-    if user_type in {"ADMIN", "DP"}:
-        return True
-
-    cfg = load_runtime_settings().get("same_month", {}) or {}
-    if not bool(cfg.get("enabled", False)):
-        return False
-
-    until = parse_iso_date(cfg.get("until") or "")
-    if until and dt.date.today() > until:
-        return False
-
-    scope = cfg.get("scope") or {}
-    if bool(scope.get("all", False)):
-        return True
-    if bool(scope.get("gestores", False)) and is_gestor(requester_email):
-        return True
-
-    allowed_users = {safe_lower(u) for u in (scope.get("users") or []) if safe_lower(u)}
-    if requester_email in allowed_users:
-        return True
-
-    allowed_groups = {str(g).strip() for g in (scope.get("groups") or []) if str(g).strip()}
-    if allowed_groups and _user_groups_for_scope(requester_email).intersection(allowed_groups):
-        return True
-
-    return False
+    return request_window_override_allowed(requester_email)

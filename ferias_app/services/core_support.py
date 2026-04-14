@@ -78,81 +78,11 @@ USER_TYPE_SOFT_REFRESH_COOLDOWN = int(os.getenv("USER_TYPE_SOFT_REFRESH_COOLDOWN
 USER_TYPE_SOFT_REFRESH_LAST = 0.0
 
 # ============================================
-# CONFIGURAÇÕES DE RUNTIME (ARQUIVO LOCAL)
+# CONFIGURAÇÕES DE RUNTIME / REGRAS DE PERÍODO
 # ============================================
-
-# Render normalmente permite escrita em /tmp (mais seguro do que no diretório do projeto)
-RUNTIME_SETTINGS_PATH = os.getenv(
-    "RUNTIME_SETTINGS_PATH",
-    "/tmp/requisicao_ferias_runtime_settings.json",
-)
-
-_DEFAULT_RUNTIME_SETTINGS = {
-    "same_month": {
-        # Liberação excepcional para permitir solicitações/edições no mês vigente
-        "enabled": True,
-        # Implantação 2026: permitir até 11/02/2026
-        "until": "2026-02-11",
-        "scope": {
-            # Como a tela de Solicitações é restrita a Gestores/DP, "all" aqui significa
-            # "todos os usuários que já conseguem solicitar".
-            "all": True,
-            "gestores": False,
-            "groups": [],
-            "users": [],
-        },
-    }
-}
-
-
-def _load_runtime_settings() -> dict:
-    from .runtime_settings_service import load_runtime_settings
-    return load_runtime_settings()
-
-
-def _save_runtime_settings(payload: dict) -> None:
-    from .runtime_settings_service import save_runtime_settings
-    save_runtime_settings(payload)
-
-
-def _parse_iso_date(s: str) -> dt.date | None:
-    from .runtime_settings_service import parse_iso_date
-    return parse_iso_date(s)
-
-
-def _same_month_override_allowed(requester_email: str) -> bool:
-    from .runtime_settings_service import same_month_override_allowed
-    return same_month_override_allowed(requester_email)
-
-    # DP/Admin sempre liberados
-    if tem_grupo(requester_email, "DP") or tem_grupo(requester_email, "Administrador"):
-        return True
-
-    cfg = _load_runtime_settings().get("same_month", {}) or {}
-    if not bool(cfg.get("enabled", False)):
-        return False
-
-    until = _parse_iso_date(cfg.get("until") or "")
-    if until and dt.date.today() > until:
-        return False
-
-    scope = (cfg.get("scope") or {})
-    if bool(scope.get("all", False)):
-        return True
-
-    if bool(scope.get("gestores", False)) and is_gestor(requester_email):
-        return True
-
-    allowed_users = {safe_lower(u) for u in (scope.get("users") or []) if safe_lower(u)}
-    if requester_email in allowed_users:
-        return True
-
-    allowed_groups = {str(g).strip() for g in (scope.get("groups") or []) if str(g).strip()}
-    user_groups = set(get_user_grupos(requester_email) or [])
-    if allowed_groups and user_groups.intersection(allowed_groups):
-        return True
-
-    return False
+# As regras e persistência dessas configurações foram movidas para:
+# - ferias_app/services/runtime_settings_service.py
+# - ferias_app/rules.py
 
 def _invalidate_sheet_cache(sheet_id=None):
     from .sheet_helpers_service import invalidate_sheet_cache
@@ -1861,51 +1791,10 @@ def listar_solicitacoes_todas():
         return []
 
 def periodo_permitido(dt_inicio, dt_fim, requester_email: str | None = None):
-    """Valida regras de período de férias.
+    """Compatibilidade com a regra centralizada em `ferias_app.rules`."""
+    from ..rules import validate_request_period
 
-    Regras (aplicadas APENAS para USER):
-      - Não permite mês vigente (exceto liberação excepcional)
-      - Não permite mês seguinte após o dia 21
-      - Não permite passado / dia vigente
-
-    Observação:
-      - DP e Administrador podem solicitar/registrar em qualquer data.
-    """
-    hoje = dt.date.today()
-
-    # DP/Admin podem tudo (sem travas de data)
-    if requester_email:
-        try:
-            if tem_grupo(requester_email, "DP") or tem_grupo(requester_email, "Administrador"):
-                return True, ""
-        except Exception:
-            pass
-
-    # USER: bloqueios
-    if dt_fim < hoje or dt_inicio <= hoje:
-        return False, "Nao eh permitido solicitar ou editar ferias no mes vigente ou no passado."
-
-    def ym(d):
-        return (d.year, d.month)
-
-    ym_hoje = ym(hoje)
-
-    if ym(dt_inicio) == ym_hoje or ym(dt_fim) == ym_hoje:
-        if requester_email and _same_month_override_allowed(requester_email):
-            pass
-        else:
-            return False, "Nao eh permitido solicitar ou editar ferias no mes vigente."
-
-    # Após o dia 21, bloqueia mês seguinte (USER)
-    if 21 <= hoje.day <= 31:
-        prox_ano = hoje.year + 1 if hoje.month == 12 else hoje.year
-        prox_mes = 1 if hoje.month == 12 else hoje.month + 1
-        nym_prox = (prox_ano, prox_mes)
-
-        if ym(dt_inicio) == nym_prox or ym(dt_fim) == nym_prox:
-            return False, "Nao eh permitido solicitar ou editar ferias do mes seguinte apos o dia 21."
-
-    return True, ""
+    return validate_request_period(dt_inicio, dt_fim, requester_email=requester_email)
 
 # ============================================
 # ROTAS WEB
