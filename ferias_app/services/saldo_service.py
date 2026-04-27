@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from ..services.core_support import (
     STATUS_APROVADA,
@@ -25,6 +26,15 @@ from .periodo_aquisitivo_service import (
     completed_aquisitive_periods,
     get_periodo_aquisitivo_atual,
 )
+
+
+def _max_periodo_aquisitivo_numero(value) -> int:
+    """Extrai o maior número de período de textos como 'P6:15 | P7:6'."""
+    if value is None:
+        return 0
+    text = str(value)
+    found = [int(x) for x in re.findall(r"\bP\s*(\d+)\b", text, flags=re.IGNORECASE)]
+    return max(found) if found else 0
 
 
 def get_resumo_ferias(email: str):
@@ -59,6 +69,7 @@ def get_resumo_ferias(email: str):
     regular_usados = regular_reservados = premium_usados = premium_reservados = 0
     total_solicitacoes = 0
     ajuste_regular = ajuste_premium = 0
+    ultimo_periodo_regular_usado = 0
 
     try:
         sheet_sol = _get_sheet_solicitacoes(client)
@@ -71,6 +82,7 @@ def get_resumo_ferias(email: str):
         col_obs = _col_id(colsN, "OBSERVAÇÕES", "OBSERVACOES", "OBSERVACAO")
         col_tipo = _col_id(colsN, "SALDO TIPO", "TIPO SALDO", "TIPO_DE_SALDO", "TIPO DE SALDO")
         col_inicio = _col_id(colsN, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL", "INICIO", "INÍCIO")
+        col_periodo_aq = _col_id(colsN, "PERIODO_AQUISITIVO", "PERÍODO AQUISITIVO", "PERIODO AQUISITIVO")
 
         for row in sheet_sol.rows:
             row_email = next((c.value for c in row.cells if c.column_id == (col_colab or -1)), None)
@@ -82,6 +94,7 @@ def get_resumo_ferias(email: str):
             obs = next((c.value for c in row.cells if c.column_id == (col_obs or -1)), "") or ""
             explicit_tipo = next((c.value for c in row.cells if c.column_id == (col_tipo or -1)), "") or ""
             saldo_tipo = _infer_saldo_tipo(obs, explicit_tipo)
+            periodo_aq_raw = next((c.value for c in row.cells if c.column_id == (col_periodo_aq or -1)), "") or ""
             status_raw = next((c.value for c in row.cells if c.column_id == (col_status or -1)), "") or ""
             status = _norm_status(status_raw)
             dias_raw = next((c.value for c in row.cells if c.column_id == (col_dias or -1)), 0) or 0
@@ -108,6 +121,12 @@ def get_resumo_ferias(email: str):
 
             total_solicitacoes += 1
 
+            if saldo_tipo == "REGULAR" and status in (STATUS_APROVADA | STATUS_RESERVA):
+                ultimo_periodo_regular_usado = max(
+                    ultimo_periodo_regular_usado,
+                    _max_periodo_aquisitivo_numero(periodo_aq_raw),
+                )
+
             if saldo_tipo == "PREMIUM":
                 if prem_win_start and prem_win_end and dt_ini_row and not (prem_win_start <= dt_ini_row < prem_win_end):
                     continue
@@ -131,7 +150,13 @@ def get_resumo_ferias(email: str):
     premium_saldo = max(0, premium_direito - premium_usados - premium_reservados)
 
     adm = _colaborador_admissao(email)
-    regular_periodos = allocate_period_balance(regular_direito, regular_usados, regular_reservados, adm)
+    regular_periodos = allocate_period_balance(
+        regular_direito,
+        regular_usados,
+        regular_reservados,
+        adm,
+        ultimo_periodo_usado=ultimo_periodo_regular_usado,
+    )
     periodo_atual = get_periodo_aquisitivo_atual(email)
 
     return {

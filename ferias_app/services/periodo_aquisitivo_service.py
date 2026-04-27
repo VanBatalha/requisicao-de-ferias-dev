@@ -52,27 +52,54 @@ def allocate_period_balance(
     total_reservados: int,
     admissao: dt.date | None,
     hoje: dt.date | None = None,
+    ultimo_periodo_usado: int | None = None,
 ):
-    """Distribui o saldo disponível atual nos últimos períodos completos.
+    """Monta o saldo regular disponível por período aquisitivo.
 
-    Regra temporária de transição até o histórico estar totalmente saneado.
+    Regra de transição:
+    - quando existe data de admissão, usa os períodos aquisitivos completos reais;
+    - quando a admissão não está no cadastro, ainda assim não bloqueia a
+      solicitação: infere a quantidade de períodos pelo direito/saldo atual;
+    - o saldo é preenchido dos períodos mais recentes para trás, deixando o
+      período mais antigo com eventual saldo parcial;
+    - a distribuição da solicitação continua FIFO: consome primeiro o período
+      mais antigo entre os que ainda têm saldo.
     """
     hoje = hoje or dt.date.today()
-    saldo_disponivel = max(0, int(total_direito or 0) - int(total_usados or 0) - int(total_reservados or 0))
-    if not admissao or saldo_disponivel <= 0:
-        return []
-
-    completos = completed_aquisitive_periods(admissao, hoje)
-    if completos <= 0:
+    total_direito = max(0, int(total_direito or 0))
+    total_usados = max(0, int(total_usados or 0))
+    total_reservados = max(0, int(total_reservados or 0))
+    saldo_disponivel = max(0, total_direito - total_usados - total_reservados)
+    if saldo_disponivel <= 0:
         return []
 
     qtd_periodos = max(1, (saldo_disponivel + 29) // 30)
-    ultimo_num = completos
+
+    completos = completed_aquisitive_periods(admissao, hoje) if admissao else 0
+    if completos > 0:
+        ultimo_num = completos
+    else:
+        # Fallback para colaboradores sem admissão mapeada no cadastro.
+        # Ex.: direito/saldo 19 dias -> P1:19, evitando erro falso de saldo.
+        ultimo_num = max(1, (max(total_direito, saldo_disponivel) + 29) // 30)
+
+    try:
+        ultimo_usado = int(ultimo_periodo_usado or 0)
+    except Exception:
+        ultimo_usado = 0
+    if ultimo_usado > 0 and ultimo_num <= ultimo_usado:
+        # Quando o histórico já sinaliza o último período usado, avança para o
+        # próximo período, preservando o consumo do mais antigo para o mais novo.
+        ultimo_num = ultimo_usado + 1
+
     primeiro_num = max(1, ultimo_num - qtd_periodos + 1)
     numeros = list(range(primeiro_num, ultimo_num + 1))
     saldos_map = {n: 0 for n in numeros}
     restante = saldo_disponivel
 
+    # Preenche os períodos mais recentes primeiro. Assim, se o saldo for 45 e o
+    # último período for P7, o detalhamento disponível fica P6=15 e P7=30; uma
+    # solicitação de 21 dias consome P6:15 | P7:6.
     for n in reversed(numeros):
         if restante <= 0:
             break
@@ -85,7 +112,10 @@ def allocate_period_balance(
         saldo = int(saldos_map.get(n, 0))
         if saldo <= 0:
             continue
-        ini, fim = periodo_bounds(admissao, n)
+        if admissao:
+            ini, fim = periodo_bounds(admissao, n)
+        else:
+            ini = fim = None
         periodos.append({
             "numero": n,
             "inicio": ini,
@@ -97,6 +127,7 @@ def allocate_period_balance(
             "completo": True,
             "atual": False,
             "origem_transitoria": True,
+            "inferido_sem_admissao": not bool(admissao),
         })
     return periodos
 

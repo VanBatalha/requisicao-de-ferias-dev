@@ -878,23 +878,103 @@ def _cell_value(row, col_id):
         return None
 
 def _colaborador_por_email(email: str):
+    """Localiza colaborador no cadastro de forma tolerante.
+
+    O login LDAP/Smartsheet pode retornar o mesmo usuário com domínio diferente.
+    Para cálculos de saldo e admissão, tentamos primeiro o match exato e, se
+    necessário, comparamos também a parte antes do @.
+    """
     email = safe_lower(email)
+    if not email:
+        return None
+
+    wanted_local = email.split("@", 1)[0].strip() if "@" in email else email
+    local_matches = []
+
     for c in _listar_colaboradores_cached():
-        if safe_lower(c.get("EMAIL DA EMPRESA")) == email:
+        if not isinstance(c, dict):
+            continue
+
+        # Busca a coluna de email por título normalizado para aceitar variações.
+        row_email = ""
+        for k, v in c.items():
+            if _norm_title(k) in {"email da empresa", "email", "e mail", "e mail da empresa"}:
+                row_email = safe_lower(v)
+                break
+
+        if not row_email:
+            row_email = safe_lower(c.get("EMAIL DA EMPRESA"))
+        if not row_email:
+            continue
+
+        if row_email == email:
             return c
+
+        row_local = row_email.split("@", 1)[0].strip() if "@" in row_email else row_email
+        if wanted_local and row_local == wanted_local:
+            local_matches.append(c)
+
+    if len(local_matches) == 1:
+        return local_matches[0]
+    if len(local_matches) > 1:
+        # Se houver mais de um domínio, prioriza uma linha ativa quando possível.
+        for c in local_matches:
+            if _is_ativo(c):
+                return c
+        return local_matches[0]
     return None
+
+
+def _value_by_normalized_key(row: dict, *candidate_titles: str):
+    """Retorna valor aceitando títulos com/sem acento, hífen ou variações."""
+    if not isinstance(row, dict):
+        return None
+    wanted = {_norm_title(x) for x in candidate_titles if x}
+    for k, v in row.items():
+        nk = _norm_title(k)
+        if nk in wanted:
+            return v
+    return None
+
 
 def _colaborador_regime(email: str) -> str:
     c = _colaborador_por_email(email) or {}
-    regime = (c.get("REGIME DE CONTRATAÇÃO") or c.get("REGIME DE CONTRATACAO") or "").strip()
-    return regime
+    regime = _value_by_normalized_key(
+        c,
+        "REGIME DE CONTRATAÇÃO",
+        "REGIME DE CONTRATACAO",
+        "REGIME",
+    )
+    return str(regime or "").strip()
+
 
 def _colaborador_admissao(email: str):
     c = _colaborador_por_email(email) or {}
-    # tenta várias chaves
-    for k in ("DATA DE ADMISSÃO", "DATA DE ADMISSAO", "DATA ADMISSÃO", "DATA ADMISSAO"):
-        if k in c and c.get(k):
-            return _parse_date_value(c.get(k))
+    if not c:
+        return None
+
+    # Primeiro tenta nomes conhecidos/normalizados.
+    value = _value_by_normalized_key(
+        c,
+        "DATA DE ADMISSÃO",
+        "DATA DE ADMISSAO",
+        "DATA ADMISSÃO",
+        "DATA ADMISSAO",
+        "ADMISSÃO",
+        "ADMISSAO",
+        "DATA ADMISSÃO COLABORADOR",
+        "DATA ADMISSAO COLABORADOR",
+    )
+    parsed = _parse_date_value(value)
+    if parsed:
+        return parsed
+
+    # Fallback: qualquer coluna cujo título contenha 'admiss'.
+    for k, v in c.items():
+        if v and "admiss" in _norm_title(k):
+            parsed = _parse_date_value(v)
+            if parsed:
+                return parsed
     return None
 
 def calcular_dias_ferias_real_time(admissao: dt.date, hoje=None) -> int:
