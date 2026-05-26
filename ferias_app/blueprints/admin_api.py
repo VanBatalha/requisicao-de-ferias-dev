@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import smartsheet
-from flask import g, jsonify, redirect, request, session, url_for
+from flask import g, jsonify, request, session
 
 from .base import bp
 from ..core import (
@@ -23,66 +23,10 @@ from ..core import (
 )
 from ..rules import build_request_window_override_settings
 
-
-def _current_or_original_admin_email() -> str:
-    current = (session.get("user") or {}).get("email") or ""
-    original = (session.get("impersonator_user") or {}).get("email") or ""
-    return original or current
-
-
-def _is_admin_session() -> bool:
-    return bool(_current_or_original_admin_email()) and tem_grupo(_current_or_original_admin_email(), "Administrador")
-
-
-@bp.route("/api/admin/simular-usuario", methods=["POST"])
-def api_admin_simular_usuario():
-    user = session.get("user")
-    if not user or not _is_admin_session():
-        return jsonify({"ok": False, "message": "Acesso negado"}), 403
-    if session.get("is_impersonating"):
-        return jsonify({"ok": False, "message": "Encerre a simulação atual antes de iniciar outra."}), 400
-
-    payload = request.get_json(silent=True) or request.form
-    email = safe_lower(payload.get("email") or "")
-    if not email:
-        return jsonify({"ok": False, "message": "E-mail é obrigatório."}), 400
-
-    try:
-        colaboradores = listar_colaboradores()
-        colab = next((c for c in colaboradores if safe_lower(c.get("EMAIL DA EMPRESA") or "") == email), None)
-        if not colab:
-            return jsonify({"ok": False, "message": "Usuário não encontrado no cadastro."}), 404
-        nome = colab.get("NOME COMPLETO") or colab.get("NOME") or email
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao localizar usuário para simulação: {e}"}), 500
-
-    session["impersonator_user"] = dict(user)
-    session["is_impersonating"] = True
-    session["user"] = {
-        "email": email,
-        "name": nome,
-        "id": f"simulado:{email}",
-        "username": email,
-        "groups": [],
-        "simulated_by": user.get("email"),
-    }
-    return jsonify({"ok": True, "message": f"Simulação iniciada como {nome}.", "redirect_url": url_for("ferias.ferias")})
-
-
-@bp.route("/admin/parar-simulacao", methods=["GET", "POST"])
-def admin_parar_simulacao():
-    original = session.get("impersonator_user")
-    if original:
-        session["user"] = original
-        session.pop("impersonator_user", None)
-        session.pop("is_impersonating", None)
-    return redirect(url_for("ferias.painel_admin"))
-
-
 @bp.route("/api/admin/listar-usuarios")
 def api_admin_listar_usuarios():
     user = session.get("user")
-    if not user or not _is_admin_session():
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     q = (request.args.get("q") or "").strip().lower()
@@ -122,7 +66,7 @@ def api_admin_listar_usuarios():
 @bp.route("/api/admin/atualizar-grupos", methods=["POST"])
 def api_admin_atualizar_grupos():
     user = session.get("user")
-    if not user or not _is_admin_session():
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     payload = request.get_json(silent=True) or request.form
@@ -233,7 +177,7 @@ def api_admin_atualizar_grupos():
 @bp.route("/api/admin/same-month", methods=["GET"])
 def api_admin_get_same_month():
     user = session.get("user")
-    if not user or not _is_admin_session():
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     cfg = build_request_window_override_settings(load_runtime_settings().get("same_month", {}) or {})
@@ -243,7 +187,7 @@ def api_admin_get_same_month():
 @bp.route("/api/admin/same-month", methods=["POST"])
 def api_admin_set_same_month():
     user = session.get("user")
-    if not user or not _is_admin_session():
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     payload = request.get_json(silent=True) or {}

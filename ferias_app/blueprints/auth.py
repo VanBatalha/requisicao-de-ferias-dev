@@ -5,6 +5,9 @@ from flask import redirect, render_template, request, session, url_for
 from .base import bp
 from ..logging_config import get_logger
 from ..services.ldap_service import authenticate
+from ..services.auth_service import get_access_token
+from ..services.cadastro_service import canonical_email_for
+from ..services.identity_service import normalize_email_identity
 
 log = get_logger(__name__)
 
@@ -20,9 +23,21 @@ def login():
     try:
         u = authenticate(username, password)
 
-        # Sessão mínima usada pelo restante do app
+        ldap_email = normalize_email_identity(u.email or "")
+        canonical_email = ldap_email
+        try:
+            token = get_access_token()
+            if token:
+                canonical_email = canonical_email_for(token, ldap_email, u.username, username) or ldap_email
+        except Exception as canon_err:
+            log.warning("Não foi possível canonicalizar usuário LDAP no cadastro: %s", canon_err)
+
+        # Sessão mínima usada pelo restante do app.
+        # `email` fica canônico em relação ao Smartsheet; o e-mail original do LDAP
+        # é mantido para diagnóstico.
         session["user"] = {
-            "email": u.email or "",
+            "email": canonical_email or ldap_email or "",
+            "ldap_email": ldap_email or "",
             "name": u.name or username,
             "id": u.username,
             "username": u.username,

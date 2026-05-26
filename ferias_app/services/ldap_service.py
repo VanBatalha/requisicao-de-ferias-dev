@@ -80,22 +80,6 @@ def _service_bind() -> Connection:
         raise
 
 
-def _candidate_filters() -> Connection:
-    """Bind com conta técnica (recomendado) ou bind anônimo se não informado.
-
-    Observação: em muitos ADs o bind anônimo não consegue fazer search,
-    então é altamente recomendado configurar LDAP_BIND_DN e LDAP_BIND_PASSWORD.
-    """
-    s = get_settings()
-    server = _build_server()
-
-    if s.ldap_bind_dn:
-        return Connection(server, user=s.ldap_bind_dn, password=s.ldap_bind_password, auto_bind=True)
-
-    log.warning("LDAP_BIND_DN não configurado: tentando bind anônimo (pode falhar em AD).")
-    return Connection(server, auto_bind=True)
-
-
 def _candidate_filters(username: str) -> List[str]:
     """Retorna filtros LDAP a tentar, em ordem."""
     s = get_settings()

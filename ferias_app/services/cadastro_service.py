@@ -7,20 +7,29 @@ from flask import g
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..utils import safe_lower
+from .identity_service import email_local_part, emails_equivalentes, normalize_email_identity
+from .normalization_service import norm_title
 from .smartsheet_service import get_sheet, columns_map
 
 log = get_logger(__name__)
 
-# Colunas esperadas no cadastro (títulos são tratados como case-insensitive)
+# Colunas esperadas no cadastro (títulos são tratados como case-insensitive
+# e, quando possível, normalizados para tolerar acentos/underscore).
 COL_EMAIL = "EMAIL DA EMPRESA"
 COL_USER_TYPE = "USER TYPE"
 COL_STATUS = "STATUS"
+
+EMAIL_ALIASES = ("EMAIL DA EMPRESA", "EMAIL", "E-MAIL", "EMAIL EMPRESA", "E-MAIL DA EMPRESA")
+USER_TYPE_ALIASES = ("USER TYPE", "TIPO USUARIO", "TIPO USUÁRIO", "PERFIL")
+STATUS_ALIASES = ("STATUS", "SITUAÇÃO", "SITUACAO")
 
 # Relação gestor -> subordinados (conforme versão estável)
 COL_GESTOR_DIRETO = "GESTOR DIRETO"
 COL_GESTOR_SUPERIOR = "GESTOR SUPERIOR"
 # fallback legado
 COL_GESTOR = "GESTOR"
+GESTOR_DIRETO_ALIASES = ("GESTOR DIRETO", "GESTOR_DIRETO", "GESTOR", "EMAIL GESTOR", "E-MAIL GESTOR")
+GESTOR_SUPERIOR_ALIASES = ("GESTOR SUPERIOR", "GESTOR_SUPERIOR")
 
 
 def _cached_get_cadastro_sheet(access_token: str):
@@ -35,8 +44,25 @@ def _cached_get_cadastro_sheet(access_token: str):
     return sheet
 
 
-def _cell_value(sheet, row, cmap: Dict[str, int], col_name: str) -> str:
-    cid = cmap.get((col_name or "").upper())
+def _col_id(cmap: Dict[str, int], *candidate_names: str) -> int | None:
+    """Resolve columnId por título exato ou por título normalizado."""
+    if not cmap:
+        return None
+
+    for name in candidate_names:
+        cid = cmap.get((name or "").strip().upper())
+        if cid:
+            return cid
+
+    normalized = {norm_title(k): v for k, v in (cmap or {}).items()}
+    for name in candidate_names:
+        cid = normalized.get(norm_title(name or ""))
+        if cid:
+            return cid
+    return None
+
+
+def _cell_by_id(row, cid: int | None) -> str:
     if not cid:
         return ""
     for c in row.cells:
@@ -45,32 +71,9 @@ def _cell_value(sheet, row, cmap: Dict[str, int], col_name: str) -> str:
     return ""
 
 
-def _email_local(email: str) -> str:
-    """Retorna a parte antes do @ para heurísticas de matching."""
-    email = safe_lower(email or "")
-    if "@" in email:
-        return email.split("@", 1)[0].strip()
-    return email.strip()
-
-
-def _emails_equivalentes(a: str, b: str) -> bool:
-    """Compara e-mails aceitando domínios diferentes.
-
-    No LDAP o e-mail pode vir com domínio diferente do cadastro no Smartsheet.
-    Para permissões e vínculo gestor->subordinado, consideramos equivalentes
-    quando o local-part (antes do @) for o mesmo.
-
-    Regra:
-    - match exato (case-insensitive) OU
-    - local-part igual (antes do @)
-    """
-    a = safe_lower(a or "")
-    b = safe_lower(b or "")
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    return _email_local(a) != "" and _email_local(a) == _email_local(b)
+def _cell_value(sheet, row, cmap: Dict[str, int], *col_names: str) -> str:
+    cid = _col_id(cmap, *col_names)
+    return _cell_by_id(row, cid)
 
 
 def listar_colaboradores(access_token: str) -> List[Dict[str, Any]]:
@@ -84,22 +87,22 @@ def listar_colaboradores(access_token: str) -> List[Dict[str, Any]]:
 
     out: List[Dict[str, Any]] = []
     for r in sheet.rows:
-        email = safe_lower(str(_cell_value(sheet, r, cmap, COL_EMAIL)))
+        email = normalize_email_identity(str(_cell_value(sheet, r, cmap, *EMAIL_ALIASES)))
         if not email:
             continue
 
-        ut = (str(_cell_value(sheet, r, cmap, COL_USER_TYPE)) or "").strip().upper()
-        st = (str(_cell_value(sheet, r, cmap, COL_STATUS)) or "").strip().upper()
+        ut = (str(_cell_value(sheet, r, cmap, *USER_TYPE_ALIASES)) or "").strip().upper()
+        st = (str(_cell_value(sheet, r, cmap, *STATUS_ALIASES)) or "").strip().upper()
 
-        gestor_direto = safe_lower(str(_cell_value(sheet, r, cmap, COL_GESTOR_DIRETO)))
-        gestor_superior = safe_lower(str(_cell_value(sheet, r, cmap, COL_GESTOR_SUPERIOR)))
-        gestor_fallback = safe_lower(str(_cell_value(sheet, r, cmap, COL_GESTOR)))
+        gestor_direto = normalize_email_identity(str(_cell_value(sheet, r, cmap, *GESTOR_DIRETO_ALIASES)))
+        gestor_superior = normalize_email_identity(str(_cell_value(sheet, r, cmap, *GESTOR_SUPERIOR_ALIASES)))
+        gestor_fallback = normalize_email_identity(str(_cell_value(sheet, r, cmap, COL_GESTOR)))
 
         out.append(
             {
                 "row_id": r.id,
                 "email": email,
-                "email_local": _email_local(email),
+                "email_local": email_local_part(email),
                 "user_type": ut,
                 "status": st,
                 "gestor_direto": gestor_direto,
@@ -116,16 +119,16 @@ def get_user_row(access_token: str, email: str) -> Optional[Dict[str, Any]]:
     1) tenta match exato por email
     2) fallback por local-part (antes do @) caso LDAP devolva domínio diferente
     """
-    email = safe_lower(email)
+    email = normalize_email_identity(email)
     if not email:
         return None
 
-    wanted_local = _email_local(email)
+    wanted_local = email_local_part(email)
     candidates = listar_colaboradores(access_token)
 
     # 1) exato
     for c in candidates:
-        if safe_lower(c.get("email", "")) == email:
+        if emails_equivalentes(c.get("email", ""), email):
             return c
 
     # 2) fallback local-part
@@ -151,6 +154,36 @@ def get_user_row(access_token: str, email: str) -> Optional[Dict[str, Any]]:
             return matches[0]
 
     return None
+
+
+def get_user_row_by_identifiers(access_token: str, *identifiers: str) -> Optional[Dict[str, Any]]:
+    """Localiza o usuário aceitando múltiplas identidades vindas do LDAP.
+
+    Ex.: mail, userPrincipalName e sAMAccountName podem divergir entre si.
+    A primeira identidade que casar com o cadastro vence.
+    """
+    seen = set()
+    for identifier in identifiers:
+        norm = normalize_email_identity(identifier)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        row = get_user_row(access_token, norm)
+        if row:
+            return row
+    return None
+
+
+def canonical_email_for(access_token: str, *identifiers: str) -> str:
+    """Retorna o e-mail canônico do cadastro, se encontrado."""
+    row = get_user_row_by_identifiers(access_token, *identifiers)
+    if row and row.get("email"):
+        return normalize_email_identity(row.get("email"))
+    for identifier in identifiers:
+        norm = normalize_email_identity(identifier)
+        if norm:
+            return norm
+    return ""
 
 
 def get_user_type(access_token: str, email: str) -> str:
@@ -184,11 +217,16 @@ def subordinados_do_gestor(access_token: str, gestor_email: str) -> List[Dict[st
     - Se GESTOR DIRETO (fallback GESTOR) = gestor_email -> entra
     - Filtra somente ativos
     """
-    gestor_email = safe_lower(gestor_email)
+    gestor_email = normalize_email_identity(gestor_email)
     if not gestor_email:
         return []
 
-    ut = get_user_type(access_token, gestor_email)
+    gestor_row = get_user_row(access_token, gestor_email)
+    gestor_canonico = normalize_email_identity((gestor_row or {}).get("email") or gestor_email)
+    gestor_identidades = {gestor_email, gestor_canonico, email_local_part(gestor_email), email_local_part(gestor_canonico)}
+    gestor_identidades = {g for g in gestor_identidades if g}
+
+    ut = get_user_type(access_token, gestor_canonico or gestor_email)
     is_dp_user = ut == "DP"
 
     out: List[Dict[str, Any]] = []
@@ -196,8 +234,8 @@ def subordinados_do_gestor(access_token: str, gestor_email: str) -> List[Dict[st
 
     for c in listar_colaboradores(access_token):
         try:
-            colab_email = safe_lower(c.get("email") or "")
-            if not colab_email or colab_email == gestor_email:
+            colab_email = normalize_email_identity(c.get("email") or "")
+            if not colab_email or any(emails_equivalentes(colab_email, g) for g in gestor_identidades):
                 continue
             if colab_email in seen:
                 continue
@@ -208,9 +246,9 @@ def subordinados_do_gestor(access_token: str, gestor_email: str) -> List[Dict[st
             match = False
             if is_dp_user and gestor_superior == "dp":
                 match = True
-            elif gestor_superior and _emails_equivalentes(gestor_superior, gestor_email):
+            elif gestor_superior and any(emails_equivalentes(gestor_superior, g) for g in gestor_identidades):
                 match = True
-            elif gestor_direto and _emails_equivalentes(gestor_direto, gestor_email):
+            elif gestor_direto and any(emails_equivalentes(gestor_direto, g) for g in gestor_identidades):
                 match = True
 
             if not match:

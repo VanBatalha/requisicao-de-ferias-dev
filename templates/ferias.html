@@ -215,6 +215,29 @@
   .hist-toolbar label{display:block;font-weight:700;margin-bottom:6px;font-size:12px;}
   .hist-list{display:flex; flex-direction:column; gap:12px;}
   .hist-empty{padding:12px 0; opacity:.8;}
+  .alert-info{
+    border:1px solid rgba(59,130,246,.35);
+    background: rgba(59,130,246,.08);
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin: 10px 0;
+  }
+  .alert-warn{
+    border:1px solid rgba(245,158,11,.40);
+    background: rgba(245,158,11,.10);
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin: 10px 0;
+  }
+  .actions-row{display:flex; gap:10px; flex-wrap:wrap; align-items:end;}
+  .btn-secondary{
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    padding: 10px 14px; border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, .35);
+    background: rgba(255,255,255,.04);
+    color: inherit; text-decoration:none; font-weight:800; cursor:pointer;
+  }
+  .btn-primary[disabled], .btn-secondary[disabled]{opacity:.55; cursor:not-allowed;}
 </style>
 
 <div class="content-narrow">
@@ -226,6 +249,32 @@
       <p class="ferias-sub muted">Você está operando para: <strong>{{ colaborador_nome }}</strong> ({{ colaborador_email }})</p>
     </div>
   </div>
+
+  {% if admin_can_simulate %}
+  <div class="card">
+    <div class="section-title">🧪 Simulação de gestor</div>
+    <form method="get" class="actions-row" id="form-simulacao-gestor">
+      <div class="form-group" style="min-width:280px; flex:1;">
+        <label for="simular_gestor">Visualizar tela como gestor</label>
+        <select class="form-control" id="simular_gestor" name="{{ simular_gestor_param }}">
+          <option value="">Sem simulação</option>
+          {% for g in gestores_simulaveis %}
+            <option value="{{ g.email }}" {{ 'selected' if g.email == simulated_gestor_email else '' }}>{{ g.nome }} — {{ g.email }}</option>
+          {% endfor %}
+        </select>
+        <div class="hint">Disponível apenas para ADMIN. Em simulação, os botões de solicitação ficam bloqueados.</div>
+      </div>
+      {% if colaborador_email %}<input type="hidden" name="colaborador" value="{{ colaborador_email }}">{% endif %}
+      <button type="submit" class="btn-secondary">Aplicar simulação</button>
+      {% if simulation_active %}
+        <a class="btn-secondary" href="{{ url_for('ferias.ferias') }}">Encerrar simulação</a>
+      {% endif %}
+    </form>
+    {% if simulation_active %}
+      <div class="alert-info">Você está visualizando a equipe como <strong>{{ nome_por_email.get(simulated_gestor_email, simulated_gestor_email) }}</strong>. Nenhuma solicitação pode ser enviada nesse modo.</div>
+    {% endif %}
+  </div>
+  {% endif %}
 
   <div class="card">
     <div class="section-title">🟩 Férias Regulares</div>
@@ -407,11 +456,44 @@
         </div>
       </div>
 
+      {% if disable_solicitacoes and disable_reason %}
+      <div class="alert-warn">{{ disable_reason }}</div>
+      {% endif %}
+
       <div class="btn-row">
-        <button type="submit" class="btn-primary" id="btn-submit-solicitacao">➕ Fazer Solicitação</button>
+        <button type="submit" class="btn-primary" id="btn-submit-solicitacao" {% if disable_solicitacoes %}disabled title="{{ disable_reason }}"{% endif %}>➕ Fazer Solicitação</button>
       </div>
       <div id="resultado" class="msg muted"></div>
     </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0">Relatórios de conferência</h3>
+    <div class="divider"></div>
+    <form method="get" action="{{ url_for('ferias.relatorio_solicitacoes') }}" class="actions-row">
+      {% if simulation_active %}
+        <input type="hidden" name="{{ simular_gestor_param }}" value="{{ simulated_gestor_email }}">
+      {% endif %}
+      <div class="form-group" style="min-width:260px; flex:2;">
+        <label for="rel-colaborador">Colaborador</label>
+        <select class="form-control" id="rel-colaborador" name="colaborador">
+          <option value="todos">Todos da minha visão</option>
+          {% for c in colaboradores_opcoes %}
+            <option value="{{ c.email }}" {{ 'selected' if c.email == colaborador_email else '' }}>{{ c.nome }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group" style="width:120px;">
+        <label for="rel-mes">Mês</label>
+        <input class="form-control" id="rel-mes" name="mes" type="number" min="1" max="12" value="{{ report_mes }}">
+      </div>
+      <div class="form-group" style="width:140px;">
+        <label for="rel-ano">Ano</label>
+        <input class="form-control" id="rel-ano" name="ano" type="number" min="2000" max="2100" value="{{ report_ano }}">
+      </div>
+      <button type="submit" class="btn-secondary">⬇️ Baixar CSV</button>
+    </form>
+    <div class="hint">Use “Todos da minha visão” para lançamentos mensais da equipe, ou selecione um colaborador para um relatório individual.</div>
   </div>
 
   <div class="card">
@@ -572,6 +654,12 @@ inpInicio?.addEventListener('change', applyAfastamentoDates);
 _applyTipoFerias();
 
   // Atualiza o painel ao trocar o colaborador (recarrega a página com ?colaborador=...)
+  const selSimGestor = document.getElementById('simular_gestor');
+  selSimGestor?.addEventListener('change', () => {
+    const formSim = document.getElementById('form-simulacao-gestor');
+    formSim?.submit();
+  });
+
   const selColab = document.getElementById('colaborador_email');
   selColab?.addEventListener('change', () => {
     const email = (selColab.value || '').trim();
