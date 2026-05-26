@@ -1,49 +1,48 @@
 # Correções realizadas
 
-## 1. Visibilidade gestor → colaborador após LDAP
+## Ajuste complementar: USER TYPE como fonte oficial de permissão
 
-- Criei `ferias_app/services/identity_service.py` para centralizar a normalização e comparação de identidades entre LDAP e Smartsheet.
-- O login LDAP agora tenta converter o e-mail do LDAP para o e-mail canônico existente na planilha de cadastro.
-- A relação de gestores passou a aceitar diferenças comuns entre LDAP e cadastro, como:
-  - domínio diferente;
-  - `userPrincipalName` diferente do `mail`;
-  - valores como `Nome <email@empresa.com>`;
-  - comparação pelo usuário antes do `@`, quando necessário.
-- `cadastro_service.py` ficou mais tolerante a variações nos nomes das colunas de e-mail, gestor, status e tipo de usuário.
+Foi corrigida a regressão em que o perfil do usuário podia ser resolvido incorretamente após a refatoração LDAP.
 
-## 2. Simulação de gestor por ADMIN
+Regra final aplicada:
 
-- A tela `/ferias` ganhou um bloco de simulação para usuários ADMIN.
-- O ADMIN pode selecionar um colaborador/gestor e visualizar a tela como se fosse ele.
-- Em modo de simulação, o envio de solicitações fica bloqueado para evitar lançamentos indevidos.
+- O LDAP autentica e identifica o usuário.
+- O perfil funcional da aplicação vem exclusivamente da planilha `3609445264215940 CONTROLE_DP`, coluna `USER TYPE`.
+- `USER TYPE = ADMIN` ou `Administrador` => grupo `Administrador` / role `admin`.
+- `USER TYPE = DP`, `RH` ou equivalentes => grupo `DP` / role `DP`.
+- Demais valores => `USER`.
 
-## 3. Gestor visualiza o próprio saldo, mas não solicita para si
+## Causa provável do problema ADMIN virando DP
 
-- O próprio gestor passa a aparecer na lista de colaboradores visíveis, permitindo consultar saldo e períodos.
-- Se o usuário logado selecionar a si mesmo, o botão de solicitação fica bloqueado.
-- A regra também foi reforçada no backend em `processar_solicitacao`, impedindo burla por chamada direta à API.
+Na versão corrigida anterior, a busca "exata" do usuário no cadastro passou a usar comparação tolerante de e-mail. Essa comparação também aceitava apenas a parte antes do `@`.
 
-## 4. Relatório de conferência
+Se a planilha tivesse mais de uma linha com local-part parecido, por exemplo:
 
-- Adicionada a rota `/relatorios/solicitacoes.csv`.
-- A tela de solicitações ganhou um card para baixar CSV por:
-  - colaborador específico; ou
-  - todos os colaboradores da visão atual no mês/ano selecionado.
-- O relatório respeita a mesma visibilidade da tela, inclusive no modo simulação de gestor.
+- `acesso.01@dominio-a` como DP
+- `acesso.01@certare.com.br` como ADMIN
 
-## 5. Confirmação defensiva de gravação no Smartsheet
+A primeira linha encontrada poderia ser usada indevidamente, fazendo o usuário aparecer como DP.
 
-- Após enviar uma solicitação ao Smartsheet, o backend agora força um refresh e confirma se a linha aparece na planilha.
-- Se não for possível confirmar a gravação, o sistema não retorna sucesso ao usuário.
+## Correção técnica
 
-## 6. Refatoração e limpeza
+Arquivo alterado: `ferias_app/services/cadastro_service.py`
 
-- Removida uma função duplicada em `ldap_service.py`.
-- A lógica de autorização/visibilidade da tela foi concentrada em helpers internos de `pages.py`, reduzindo duplicação e facilitando manutenção.
+- A primeira etapa de busca voltou a exigir igualdade real do e-mail normalizado.
+- O fallback por local-part só roda depois que não há match exato.
+- Quando há múltiplos matches por local-part, a seleção continua determinística:
+  1. prefere mesmo domínio;
+  2. se ainda houver ambiguidade, prefere maior privilégio: ADMIN > DP > USER.
+- A normalização do `USER TYPE` agora aceita sinônimos como `Administrador`, `ADM`, `RH`, `Recursos Humanos` etc.
 
-## Validação executada
+Arquivo alterado: `ferias_app/services/permissions_service.py`
 
-- `python -m compileall -q ferias_app`
-- Teste isolado do novo normalizador de identidade.
+- `tem_grupo(email, "DP")` agora só retorna verdadeiro quando `USER TYPE = DP`.
+- ADMIN continua podendo acessar rotas de DP quando a rota pede explicitamente `DP ou Administrador`, mas não é mais classificado como pertencente ao grupo DP.
 
-Não foi possível subir a aplicação Flask localmente no sandbox porque as dependências do projeto, como `flask`, não estão instaladas neste ambiente.
+## Pontos mantidos da correção anterior
+
+- Simulação de gestor disponível somente para ADMIN.
+- Solicitações bloqueadas em modo de simulação.
+- Gestor pode consultar o próprio saldo, mas não solicitar férias para si mesmo.
+- Relatório CSV por colaborador e/ou mês.
+- Confirmação adicional após gravação da solicitação no Smartsheet.

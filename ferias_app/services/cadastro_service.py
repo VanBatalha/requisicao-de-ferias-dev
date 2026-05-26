@@ -23,6 +23,40 @@ EMAIL_ALIASES = ("EMAIL DA EMPRESA", "EMAIL", "E-MAIL", "EMAIL EMPRESA", "E-MAIL
 USER_TYPE_ALIASES = ("USER TYPE", "TIPO USUARIO", "TIPO USUÁRIO", "PERFIL")
 STATUS_ALIASES = ("STATUS", "SITUAÇÃO", "SITUACAO")
 
+
+def normalizar_user_type(value: object) -> str:
+    """Normaliza a coluna USER TYPE para ADMIN | DP | USER.
+
+    Fonte oficial de permissões: Smartsheet, planilha CONTROLE_DP, coluna
+    USER TYPE. O LDAP autentica/identifica o usuário, mas não define o perfil
+    funcional da aplicação.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return "USER"
+
+    n = norm_title(raw)
+
+    if n in {"admin", "administrador", "administrator", "adm"}:
+        return "ADMIN"
+    if n in {
+        "dp",
+        "departamento pessoal",
+        "pessoal",
+        "rh",
+        "recursos humanos",
+        "human resources",
+        "people",
+        "people ops",
+        "people operations",
+    }:
+        return "DP"
+    if n in {"user", "usuario", "usuário", "colaborador", "colaboradora"}:
+        return "USER"
+
+    return "USER"
+
+
 # Relação gestor -> subordinados (conforme versão estável)
 COL_GESTOR_DIRETO = "GESTOR DIRETO"
 COL_GESTOR_SUPERIOR = "GESTOR SUPERIOR"
@@ -91,7 +125,7 @@ def listar_colaboradores(access_token: str) -> List[Dict[str, Any]]:
         if not email:
             continue
 
-        ut = (str(_cell_value(sheet, r, cmap, *USER_TYPE_ALIASES)) or "").strip().upper()
+        ut = normalizar_user_type(_cell_value(sheet, r, cmap, *USER_TYPE_ALIASES))
         st = (str(_cell_value(sheet, r, cmap, *STATUS_ALIASES)) or "").strip().upper()
 
         gestor_direto = normalize_email_identity(str(_cell_value(sheet, r, cmap, *GESTOR_DIRETO_ALIASES)))
@@ -126,9 +160,12 @@ def get_user_row(access_token: str, email: str) -> Optional[Dict[str, Any]]:
     wanted_local = email_local_part(email)
     candidates = listar_colaboradores(access_token)
 
-    # 1) exato
+    # 1) exato: aqui precisa ser igualdade real de e-mail normalizado.
+    # Não use emails_equivalentes nesta etapa, porque ela também aceita
+    # local-part igual. Em bases com mais de uma linha parecida, isso pode
+    # fazer um usuário ADMIN ser resolvido como DP apenas pela ordem da planilha.
     for c in candidates:
-        if emails_equivalentes(c.get("email", ""), email):
+        if normalize_email_identity(c.get("email", "")) == email:
             return c
 
     # 2) fallback local-part
@@ -189,14 +226,7 @@ def canonical_email_for(access_token: str, *identifiers: str) -> str:
 def get_user_type(access_token: str, email: str) -> str:
     """Retorna o USER TYPE (ADMIN | DP | USER) baseado na coluna USER TYPE."""
     row = get_user_row(access_token, email)
-    ut = (row.get("user_type") if row else "") or ""
-    ut = ut.strip().upper()
-
-    if ut in ("ADMIN", "DP", "USER"):
-        return ut
-    if ut in ("USUARIO", "USUÁRIO"):
-        return "USER"
-    return "USER"
+    return normalizar_user_type((row.get("user_type") if row else "") or "")
 
 
 def is_ativo(access_token: str, email: str) -> bool:

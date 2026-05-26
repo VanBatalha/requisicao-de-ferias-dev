@@ -40,16 +40,28 @@ def get_user_role(email: str) -> str:
 
 
 def tem_grupo(email: str, grupo: str) -> bool:
-    """Compat com o legado (grupos: Administrador, DP, Gestor)."""
+    """Verifica grupo/perfil usando a coluna USER TYPE do Smartsheet.
+
+    Fonte de verdade:
+      - ADMIN/Administrador: USER TYPE = ADMIN
+      - DP: USER TYPE = DP
+      - USER: USER TYPE = USER
+
+    Importante: usuários ADMIN podem acessar telas de DP quando a rota pedir
+    explicitamente `DP ou Administrador`, mas ADMIN não deve ser classificado
+    como pertencente ao grupo DP. Isso evita mascarar regressões de permissão.
+    """
     grupo = (grupo or "").strip().lower()
-    role = get_user_role(email)
+    ut = get_user_type(email)
 
     if grupo in ("administrador", "admin"):
-        return role == "admin"
+        return ut == "ADMIN"
     if grupo == "dp":
-        return role in ("DP", "admin")
+        return ut == "DP"
+    if grupo in ("user", "usuario", "usuário"):
+        return ut == "USER"
     if grupo in ("gestor", "gestores"):
-        return role in ("gestor", "DP", "admin")
+        return ut in ("ADMIN", "DP") or is_gestor(email)
 
     return False
 
