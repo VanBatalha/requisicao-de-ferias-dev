@@ -46,3 +46,31 @@ Arquivo alterado: `ferias_app/services/permissions_service.py`
 - Gestor pode consultar o próprio saldo, mas não solicitar férias para si mesmo.
 - Relatório CSV por colaborador e/ou mês.
 - Confirmação adicional após gravação da solicitação no Smartsheet.
+
+## Ajuste complementar v3: prioridade para cadastro ATIVO
+
+Foi corrigido o cenário em que o mesmo usuário possui mais de uma linha na planilha `3609445264215940 CONTROLE_DP`, sendo uma matrícula/cadastro antigo com `STATUS = INATIVO` e outra referência ativa.
+
+Regra final aplicada na resolução do usuário:
+
+1. procura e-mail exato com `STATUS` ativo;
+2. se não encontrar, procura usuário/local-part equivalente com `STATUS` ativo;
+3. se só houver registros inativos, mantém a referência apenas para diagnóstico, mas não concede `USER TYPE` privilegiado;
+4. `USER TYPE` de linha inativa é ignorado e tratado como `USER` para evitar que um cadastro antigo continue dando acesso a DP/ADMIN.
+
+Arquivos alterados:
+
+- `ferias_app/services/cadastro_service.py`
+
+Principais funções ajustadas/adicionadas:
+
+- `normalizar_status`
+- `is_status_ativo_value`
+- `_row_is_active`
+- `_pick_best_user_row`
+- `get_user_row`
+- `get_user_row_by_identifiers`
+- `get_user_type`
+- `is_ativo`
+
+Com isso, o LDAP continua apenas autenticando/identificando o usuário, mas a aplicação resolve o cadastro correto no Smartsheet priorizando a linha ativa antes de ler `USER TYPE`.

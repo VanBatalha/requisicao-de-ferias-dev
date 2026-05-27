@@ -57,6 +57,90 @@ def normalizar_user_type(value: object) -> str:
     return "USER"
 
 
+STATUS_ATIVO_CANONICOS = {"", "ATIVO", "ACTIVE", "1", "SIM", "YES", "TRUE", "OK"}
+STATUS_INATIVO_CANONICOS = {
+    "INATIVO",
+    "INATIVA",
+    "INACTIVE",
+    "0",
+    "NAO",
+    "NÃO",
+    "NO",
+    "FALSE",
+    "DESLIGADO",
+    "DESLIGADA",
+    "DEMITIDO",
+    "DEMITIDA",
+}
+
+
+def normalizar_status(value: object) -> str:
+    """Normaliza a coluna STATUS para uma forma segura de comparação.
+
+    A regra do cadastro legado considera status vazio como ativo. Porém, quando
+    houver mais de uma linha para o mesmo e-mail/usuário, linhas explicitamente
+    INATIVAS nunca devem vencer linhas ATIVAS.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    n = norm_title(raw).upper()
+    if n in {"NAO", "NÃO"}:
+        return "NAO"
+    return n
+
+
+def is_status_ativo_value(value: object) -> bool:
+    """Retorna se um valor de STATUS deve ser considerado ativo.
+
+    Mantém compatibilidade com a versão estável: quando STATUS está vazio ou
+    vem com valor desconhecido, assume ativo. Somente valores explicitamente
+    inativos bloqueiam permissões/saldos.
+    """
+    st = normalizar_status(value)
+    if st in STATUS_INATIVO_CANONICOS:
+        return False
+    if st in STATUS_ATIVO_CANONICOS:
+        return True
+    return True
+
+
+def _row_is_active(row: Dict[str, Any] | None) -> bool:
+    return bool(row) and is_status_ativo_value((row or {}).get("status") or (row or {}).get("status_raw"))
+
+
+def _candidate_score(row: Dict[str, Any]) -> int:
+    """Pontuação estável para desempate entre linhas equivalentes.
+
+    A linha ativa sempre é filtrada antes desta função. O score só desempata
+    duplicidades remanescentes mantendo a compatibilidade da v2: ADMIN > DP > USER.
+    """
+    ut = (row.get("user_type") or "").strip().upper()
+    if ut == "ADMIN":
+        return 3
+    if ut == "DP":
+        return 2
+    return 1
+
+
+def _pick_best_user_row(matches: List[Dict[str, Any]], wanted_email: str) -> Optional[Dict[str, Any]]:
+    """Escolhe a melhor linha entre candidatos já filtrados por tipo de match."""
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    domain = wanted_email.split("@", 1)[1] if "@" in wanted_email else ""
+    if domain:
+        same_domain = [m for m in matches if safe_lower(m.get("email") or "").endswith("@" + domain)]
+        if same_domain:
+            matches = same_domain
+
+    matches = sorted(matches, key=_candidate_score, reverse=True)
+    return matches[0]
+
+
 # Relação gestor -> subordinados (conforme versão estável)
 COL_GESTOR_DIRETO = "GESTOR DIRETO"
 COL_GESTOR_SUPERIOR = "GESTOR SUPERIOR"
@@ -126,7 +210,8 @@ def listar_colaboradores(access_token: str) -> List[Dict[str, Any]]:
             continue
 
         ut = normalizar_user_type(_cell_value(sheet, r, cmap, *USER_TYPE_ALIASES))
-        st = (str(_cell_value(sheet, r, cmap, *STATUS_ALIASES)) or "").strip().upper()
+        st_raw = (str(_cell_value(sheet, r, cmap, *STATUS_ALIASES)) or "").strip()
+        st = normalizar_status(st_raw)
 
         gestor_direto = normalize_email_identity(str(_cell_value(sheet, r, cmap, *GESTOR_DIRETO_ALIASES)))
         gestor_superior = normalize_email_identity(str(_cell_value(sheet, r, cmap, *GESTOR_SUPERIOR_ALIASES)))
@@ -139,6 +224,8 @@ def listar_colaboradores(access_token: str) -> List[Dict[str, Any]]:
                 "email_local": email_local_part(email),
                 "user_type": ut,
                 "status": st,
+                "status_raw": st_raw,
+                "ativo": is_status_ativo_value(st),
                 "gestor_direto": gestor_direto,
                 "gestor_superior": gestor_superior,
                 "gestor": gestor_fallback,
@@ -148,10 +235,17 @@ def listar_colaboradores(access_token: str) -> List[Dict[str, Any]]:
 
 
 def get_user_row(access_token: str, email: str) -> Optional[Dict[str, Any]]:
-    """Localiza o usuário no cadastro.
+    """Localiza o usuário no cadastro priorizando sempre o registro ATIVO.
 
-    1) tenta match exato por email
-    2) fallback por local-part (antes do @) caso LDAP devolva domínio diferente
+    Ordem de resolução:
+    1) e-mail exato + STATUS ativo
+    2) local-part/usuário equivalente + STATUS ativo
+    3) e-mail exato inativo, apenas como referência sem conceder privilégio
+    4) local-part inativo, apenas como referência sem conceder privilégio
+
+    Essa ordem evita que uma matrícula/cadastro antigo com STATUS=INATIVO
+    continue definindo USER TYPE, principalmente em bases com duplicidade de
+    cadastro para o mesmo e-mail/usuário.
     """
     email = normalize_email_identity(email)
     if not email:
@@ -160,55 +254,72 @@ def get_user_row(access_token: str, email: str) -> Optional[Dict[str, Any]]:
     wanted_local = email_local_part(email)
     candidates = listar_colaboradores(access_token)
 
-    # 1) exato: aqui precisa ser igualdade real de e-mail normalizado.
-    # Não use emails_equivalentes nesta etapa, porque ela também aceita
-    # local-part igual. Em bases com mais de uma linha parecida, isso pode
-    # fazer um usuário ADMIN ser resolvido como DP apenas pela ordem da planilha.
-    for c in candidates:
-        if normalize_email_identity(c.get("email", "")) == email:
-            return c
+    exact_matches = [
+        c for c in candidates
+        if normalize_email_identity(c.get("email", "")) == email
+    ]
 
-    # 2) fallback local-part
+    active_exact = [c for c in exact_matches if _row_is_active(c)]
+    if active_exact:
+        if len(active_exact) < len(exact_matches):
+            log.info(
+                "Cadastro: ignorando %s registro(s) inativo(s) para email exato %s",
+                len(exact_matches) - len(active_exact),
+                email,
+            )
+        return _pick_best_user_row(active_exact, email)
+
+    local_matches: List[Dict[str, Any]] = []
     if wanted_local:
-        matches = [c for c in candidates if c.get("email_local") == wanted_local]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            # Se houver múltiplos (domínios diferentes), tenta:
-            # 1) preferir o mesmo domínio do email informado
-            dom = email.split("@", 1)[1] if "@" in email else ""
-            for c in matches:
-                em = c.get("email", "")
-                if dom and safe_lower(em).endswith("@" + dom):
-                    return c
+        local_matches = [c for c in candidates if c.get("email_local") == wanted_local]
+        active_local = [c for c in local_matches if _row_is_active(c)]
+        if active_local:
+            if exact_matches:
+                log.info(
+                    "Cadastro: email %s possui registro exato inativo; usando cadastro ativo equivalente por usuário/local-part.",
+                    email,
+                )
+            return _pick_best_user_row(active_local, email)
 
-            # 2) preferir o de maior privilégio (ADMIN > DP > USER)
-            def _score(row: Dict[str, Any]) -> int:
-                ut = (row.get("user_type") or "").strip().upper()
-                return 3 if ut == "ADMIN" else (2 if ut == "DP" else 1)
+    if exact_matches:
+        log.warning(
+            "Cadastro: email %s possui somente registro(s) inativo(s); nenhum USER TYPE privilegiado será concedido.",
+            email,
+        )
+        return _pick_best_user_row(exact_matches, email)
 
-            matches.sort(key=_score, reverse=True)
-            return matches[0]
+    if local_matches:
+        log.warning(
+            "Cadastro: usuário/local-part %s possui somente registro(s) inativo(s); nenhum USER TYPE privilegiado será concedido.",
+            wanted_local,
+        )
+        return _pick_best_user_row(local_matches, email)
 
     return None
-
 
 def get_user_row_by_identifiers(access_token: str, *identifiers: str) -> Optional[Dict[str, Any]]:
     """Localiza o usuário aceitando múltiplas identidades vindas do LDAP.
 
     Ex.: mail, userPrincipalName e sAMAccountName podem divergir entre si.
-    A primeira identidade que casar com o cadastro vence.
+    Quando algum identificador resolver para cadastro INATIVO, continuamos
+    procurando nos demais identificadores para priorizar uma referência ATIVA.
     """
     seen = set()
+    inactive_or_fallback: List[Dict[str, Any]] = []
+
     for identifier in identifiers:
         norm = normalize_email_identity(identifier)
         if not norm or norm in seen:
             continue
         seen.add(norm)
         row = get_user_row(access_token, norm)
-        if row:
+        if not row:
+            continue
+        if _row_is_active(row):
             return row
-    return None
+        inactive_or_fallback.append(row)
+
+    return inactive_or_fallback[0] if inactive_or_fallback else None
 
 
 def canonical_email_for(access_token: str, *identifiers: str) -> str:
@@ -224,19 +335,28 @@ def canonical_email_for(access_token: str, *identifiers: str) -> str:
 
 
 def get_user_type(access_token: str, email: str) -> str:
-    """Retorna o USER TYPE (ADMIN | DP | USER) baseado na coluna USER TYPE."""
+    """Retorna o USER TYPE (ADMIN | DP | USER) somente de cadastro ativo.
+
+    Se a única linha encontrada estiver INATIVA, retornamos USER para evitar que
+    perfis antigos (ex.: DP/ADMIN de matrícula antiga) sejam reutilizados.
+    """
     row = get_user_row(access_token, email)
-    return normalizar_user_type((row.get("user_type") if row else "") or "")
+    if not row:
+        return "USER"
+    if not _row_is_active(row):
+        log.warning(
+            "Cadastro: USER TYPE ignorado para %s porque o cadastro resolvido está inativo.",
+            email,
+        )
+        return "USER"
+    return normalizar_user_type(row.get("user_type") or "")
 
 
 def is_ativo(access_token: str, email: str) -> bool:
     row = get_user_row(access_token, email)
-    st = (row.get("status") if row else "") or ""
-    st = st.strip().upper()
-    # comportamento da versão estável: se não existir status, assume ativo
-    if st == "":
-        return True
-    return st in ("ATIVO", "ACTIVE", "1", "SIM", "YES", "TRUE", "OK")
+    if row is None:
+        return False
+    return _row_is_active(row)
 
 
 def subordinados_do_gestor(access_token: str, gestor_email: str) -> List[Dict[str, Any]]:
