@@ -132,6 +132,31 @@ def _formatar_data_br(value: Any) -> str:
     return d.strftime("%d/%m/%Y") if d else ""
 
 
+def _coerce_date(value: Any) -> Optional[dt.date]:
+    """Converte datas vindas do PostgreSQL/JSON em dt.date para os templates."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "nan", "nat"}:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return dt.datetime.strptime(text[:19], fmt).date()
+        except Exception:
+            pass
+    return _parse_date(text)
+
+
+def _periodo_label(numero: int, inicio: Optional[dt.date], fim: Optional[dt.date], fallback: str = "") -> str:
+    if inicio and fim:
+        return f"Período {numero} — {inicio.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}"
+    return fallback or f"Período {numero}"
+
+
 def _row_identity_filter(query, email: str):
     email = safe_lower(email or "")
     local = _email_local(email)
@@ -323,15 +348,30 @@ def get_resumo_ferias_postgres(email: str) -> Dict[str, Any]:
             periodo_atual = None
     periodos = []
     if isinstance(periodo_atual, dict):
+        try:
+            numero_periodo = int(periodo_atual.get("numero") or 1)
+        except Exception:
+            numero_periodo = 1
+        inicio_periodo = _coerce_date(periodo_atual.get("inicio"))
+        fim_periodo = _coerce_date(periodo_atual.get("fim"))
+        label_periodo = _periodo_label(numero_periodo, inicio_periodo, fim_periodo, str(periodo_atual.get("label") or ""))
+        periodo_atual = {
+            **periodo_atual,
+            "numero": numero_periodo,
+            "inicio": inicio_periodo,
+            "fim": fim_periodo,
+            "label": label_periodo,
+        }
         periodos.append({
-            "numero": int(periodo_atual.get("numero") or 1),
-            "inicio": periodo_atual.get("inicio"),
-            "fim": periodo_atual.get("fim"),
+            "numero": numero_periodo,
+            "inicio": inicio_periodo,
+            "fim": fim_periodo,
             "direito": max(0, regular_direito),
             "usados": max(0, regular_usados),
             "reservados": max(0, regular_reservados),
             "saldo": max(0, regular_saldo),
-            "label": periodo_atual.get("label") or "Período atual",
+            "label": label_periodo,
+            "atual": True,
         })
     total = int((getattr(comp, "total_solicitacoes", None) if comp else None) or 0)
     if total <= 0:

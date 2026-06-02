@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, date
 from typing import Optional
 import json
+import os
+import re
 
 from sqlalchemy import (
     Column, Integer, String, Date, DateTime, Boolean, JSON, Text,
@@ -16,9 +18,27 @@ from sqlalchemy.dialects.postgresql import JSON as PGJSON
 Base = declarative_base()
 
 
+def _model_schema_name() -> str:
+    """Schema PostgreSQL onde as tabelas do app ficam.
+
+    Mantém o mesmo padrão do postgres_service. Usar schema explícito nos
+    modelos evita que conexões com search_path diferente consultem tabelas
+    duplicadas no public ou criem estruturas fora de ferias_app.
+    """
+    schema = (os.getenv("DB_SCHEMA") or "ferias_app").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+        schema = "ferias_app"
+    return schema
+
+
+_MODEL_SCHEMA = _model_schema_name()
+
+
+
 class Colaborador(Base):
     """Cadastro base do colaborador - origem CONTROLE_DP (Smartsheet)."""
     __tablename__ = 'colaboradores'
+    __table_args__ = {'schema': _MODEL_SCHEMA}
 
     id = Column(Integer, primary_key=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
@@ -56,9 +76,10 @@ class Colaborador(Base):
 class ColaboradorComplemento(Base):
     """Dados complementares e saldos calculados do colaborador."""
     __tablename__ = 'colaborador_complemento'
+    __table_args__ = {'schema': _MODEL_SCHEMA}
 
     id = Column(Integer, primary_key=True)
-    colaborador_id = Column(Integer, ForeignKey('colaboradores.id'), nullable=False, unique=True)
+    colaborador_id = Column(Integer, ForeignKey(f'{_MODEL_SCHEMA}.colaboradores.id'), nullable=False, unique=True)
     user_type = Column(String(50), nullable=True)  # USER, DP, ADMIN
     gestor_direto_email = Column(String(255), nullable=True)
     gestor_superior_email = Column(String(255), nullable=True)
@@ -112,11 +133,12 @@ class ColaboradorComplemento(Base):
 class Solicitacao(Base):
     """Solicitações, reservas e ajustes de férias/licença."""
     __tablename__ = 'solicitacoes'
+    __table_args__ = {'schema': _MODEL_SCHEMA}
 
     id = Column(Integer, primary_key=True)
     origem_sheet_id = Column(String(50), nullable=True)  # ID da sheet Smartsheet
     smartsheet_row_id = Column(String(50), nullable=True)  # ID da linha no Smartsheet
-    colaborador_id = Column(Integer, ForeignKey('colaboradores.id'), nullable=True)
+    colaborador_id = Column(Integer, ForeignKey(f'{_MODEL_SCHEMA}.colaboradores.id'), nullable=True)
     colaborador_email = Column(String(255), nullable=False, index=True)
     gestor_solicitante_email = Column(String(255), nullable=True)
     criado_por = Column(String(255), nullable=True)
@@ -159,6 +181,7 @@ class Solicitacao(Base):
 class AdminConfig(Base):
     """Configurações e exceções do Painel Admin."""
     __tablename__ = 'admin_configs'
+    __table_args__ = {'schema': _MODEL_SCHEMA}
 
     id = Column(Integer, primary_key=True)
     rule_type = Column(String(100), nullable=False)  # tipo de regra
@@ -180,6 +203,7 @@ class AdminConfig(Base):
 class Auditoria(Base):
     """Registro de auditoria de ações administrativas."""
     __tablename__ = 'auditoria'
+    __table_args__ = {'schema': _MODEL_SCHEMA}
 
     id = Column(Integer, primary_key=True)
     actor_email = Column(String(255), nullable=False)
@@ -196,6 +220,7 @@ class Auditoria(Base):
 class SyncState(Base):
     """Controle de estado das sincronizações."""
     __tablename__ = 'sync_state'
+    __table_args__ = {'schema': _MODEL_SCHEMA}
 
     sync_name = Column(String(100), primary_key=True)  # cadastro, solicitacoes, saldos
     last_started_at = Column(DateTime, nullable=True)

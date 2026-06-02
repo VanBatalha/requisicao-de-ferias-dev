@@ -35,6 +35,19 @@ def create_app() -> Flask:
     # Contexto global para templates
     app.context_processor(inject_user_context)
 
+    @app.teardown_appcontext
+    def _close_db_session(exception=None):  # noqa: ANN001
+        # Fecha a sessão SQLAlchemy ao final de cada request.
+        # Isso evita cache de objetos entre requisições e devolve a conexão ao pool.
+        try:
+            from flask import g
+            db_session = getattr(g, "_db_session", None)
+            if db_session is not None:
+                db_session.close()
+                g._db_session = None
+        except Exception:
+            pass
+
 
     # Log de exceções (ajuda debug no Render)
     from .logging_config import get_logger  # noqa: E402
