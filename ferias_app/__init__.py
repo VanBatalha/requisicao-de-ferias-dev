@@ -25,6 +25,10 @@ def create_app() -> Flask:
 
     app.secret_key = settings.secret_key
 
+    # Inicializa o banco de dados PostgreSQL
+    from .services.postgres_service import init_db
+    init_db()
+
     # Rotas (Blueprint)
     app.register_blueprint(bp)
 

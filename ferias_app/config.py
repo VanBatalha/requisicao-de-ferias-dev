@@ -12,7 +12,12 @@ class Settings:
     # Flask
     secret_key: str = _env("FLASK_SECRET_KEY", "uma_chave_bem_grande_e_fixa_aqui")
 
-    # Smartsheet
+    # PostgreSQL (novo - principal)
+    database_url: str = _env("DATABASE_URL", "")
+    # Formato esperado: postgresql://usuario:senha@host:porta/database
+    # Ex: postgresql://user:pass@localhost:5432/ferias_app
+
+    # Smartsheet (legado - mantido para compatibilidade, mas não usado mais)
     # Método A (recomendado): backend usa um único token (conta de serviço)
     access_token: str = _env("SMARTSHEET_ACCESS_TOKEN", "")
 
@@ -38,7 +43,7 @@ class Settings:
     ldap_verify_cert: str = _env("LDAP_VERIFY_CERT", "true")  # true/false
     ldap_starttls: str = _env("LDAP_STARTTLS", "false")  # true/false (para ldap:// na porta 389)
 
-    # Smartsheet sheet IDs
+    # Smartsheet sheet IDs (legado - não mais usado com PostgreSQL)
     # Defaults iguais à versão estável (evita "sheet_id=0" quando a env não está setada no Render)
     # Você ainda pode sobrescrever no Render com as variáveis de ambiente.
     id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "3609445264215940") or "3609445264215940")

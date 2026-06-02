@@ -9,7 +9,6 @@ from flask import session
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..utils import safe_lower, parse_date, format_date
-from .identity_service import emails_equivalentes, normalize_email_identity
 from .auth_service import get_access_token
 from .smartsheet_service import get_sheet, add_rows, columns_map
 
@@ -172,7 +171,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     if not user:
         return {"ok": False, "message": "Não autenticado."}, 401
 
-    gestor_email = normalize_email_identity(user.get("email") or "")
+    gestor_email = safe_lower(user.get("email") or "")
     if not gestor_email:
         return {"ok": False, "message": "Usuário inválido."}, 400
 
@@ -181,7 +180,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     if not (is_dp_or_admin or is_gestor(gestor_email)):
         return {"ok": False, "message": "Apenas gestores (ou DP/Admin) podem solicitar férias."}, 403
 
-    colaborador_email = normalize_email_identity(payload.get("colaborador_email") or payload.get("colaborador") or "")
+    colaborador_email = safe_lower(payload.get("colaborador_email") or payload.get("colaborador") or "")
     tipo_solicitacao = (payload.get("tipo_solicitacao") or payload.get("tipo_solicitacao_out") or "").strip()
     data_inicio_str = payload.get("data_inicio")
     data_fim_str = payload.get("data_fim")
@@ -195,12 +194,6 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if not colaborador_email:
         return {"ok": False, "message": "Selecione o colaborador."}, 400
-
-    if emails_equivalentes(colaborador_email, gestor_email):
-        return {
-            "ok": False,
-            "message": "Você pode consultar o próprio saldo, mas a solicitação de férias para si próprio deve ser feita pelo fluxo responsável/DP.",
-        }, 403
 
     if not tipo_solicitacao:
         if saldo_tipo_req == "PREMIUM":
@@ -217,11 +210,11 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if is_dp_or_admin:
         permitidos = set(listar_emails_colaboradores(only_ativos=True))
-        if not any(emails_equivalentes(colaborador_email, item) for item in permitidos):
+        if colaborador_email not in permitidos:
             return {"ok": False, "message": "Colaborador não encontrado (ou não está Ativo no cadastro)."}, 400
     else:
         permitidos = set(get_subordinados(gestor_email))
-        if not any(emails_equivalentes(colaborador_email, item) for item in permitidos):
+        if colaborador_email not in permitidos:
             return {"ok": False, "message": "Colaborador não pertence à sua equipe (ou não está vinculado ao seu gestor)."}, 403
 
     try:
@@ -408,56 +401,6 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         rows_to_add.append(new_row)
         inserted_ids = add_rows_rest(get_settings().id_folha_solicitacoes, rows_to_add, timeout=25)
         invalidate_sheet_cache(get_settings().id_folha_solicitacoes)
-
-        # Confirmação defensiva: evita retornar sucesso quando a API aceitou a
-        # chamada, mas a linha não aparece no sheet após refresh.
-        sheet_confirm = get_sheet_solicitacoes(client, force_refresh=True)
-        inserted_set = {int(x) for x in (inserted_ids or []) if x}
-
-        def _confirm_row_exists(sheet_obj) -> bool:
-            try:
-                cols = get_col_map(sheet_obj)
-                colsN = _cols_norm_map(cols)
-                c_colab = _col_id(colsN, "COLABORADOR")
-                c_inicio = _col_id(colsN, "DATA INICIO", "DATA INÍCIO", "DATA INICIAL")
-                c_fim = _col_id(colsN, "DATA FIM", "DATA FINAL")
-                c_dias = _col_id(colsN, "DIAS")
-                c_solic = _col_id(colsN, "SOLICITAÇÃO", "SOLICITACAO")
-                for row in getattr(sheet_obj, "rows", []) or []:
-                    if inserted_set and int(getattr(row, "id", 0) or 0) in inserted_set:
-                        return True
-
-                    def _cell(cid):
-                        return next((c.value for c in row.cells if c.column_id == (cid or -1)), None)
-
-                    row_email = normalize_email_identity(_cell(c_colab) or "")
-                    row_inicio = _parse_date_value(_cell(c_inicio))
-                    row_fim = _parse_date_value(_cell(c_fim))
-                    row_inicio_s = row_inicio.strftime("%Y-%m-%d") if row_inicio else str(_cell(c_inicio) or "").strip()
-                    row_fim_s = row_fim.strftime("%Y-%m-%d") if row_fim else str(_cell(c_fim) or "").strip()
-                    try:
-                        row_dias = int(float(_cell(c_dias) or 0))
-                    except Exception:
-                        row_dias = 0
-                    row_solic = str(_cell(c_solic) or "").strip().upper()
-                    if (
-                        emails_equivalentes(row_email, colaborador_email)
-                        and row_inicio_s == str(data_inicio_str or "").strip()
-                        and row_fim_s == str(data_fim_str or "").strip()
-                        and row_dias == int(dias_novos or 0)
-                        and row_solic == str(tipo_solicitacao_out or "").strip().upper()
-                    ):
-                        return True
-            except Exception:
-                return bool(inserted_set)
-            return False
-
-        if not _confirm_row_exists(sheet_confirm):
-            return {
-                "ok": False,
-                "message": "A solicitação foi enviada ao Smartsheet, mas não foi possível confirmar a gravação da linha. Tente novamente ou acione o DP antes de considerar a solicitação registrada.",
-                "inserted_ids": inserted_ids,
-            }, 502
     except Exception as e:
         return {"ok": False, "message": f"Erro ao salvar solicitação: {e}"}, 500
 

@@ -108,5 +108,4 @@ def canonical_status(value: str) -> str:
 
 
 def norm_email(email: str) -> str:
-    from .identity_service import normalize_email_identity
-    return normalize_email_identity(email)
+    return safe_lower(email)
