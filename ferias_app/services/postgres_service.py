@@ -19,6 +19,26 @@ from ..models import (
 
 log = get_logger(__name__)
 
+
+def _db_schema_name() -> str:
+    """Schema PostgreSQL usado pelo app.
+
+    Por padrão usa ferias_app, que é o schema onde a base importada está.
+    Mantém validação simples para evitar SQL inválido/injeção via variável de ambiente.
+    """
+    import re
+
+    schema = (os.getenv("DB_SCHEMA") or "ferias_app").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+        log.warning("DB_SCHEMA inválido (%r); usando ferias_app", schema)
+        schema = "ferias_app"
+    return schema
+
+
+def _quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
 # Engine e SessionLocal globais
 _ENGINE = None
 _SessionLocal = None
@@ -34,12 +54,31 @@ def init_db():
     if not db_url:
         raise ValueError("DATABASE_URL não configurada.")
     
+    schema = _db_schema_name()
+    schema_sql = _quote_ident(schema)
+
     _ENGINE = create_engine(db_url, echo=False, pool_pre_ping=True)
+
+    @event.listens_for(_ENGINE, "connect")
+    def _set_search_path(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(f"SET search_path TO {schema_sql}, public")
+        finally:
+            cursor.close()
+
+    # Garante o schema antes do create_all. A aplicação usa modelos sem schema fixo,
+    # então o search_path precisa apontar para ferias_app; caso contrário o SQLAlchemy
+    # pode procurar/criar tabelas no public e não enxergar os dados importados.
+    with _ENGINE.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}"))
+        conn.execute(text(f"SET search_path TO {schema_sql}, public"))
+
     _SessionLocal = sessionmaker(bind=_ENGINE, expire_on_commit=False)
     
-    # Cria as tabelas se não existirem
+    # Cria as tabelas se não existirem dentro do schema configurado
     Base.metadata.create_all(_ENGINE)
-    log.info("Banco de dados PostgreSQL inicializado")
+    log.info("Banco de dados PostgreSQL inicializado no schema %s", schema)
 
 
 def get_db_session() -> Session:

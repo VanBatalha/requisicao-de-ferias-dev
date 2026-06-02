@@ -38,16 +38,61 @@ def emails_equivalentes(a: str | None, b: str | None) -> bool:
     return _email_local(a) != "" and _email_local(a) == _email_local(b)
 
 
+def _is_missing_value(value: Any) -> bool:
+    """Identifica valores vazios vindos do PostgreSQL/Excel/pandas."""
+    if value is None:
+        return True
+    try:
+        # pandas.NaT/NaN chegam aqui quando dados foram importados do Excel.
+        import pandas as pd  # type: ignore
+        result = pd.isna(value)
+        if isinstance(result, bool):
+            return result
+    except Exception:
+        pass
+    return False
+
+
 def _as_dict(value: Any) -> Dict[str, Any]:
+    """Converte JSON/dict do banco em dict legado.
+
+    Em algumas importações do Excel, o campo Colaborador.raw_payload foi salvo como
+    a linha inteira do Excel, contendo outro campo chamado ``raw_payload`` com o JSON
+    real do Smartsheet. Este normalizador mescla esse JSON interno para que campos
+    como USER TYPE, GESTOR DIRETO e GESTOR SUPERIOR continuem disponíveis mesmo em
+    bases já importadas antes da correção do importador.
+    """
+    out: Dict[str, Any] = {}
+
     if isinstance(value, dict):
-        return dict(value)
-    if isinstance(value, str) and value.strip():
+        out = dict(value)
+    elif isinstance(value, str) and value.strip():
         try:
             data = json.loads(value)
-            return data if isinstance(data, dict) else {}
+            out = data if isinstance(data, dict) else {}
         except Exception:
-            return {}
-    return {}
+            out = {}
+
+    nested = out.get("raw_payload")
+    nested_dict: Dict[str, Any] = {}
+    if isinstance(nested, dict):
+        nested_dict = dict(nested)
+    elif isinstance(nested, str) and nested.strip() and nested.strip().lower() != "nan":
+        try:
+            data = json.loads(nested)
+            if isinstance(data, dict):
+                nested_dict = data
+        except Exception:
+            nested_dict = {}
+
+    if nested_dict:
+        merged = dict(out)
+        # O JSON original do Smartsheet deve ter prioridade, pois contém as colunas
+        # legadas com os nomes esperados pela aplicação.
+        merged.update(nested_dict)
+        out = merged
+
+    return {k: v for k, v in out.items() if not _is_missing_value(v)}
 
 
 def _is_ativo_value(value: Any) -> bool:
@@ -407,44 +452,3 @@ def existe_solicitacao_duplicada(colaborador_email: str, tipo_solicitacao: str, 
             if canonical_status(row.status or "").upper() in statuses_bloqueio:
                 return True
     return False
-
-
-def listar_periodos_premium_postgres(
-    email: str,
-    win_start: Optional[dt.date] = None,
-    win_end: Optional[dt.date] = None,
-    *,
-    exclude_row_id: Optional[int] = None,
-    include_statuses: Optional[Iterable[str]] = None,
-) -> List[Dict[str, Any]]:
-    """Lista períodos PREMIUM já registrados para validar fracionamento."""
-    session = get_db_session()
-    query = session.query(Solicitacao).filter(
-        Solicitacao.colaborador_email == safe_lower(email),
-        Solicitacao.is_ajuste.is_(False),
-        Solicitacao.saldo_tipo == "PREMIUM",
-    )
-    if exclude_row_id:
-        query = query.filter(Solicitacao.id != int(exclude_row_id))
-    rows = query.all()
-    allowed = {norm_status(s) for s in (include_statuses or []) if s}
-    out: List[Dict[str, Any]] = []
-    for sol in rows:
-        st_norm = norm_status(sol.status or "")
-        if allowed and st_norm not in allowed:
-            continue
-        ini = _parse_date(sol.data_inicio)
-        fim = _parse_date(sol.data_fim)
-        if win_start and ini and ini < win_start:
-            continue
-        if win_end and ini and ini >= win_end:
-            continue
-        out.append({
-            "row_id": sol.id,
-            "ini": ini,
-            "fim": fim,
-            "dias": int(sol.dias or 0),
-            "status": sol.status or "",
-            "solicitacao": sol.solicitacao or "",
-        })
-    return out

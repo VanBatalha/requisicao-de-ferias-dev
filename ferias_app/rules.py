@@ -285,20 +285,6 @@ def validate_licenca_certariana(
         _listar_periodos_premium,
     )
 
-    # No Render, a fonte principal é PostgreSQL. Mantemos os helpers legados
-    # como fallback para instalações ainda ligadas ao Smartsheet.
-    try:
-        from .services.postgres_compat_service import (
-            postgres_enabled,
-            get_admissao_postgres,
-            listar_periodos_premium_postgres,
-        )
-        if postgres_enabled():
-            _colaborador_admissao = get_admissao_postgres  # type: ignore[assignment]
-            _listar_periodos_premium = listar_periodos_premium_postgres  # type: ignore[assignment]
-    except Exception:
-        pass
-
     try:
         dias = float(dias_novos)
     except Exception:

@@ -1,331 +1,389 @@
 #!/usr/bin/env python3
 """
-Script para importar dados do arquivo Excel (export_ferias_app.xlsx) 
-para o PostgreSQL.
+Importa dados do arquivo export_ferias_app.xlsx para o PostgreSQL.
 
 Uso:
     python import_data.py <database_url> <excel_file>
 
 Exemplo:
-    python import_data.py "postgresql://user:pass@localhost:5432/ferias_app" export_ferias_app.xlsx
+    python import_data.py "postgresql://user:pass@host:5432/ferias_app" export_ferias_app.xlsx
 """
 
-import sys
-import os
+from __future__ import annotations
+
 import json
-from datetime import datetime
+import math
+import os
+import sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 # Importar modelos
 sys.path.insert(0, os.path.dirname(__file__))
-from ferias_app.models import (
-    Base, Colaborador, ColaboradorComplemento, Solicitacao, 
-    AdminConfig, SyncState
+from ferias_app.models import (  # noqa: E402
+    Base,
+    Colaborador,
+    ColaboradorComplemento,
+    Solicitacao,
+    SyncState,
 )
 
 
-def import_colaboradores(session, excel_file):
-    """Importa dados da aba 'colaboradores'."""
+def db_schema_name() -> str:
+    import re
+    schema = (os.getenv("DB_SCHEMA") or "ferias_app").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+        schema = "ferias_app"
+    return schema
+
+
+def quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def configure_engine_schema(engine):
+    schema = db_schema_name()
+    schema_sql = quote_ident(schema)
+
+    @event.listens_for(engine, "connect")
+    def _set_search_path(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(f"SET search_path TO {schema_sql}, public")
+        finally:
+            cursor.close()
+
+    with engine.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}"))
+        conn.execute(text(f"SET search_path TO {schema_sql}, public"))
+    return engine
+
+
+def is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    try:
+        result = pd.isna(value)
+        if isinstance(result, bool):
+            return result
+    except Exception:
+        pass
+    return False
+
+
+def clean_str(value: Any, *, lower: bool = False, upper: bool = False) -> Optional[str]:
+    if is_missing(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    if lower:
+        text = text.lower()
+    if upper:
+        text = text.upper()
+    return text
+
+
+def parse_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    if is_missing(value):
+        return default
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return default
+
+
+def parse_bool(value: Any, default: bool = True) -> bool:
+    if is_missing(value):
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "sim", "yes", "y", "s", "ativo"}:
+        return True
+    if text in {"0", "false", "nao", "não", "no", "n", "inativo"}:
+        return False
+    return bool(value)
+
+
+def parse_date(value: Any):
+    if is_missing(value):
+        return None
+    try:
+        return pd.to_datetime(value).date()
+    except Exception:
+        return None
+
+
+def parse_datetime(value: Any):
+    if is_missing(value):
+        return None
+    try:
+        return pd.to_datetime(value).to_pydatetime()
+    except Exception:
+        return None
+
+
+def to_jsonable(value: Any) -> Any:
+    if is_missing(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return value
+
+
+def parse_json_value(value: Any) -> Any:
+    if is_missing(value):
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() == "nan":
+            return None
+        try:
+            return json.loads(text)
+        except Exception:
+            return None
+    return value
+
+
+def raw_payload_from_row(row: pd.Series) -> Dict[str, Any]:
+    """Usa o JSON real da coluna raw_payload quando existir.
+
+    Na versão anterior, o importador salvava a linha inteira do Excel dentro de
+    raw_payload, deixando o JSON original aninhado. Isso impedia a aplicação de
+    ler campos legados como USER TYPE e GESTOR DIRETO em alguns cenários.
+    """
+    parsed = parse_json_value(row.get("raw_payload"))
+    if isinstance(parsed, dict):
+        return parsed
+    return {str(k): to_jsonable(v) for k, v in row.to_dict().items() if not is_missing(v)}
+
+
+def import_colaboradores(session, excel_file: str) -> None:
+    """Importa/atualiza a aba 'colaboradores'."""
     print("📥 Importando colaboradores...")
     df = pd.read_excel(excel_file, sheet_name="colaboradores")
-    
+
     for _, row in df.iterrows():
-        # Pula se o email já existe
-        email = str(row.get('email', '')).strip().lower()
-        if not email or email == 'nan':
+        email = clean_str(row.get("email"), lower=True)
+        if not email:
             continue
-        
-        existing = session.query(Colaborador).filter_by(email=email).first()
-        if existing:
-            continue
-        
-        # Parse data de admissão
-        data_adm = None
-        if pd.notna(row.get('data_admissao')):
-            try:
-                data_adm = pd.to_datetime(row['data_admissao']).date()
-            except:
-                pass
-        
-        colab = Colaborador(
-            email=email,
-            nome_completo=str(row.get('nome_completo', '')).strip() or None,
-            status=str(row.get('status', '')).strip().upper() or None,
-            data_admissao=data_adm,
-            setor=str(row.get('setor', '')).strip() or None,
-            cargo=str(row.get('cargo', '')).strip() or None,
-            regime=str(row.get('regime', '')).strip() or None,
-            dias_direito=int(row.get('dias_direito', 0)) if pd.notna(row.get('dias_direito')) else None,
-            origem_sheet_id=str(row.get('origem_sheet_id', '')).strip() or None,
-            origem_row_id=str(row.get('origem_row_id', '')).strip() or None,
-            raw_payload=row.to_dict() if pd.notna(row.get('raw_payload')) else None,
-        )
-        session.add(colab)
-    
+
+        colab = session.query(Colaborador).filter_by(email=email).first()
+        if not colab:
+            kwargs: Dict[str, Any] = {}
+            excel_id = parse_int(row.get("id"))
+            if excel_id and not session.query(Colaborador).filter_by(id=excel_id).first():
+                # Preserva o ID do export quando a base está vazia/nova. Isso mantém
+                # as FKs do colaborador_complemento compatíveis com o XLSX original.
+                kwargs["id"] = excel_id
+            colab = Colaborador(**kwargs)
+            session.add(colab)
+
+        colab.email = email
+        colab.nome_completo = clean_str(row.get("nome_completo"))
+        colab.status = clean_str(row.get("status"), upper=True)
+        colab.data_admissao = parse_date(row.get("data_admissao"))
+        colab.setor = clean_str(row.get("setor"))
+        colab.cargo = clean_str(row.get("cargo"))
+        colab.regime = clean_str(row.get("regime"))
+        colab.dias_direito = parse_int(row.get("dias_direito"), 0)
+        colab.origem_sheet_id = clean_str(row.get("origem_sheet_id"))
+        colab.origem_row_id = clean_str(row.get("origem_row_id"))
+        colab.raw_payload = raw_payload_from_row(row)
+
     session.commit()
     count = session.query(Colaborador).count()
     print(f"✅ {count} colaboradores no banco")
 
 
-def import_colaborador_complemento(session, excel_file):
-    """Importa dados da aba 'colaborador_complemento'."""
+def _old_id_to_email(excel_file: str) -> Dict[int, str]:
+    df_colabs = pd.read_excel(excel_file, sheet_name="colaboradores")
+    out: Dict[int, str] = {}
+    for _, row in df_colabs.iterrows():
+        old_id = parse_int(row.get("id"))
+        email = clean_str(row.get("email"), lower=True)
+        if old_id and email:
+            out[old_id] = email
+    return out
+
+
+def import_colaborador_complemento(session, excel_file: str) -> None:
+    """Importa/atualiza a aba 'colaborador_complemento'.
+
+    A relação é feita por e-mail usando o ID antigo do XLSX apenas como ponte.
+    Assim o importador também corrige bases que foram importadas sem preservar
+    os IDs originais dos colaboradores.
+    """
     print("📥 Importando dados complementares...")
     df = pd.read_excel(excel_file, sheet_name="colaborador_complemento")
-    
+    id_email = _old_id_to_email(excel_file)
+
     for _, row in df.iterrows():
-        colab_id = row.get('colaborador_id')
-        
-        if pd.isna(colab_id):
+        old_colab_id = parse_int(row.get("colaborador_id"))
+        email = id_email.get(old_colab_id or -1)
+
+        colab = None
+        if email:
+            colab = session.query(Colaborador).filter_by(email=email).first()
+        if not colab and old_colab_id:
+            colab = session.query(Colaborador).filter_by(id=old_colab_id).first()
+        if not colab:
             continue
-        
-        # Verifica se o complemento já existe
-        existing = session.query(ColaboradorComplemento).filter_by(
-            colaborador_id=int(colab_id)
-        ).first()
-        if existing:
-            continue
-        
-        # Parse periodo_aquisitivo_atual se for JSON string
-        periodo = None
-        if pd.notna(row.get('periodo_aquisitivo_atual')):
-            try:
-                if isinstance(row['periodo_aquisitivo_atual'], str):
-                    periodo = json.loads(row['periodo_aquisitivo_atual'])
-                else:
-                    periodo = row['periodo_aquisitivo_atual']
-            except:
-                pass
-        
-        # Parse calculated_at
-        calc_at = None
-        if pd.notna(row.get('calculated_at')):
-            try:
-                calc_at = pd.to_datetime(row['calculated_at'])
-            except:
-                pass
-        
-        compl = ColaboradorComplemento(
-            colaborador_id=int(colab_id),
-            user_type=str(row.get('user_type', '')).strip() or None,
-            gestor_direto_email=str(row.get('gestor_direto_email', '')).strip().lower() or None,
-            gestor_superior_email=str(row.get('gestor_superior_email', '')).strip().lower() or None,
-            ativo_no_app=bool(row.get('ativo_no_app', True)) if pd.notna(row.get('ativo_no_app')) else True,
-            saldo_regular_direito=int(row.get('saldo_regular_direito', 0)),
-            saldo_regular_usado=int(row.get('saldo_regular_usado', 0)),
-            saldo_regular_reservado=int(row.get('saldo_regular_reservado', 0)),
-            saldo_regular_disponivel=int(row.get('saldo_regular_disponivel', 0)),
-            saldo_premium_direito=int(row.get('saldo_premium_direito', 0)),
-            saldo_premium_usado=int(row.get('saldo_premium_usado', 0)),
-            saldo_premium_reservado=int(row.get('saldo_premium_reservado', 0)),
-            saldo_premium_disponivel=int(row.get('saldo_premium_disponivel', 0)),
-            total_solicitacoes=int(row.get('total_solicitacoes', 0)),
-            periodo_aquisitivo_atual=periodo,
-            calculated_at=calc_at,
-            origem_sheet_id=str(row.get('origem_sheet_id', '')).strip() or None,
-            origem_row_id=str(row.get('origem_row_id', '')).strip() or None,
-        )
-        session.add(compl)
-    
+
+        compl = session.query(ColaboradorComplemento).filter_by(colaborador_id=colab.id).first()
+        if not compl:
+            compl = ColaboradorComplemento(colaborador_id=colab.id)
+            session.add(compl)
+
+        compl.user_type = clean_str(row.get("user_type"), upper=True) or "USER"
+        compl.gestor_direto_email = clean_str(row.get("gestor_direto_email"), lower=True)
+        compl.gestor_superior_email = clean_str(row.get("gestor_superior_email"), lower=True)
+        compl.ativo_no_app = parse_bool(row.get("ativo_no_app"), True)
+        compl.flags_internas = parse_json_value(row.get("flags_internas")) or {}
+        compl.saldo_regular_direito = parse_int(row.get("saldo_regular_direito"), 0) or 0
+        compl.saldo_regular_usado = parse_int(row.get("saldo_regular_usado"), 0) or 0
+        compl.saldo_regular_reservado = parse_int(row.get("saldo_regular_reservado"), 0) or 0
+        compl.saldo_regular_disponivel = parse_int(row.get("saldo_regular_disponivel"), 0) or 0
+        compl.saldo_premium_direito = parse_int(row.get("saldo_premium_direito"), 0) or 0
+        compl.saldo_premium_usado = parse_int(row.get("saldo_premium_usado"), 0) or 0
+        compl.saldo_premium_reservado = parse_int(row.get("saldo_premium_reservado"), 0) or 0
+        compl.saldo_premium_disponivel = parse_int(row.get("saldo_premium_disponivel"), 0) or 0
+        compl.total_solicitacoes = parse_int(row.get("total_solicitacoes"), 0) or 0
+        compl.periodo_aquisitivo_atual = parse_json_value(row.get("periodo_aquisitivo_atual")) or {}
+        compl.calculated_at = parse_datetime(row.get("calculated_at"))
+        compl.origem_sheet_id = clean_str(row.get("origem_sheet_id"))
+        compl.origem_row_id = clean_str(row.get("origem_row_id"))
+
     session.commit()
     count = session.query(ColaboradorComplemento).count()
     print(f"✅ {count} complementos no banco")
 
 
-def import_solicitacoes(session, excel_file):
-    """Importa dados da aba 'solicitacoes'."""
+def import_solicitacoes(session, excel_file: str) -> None:
+    """Importa solicitações ainda inexistentes da aba 'solicitacoes'."""
     print("📥 Importando solicitações...")
     df = pd.read_excel(excel_file, sheet_name="solicitacoes")
-    
+
     for _, row in df.iterrows():
-        email = str(row.get('colaborador_email', '')).strip().lower()
-        if not email or email == 'nan':
+        email = clean_str(row.get("colaborador_email"), lower=True)
+        if not email:
             continue
-        
-        # Busca o colaborador pelo email
-        colab = session.query(Colaborador).filter_by(email=email).first()
-        
-        # Parse datas
-        data_inicio = None
-        if pd.notna(row.get('data_inicio')):
-            try:
-                data_inicio = pd.to_datetime(row['data_inicio']).date()
-            except:
-                pass
-        
-        data_fim = None
-        if pd.notna(row.get('data_fim')):
-            try:
-                data_fim = pd.to_datetime(row['data_fim']).date()
-            except:
-                pass
-        
+
+        data_inicio = parse_date(row.get("data_inicio"))
+        data_fim = parse_date(row.get("data_fim"))
         if not data_inicio or not data_fim:
             continue
-        
-        # Parse dates para source_*
-        source_created = None
-        if pd.notna(row.get('source_created_at')):
-            try:
-                source_created = pd.to_datetime(row['source_created_at'])
-            except:
-                pass
-        
-        source_modified = None
-        if pd.notna(row.get('source_modified_at')):
-            try:
-                source_modified = pd.to_datetime(row['source_modified_at'])
-            except:
-                pass
-        
-        # Parse metadata e raw_payload se forem JSON strings
-        metadata = None
-        if pd.notna(row.get('metadata')):
-            try:
-                if isinstance(row['metadata'], str):
-                    metadata = json.loads(row['metadata'])
-                else:
-                    metadata = row['metadata']
-            except:
-                pass
-        
-        raw_payload = None
-        if pd.notna(row.get('raw_payload')):
-            try:
-                if isinstance(row['raw_payload'], str):
-                    raw_payload = json.loads(row['raw_payload'])
-                else:
-                    raw_payload = row['raw_payload']
-            except:
-                pass
-        
+
+        smartsheet_row_id = clean_str(row.get("smartsheet_row_id"))
+        if smartsheet_row_id:
+            existing = session.query(Solicitacao).filter_by(smartsheet_row_id=smartsheet_row_id).first()
+            if existing:
+                continue
+
+        colab = session.query(Colaborador).filter_by(email=email).first()
+
         sol = Solicitacao(
-            origem_sheet_id=str(row.get('origem_sheet_id', '')).strip() or None,
-            smartsheet_row_id=str(row.get('smartsheet_row_id', '')).strip() or None,
+            origem_sheet_id=clean_str(row.get("origem_sheet_id")),
+            smartsheet_row_id=smartsheet_row_id,
             colaborador_id=colab.id if colab else None,
             colaborador_email=email,
-            gestor_solicitante_email=str(row.get('gestor_solicitante_email', '')).strip().lower() or None,
-            criado_por=str(row.get('criado_por', '')).strip().lower() or None,
-            solicitacao=str(row.get('solicitacao', '')).strip() or None,
-            saldo_tipo=str(row.get('saldo_tipo', 'REGULAR')).strip().upper(),
+            gestor_solicitante_email=clean_str(row.get("gestor_solicitante_email"), lower=True),
+            criado_por=clean_str(row.get("criado_por"), lower=True),
+            solicitacao=clean_str(row.get("solicitacao")),
+            saldo_tipo=clean_str(row.get("saldo_tipo"), upper=True) or "REGULAR",
             data_inicio=data_inicio,
             data_fim=data_fim,
-            dias=int(row.get('dias', 0)),
-            status=str(row.get('status', 'PENDENTE')).strip().upper(),
-            observacoes=str(row.get('observacoes', '')).strip() or None,
-            is_ajuste=bool(row.get('is_ajuste', False)) if pd.notna(row.get('is_ajuste')) else False,
-            metadata_json=metadata,
-            raw_payload=raw_payload,
-            source_created_at=source_created,
-            source_modified_at=source_modified,
+            dias=parse_int(row.get("dias"), 0) or 0,
+            status=clean_str(row.get("status"), upper=True) or "PENDENTE",
+            observacoes=clean_str(row.get("observacoes")),
+            is_ajuste=parse_bool(row.get("is_ajuste"), False),
+            metadata_json=parse_json_value(row.get("metadata")),
+            raw_payload=parse_json_value(row.get("raw_payload")),
+            source_created_at=parse_datetime(row.get("source_created_at")),
+            source_modified_at=parse_datetime(row.get("source_modified_at")),
         )
         session.add(sol)
-    
+
     session.commit()
     count = session.query(Solicitacao).count()
     print(f"✅ {count} solicitações no banco")
 
 
-def import_sync_state(session, excel_file):
-    """Importa dados da aba 'sync_state'."""
+def import_sync_state(session, excel_file: str) -> None:
+    """Importa/atualiza a aba 'sync_state'."""
     print("📥 Importando estado de sincronizações...")
     df = pd.read_excel(excel_file, sheet_name="sync_state")
-    
+
     for _, row in df.iterrows():
-        sync_name = str(row.get('sync_name', '')).strip()
+        sync_name = clean_str(row.get("sync_name"))
         if not sync_name:
             continue
-        
-        existing = session.query(SyncState).filter_by(sync_name=sync_name).first()
-        if existing:
-            continue
-        
-        # Parse datas
-        last_started = None
-        if pd.notna(row.get('last_started_at')):
-            try:
-                last_started = pd.to_datetime(row['last_started_at'])
-            except:
-                pass
-        
-        last_finished = None
-        if pd.notna(row.get('last_finished_at')):
-            try:
-                last_finished = pd.to_datetime(row['last_finished_at'])
-            except:
-                pass
-        
-        last_success = None
-        if pd.notna(row.get('last_success_at')):
-            try:
-                last_success = pd.to_datetime(row['last_success_at'])
-            except:
-                pass
-        
-        extra = None
-        if pd.notna(row.get('extra')):
-            try:
-                if isinstance(row['extra'], str):
-                    extra = json.loads(row['extra'])
-                else:
-                    extra = row['extra']
-            except:
-                pass
-        
-        sync = SyncState(
-            sync_name=sync_name,
-            last_started_at=last_started,
-            last_finished_at=last_finished,
-            last_success_at=last_success,
-            last_status=str(row.get('last_status', '')).strip() or None,
-            last_error=str(row.get('last_error', '')).strip() or None,
-            extra=extra,
-        )
-        session.add(sync)
-    
+
+        sync = session.query(SyncState).filter_by(sync_name=sync_name).first()
+        if not sync:
+            sync = SyncState(sync_name=sync_name)
+            session.add(sync)
+
+        sync.last_started_at = parse_datetime(row.get("last_started_at"))
+        sync.last_finished_at = parse_datetime(row.get("last_finished_at"))
+        sync.last_success_at = parse_datetime(row.get("last_success_at"))
+        sync.last_status = clean_str(row.get("last_status"))
+        sync.last_error = clean_str(row.get("last_error"))
+        sync.extra = parse_json_value(row.get("extra"))
+
     session.commit()
     count = session.query(SyncState).count()
     print(f"✅ {count} sync states no banco")
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print("Uso: python import_data.py <database_url> <excel_file>")
         print("Exemplo: python import_data.py 'postgresql://user:pass@localhost:5432/ferias_app' export_ferias_app.xlsx")
         sys.exit(1)
-    
+
     database_url = sys.argv[1]
     excel_file = sys.argv[2]
-    
+
     if not Path(excel_file).exists():
         print(f"❌ Arquivo não encontrado: {excel_file}")
         sys.exit(1)
-    
+
     print(f"🔄 Conectando ao banco: {database_url.split('@')[1] if '@' in database_url else 'local'}")
-    
-    # Criar engine e sessionmaker
-    engine = create_engine(database_url, echo=False)
+
+    engine = configure_engine_schema(create_engine(database_url, echo=False))
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
-    
+
     try:
         import_colaboradores(session, excel_file)
         import_colaborador_complemento(session, excel_file)
         import_solicitacoes(session, excel_file)
         import_sync_state(session, excel_file)
-        
+
         print("\n✅ Importação concluída com sucesso!")
-        
-        # Resumo
         colabs = session.query(Colaborador).count()
+        complementos = session.query(ColaboradorComplemento).count()
         sols = session.query(Solicitacao).count()
-        print(f"   📊 Total: {colabs} colaboradores, {sols} solicitações")
-        
+        print(f"   📊 Total: {colabs} colaboradores, {complementos} complementos, {sols} solicitações")
+
     except Exception as e:
+        session.rollback()
         print(f"\n❌ Erro durante importação: {e}")
         import traceback
         traceback.print_exc()

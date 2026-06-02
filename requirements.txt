@@ -6,3 +6,5 @@ python-dotenv>=1.0,<2
 ldap3>=2.9,<3
 SQLAlchemy>=2.0,<3
 psycopg2-binary>=2.9,<3
+pandas>=2.2,<3
+openpyxl>=3.1,<4
