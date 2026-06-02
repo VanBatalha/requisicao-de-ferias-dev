@@ -36,6 +36,13 @@ def _iter_solicitacoes(sheet_sol):
 
 
 def listar_solicitacoes(email: str):
+    try:
+        from .postgres_compat_service import postgres_enabled, listar_solicitacoes_postgres
+        if postgres_enabled():
+            return listar_solicitacoes_postgres(email)
+    except Exception:
+        pass
+
     client = get_smartsheet_client()
     if not client:
         return []
@@ -65,6 +72,13 @@ def listar_solicitacoes(email: str):
 
 
 def listar_solicitacoes_equipes(emails: list[str]):
+    try:
+        from .postgres_compat_service import postgres_enabled, listar_solicitacoes_equipes_postgres
+        if postgres_enabled():
+            return listar_solicitacoes_equipes_postgres(emails)
+    except Exception:
+        pass
+
     client = get_smartsheet_client()
     if not client:
         return []
@@ -97,6 +111,13 @@ def listar_solicitacoes_equipes(emails: list[str]):
 
 
 def listar_solicitacoes_todas():
+    try:
+        from .postgres_compat_service import postgres_enabled, listar_solicitacoes_todas_postgres
+        if postgres_enabled():
+            return listar_solicitacoes_todas_postgres()
+    except Exception:
+        pass
+
     client = get_smartsheet_client()
     if not client:
         return []
@@ -126,6 +147,13 @@ def listar_solicitacoes_todas():
 
 
 def get_ferias_mes(mes, ano):
+    try:
+        from .postgres_compat_service import postgres_enabled, get_ferias_mes_postgres
+        if postgres_enabled():
+            return get_ferias_mes_postgres(mes, ano)
+    except Exception:
+        pass
+
     client = get_smartsheet_client()
     if not client:
         return []

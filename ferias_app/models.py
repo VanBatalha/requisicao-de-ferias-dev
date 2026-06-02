@@ -128,7 +128,7 @@ class Solicitacao(Base):
     status = Column(String(50), nullable=False, default='PENDENTE')  # APROVADA, PENDENTE, REJEITADA
     observacoes = Column(Text, nullable=True)
     is_ajuste = Column(Boolean, default=False)  # True se for ajuste
-    metadata = Column(PGJSON, nullable=True)  # JSON com dados técnicos auxiliares
+    metadata_json = Column("metadata", PGJSON, nullable=True)  # JSON com dados técnicos auxiliares
     raw_payload = Column(PGJSON, nullable=True)  # JSON original do Smartsheet
     source_created_at = Column(DateTime, nullable=True)
     source_modified_at = Column(DateTime, nullable=True)
@@ -152,6 +152,7 @@ class Solicitacao(Base):
             'status': self.status,
             'observacoes': self.observacoes,
             'is_ajuste': self.is_ajuste,
+            'metadata': self.metadata_json,
         }
 
 

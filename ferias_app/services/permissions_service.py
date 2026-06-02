@@ -10,14 +10,40 @@ from .cadastro_service import get_user_type as _get_user_type, subordinados_do_g
 log = get_logger(__name__)
 
 
+def _postgres_available() -> bool:
+    try:
+        from .postgres_compat_service import postgres_enabled
+        return postgres_enabled()
+    except Exception:
+        return False
+
+
 def get_user_type(email: str) -> str:
-    """USER TYPE vindo da planilha de cadastro (USER TYPE)."""
+    """Retorna USER TYPE (ADMIN | DP | USER).
+
+    Prioridade:
+    1. PostgreSQL, quando DATABASE_URL está configurada.
+    2. Smartsheet legado, como fallback.
+    """
+    email = safe_lower(email or "")
+    if not email:
+        return "USER"
+
+    if _postgres_available():
+        try:
+            from .postgres_compat_service import get_user_type_postgres
+            ut = get_user_type_postgres(email)
+            log.info("Permissões(PostgreSQL): email=%s user_type=%s", email, ut)
+            return ut
+        except Exception as exc:
+            log.warning("Falha ao consultar permissões no PostgreSQL para %s: %s", email, exc)
+
     token = get_access_token()
     if not token:
         log.warning("Permissões: SMARTSHEET_ACCESS_TOKEN ausente; usando USER para %s", email)
         return "USER"
     ut = _get_user_type(token, email)
-    log.info("Permissões: email=%s user_type=%s", email, ut)
+    log.info("Permissões(Smartsheet): email=%s user_type=%s", email, ut)
     return ut
 
 
@@ -55,6 +81,23 @@ def tem_grupo(email: str, grupo: str) -> bool:
 
 
 def _subordinados_emails(email: str) -> List[str]:
+    email = safe_lower(email or "")
+    if not email:
+        return []
+
+    if _postgres_available():
+        try:
+            from .postgres_compat_service import subordinados_do_gestor_postgres
+            subs = subordinados_do_gestor_postgres(email) or []
+            out = []
+            for s in subs:
+                em = safe_lower((s or {}).get("EMAIL DA EMPRESA") or (s or {}).get("email") or "")
+                if em:
+                    out.append(em)
+            return sorted(set(out))
+        except Exception as exc:
+            log.warning("Falha ao consultar subordinados no PostgreSQL para %s: %s", email, exc)
+
     token = get_access_token()
     if not token:
         return []
@@ -63,14 +106,13 @@ def _subordinados_emails(email: str) -> List[str]:
     for s in subs:
         try:
             if isinstance(s, dict):
-                em = safe_lower(s.get("email") or "")
+                em = safe_lower(s.get("email") or s.get("EMAIL DA EMPRESA") or "")
             else:
                 em = safe_lower(str(s))
             if em:
                 out.append(em)
         except Exception:
             continue
-    # unique + sorted
     return sorted(set(out))
 
 

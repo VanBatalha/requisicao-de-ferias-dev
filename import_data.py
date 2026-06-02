@@ -217,7 +217,7 @@ def import_solicitacoes(session, excel_file):
             status=str(row.get('status', 'PENDENTE')).strip().upper(),
             observacoes=str(row.get('observacoes', '')).strip() or None,
             is_ajuste=bool(row.get('is_ajuste', False)) if pd.notna(row.get('is_ajuste')) else False,
-            metadata=metadata,
+            metadata_json=metadata,
             raw_payload=raw_payload,
             source_created_at=source_created,
             source_modified_at=source_modified,

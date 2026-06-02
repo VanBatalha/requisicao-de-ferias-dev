@@ -38,6 +38,14 @@ def _max_periodo_aquisitivo_numero(value) -> int:
 
 
 def get_resumo_ferias(email: str):
+    # Caminho principal no Render: PostgreSQL. Mantém fallback para Smartsheet legado.
+    try:
+        from .postgres_compat_service import postgres_enabled, get_resumo_ferias_postgres
+        if postgres_enabled():
+            return get_resumo_ferias_postgres(email)
+    except Exception:
+        pass
+
     client = get_smartsheet_client()
     if not client:
         raise RuntimeError("Usuário não autenticado")

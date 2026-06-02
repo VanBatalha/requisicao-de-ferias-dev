@@ -722,9 +722,43 @@ _applyTipoFerias();
     }
   }
 
+  function formatDatePtBrFromInput(value){
+    if (!value) return '-';
+    const parts = value.split('-');
+    if (parts.length !== 3) return value;
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+
+  function montarResumoConfirmacao(){
+    const colaboradorSelect = document.getElementById('colaborador_email');
+    const colaboradorNome = colaboradorSelect?.selectedOptions?.[0]?.textContent?.trim() || colaboradorSelect?.value || '-';
+    const tipo = document.getElementById('tipo_solicitacao')?.value || '-';
+    const saldoTipo = document.getElementById('saldo_tipo')?.value === 'PREMIUM' ? 'Licença Certariana' : 'Férias regulares';
+    const inicio = formatDatePtBrFromInput(document.getElementById('data_inicio')?.value || '');
+    const fim = formatDatePtBrFromInput(document.getElementById('data_fim')?.value || '');
+    const obs = (document.getElementById('observacoes')?.value || '').trim();
+    const linhas = [
+      'Confirma a criação desta solicitação?',
+      '',
+      `Colaborador: ${colaboradorNome}`,
+      `Tipo: ${tipo}`,
+      `Tipo de férias: ${saldoTipo}`,
+      `Período: ${inicio} a ${fim}`,
+    ];
+    if (obs) linhas.push(`Observações: ${obs}`);
+    linhas.push('', 'Ao confirmar, a solicitação será registrada no sistema.');
+    return linhas.join('\n');
+  }
+
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (btnSubmitSolicitacao?.disabled) return;
+
+    if (!window.confirm(montarResumoConfirmacao())) {
+      if (resultado) resultado.textContent = 'Criação cancelada. Nenhuma solicitação foi registrada.';
+      return;
+    }
+
     if (resultado) resultado.textContent = 'Enviando...';
     if (btnSubmitSolicitacao) {
       btnSubmitSolicitacao.disabled = true;
@@ -747,7 +781,7 @@ _applyTipoFerias();
 
     if (btnSubmitSolicitacao) {
       btnSubmitSolicitacao.disabled = false;
-      btnSubmitSolicitacao.textContent = btnSubmitSolicitacao.data.originalText || '➕ Fazer Solicitação';
+      btnSubmitSolicitacao.textContent = btnSubmitSolicitacao.dataset.originalText || '➕ Fazer Solicitação';
     }
   });
 

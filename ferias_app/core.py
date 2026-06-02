@@ -210,3 +210,28 @@ def get_user_grupos(email: str):
     if ut == "DP":
         return ["DP"]
     return ["USER"]
+
+# ------------------------------------------------------------
+# PostgreSQL como fonte principal quando DATABASE_URL está configurado.
+# As telas ainda esperam o formato legado do Smartsheet; por isso usamos a
+# camada de compatibilidade para preservar as chaves esperadas pelos templates.
+# ------------------------------------------------------------
+try:  # pragma: no cover - proteção para ambientes legados sem banco
+    from .services.postgres_compat_service import (
+        postgres_enabled as _pg_enabled,
+        listar_colaboradores_legacy as _pg_listar_colaboradores,
+        is_colaborador_ativo_legacy as _pg_is_colaborador_ativo,
+    )
+
+    if _pg_enabled():
+        def listar_colaboradores(*args, **kwargs):  # type: ignore[no-redef]
+            only_ativos = kwargs.get("only_ativos") if "only_ativos" in kwargs else None
+            return _pg_listar_colaboradores(only_ativos=only_ativos)
+
+        def listar_colaboradores_cached():  # type: ignore[no-redef]
+            return _pg_listar_colaboradores()
+
+        def is_colaborador_ativo(colab: dict) -> bool:  # type: ignore[no-redef]
+            return _pg_is_colaborador_ativo(colab)
+except Exception:
+    pass

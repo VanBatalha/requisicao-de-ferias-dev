@@ -159,7 +159,7 @@ def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]
             status=(payload.get('status') or 'PENDENTE').upper(),
             observacoes=payload.get('observacoes', ''),
             is_ajuste=payload.get('is_ajuste', False),
-            metadata=payload.get('metadata'),
+            metadata_json=payload.get('metadata'),
             raw_payload=payload.get('raw_payload'),
             source_created_at=datetime.utcnow(),
         )

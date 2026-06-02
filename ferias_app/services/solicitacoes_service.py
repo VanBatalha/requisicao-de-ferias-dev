@@ -168,6 +168,27 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         validate_request_period,
     )
 
+    pg_enabled = False
+    pg_listar_emails = None
+    pg_get_regime = None
+    pg_get_admissao = None
+    pg_existe_duplicada = None
+    try:
+        from .postgres_compat_service import (
+            postgres_enabled,
+            listar_emails_colaboradores_postgres,
+            get_regime_postgres,
+            get_admissao_postgres,
+            existe_solicitacao_duplicada,
+        )
+        pg_enabled = postgres_enabled()
+        pg_listar_emails = listar_emails_colaboradores_postgres
+        pg_get_regime = get_regime_postgres
+        pg_get_admissao = get_admissao_postgres
+        pg_existe_duplicada = existe_solicitacao_duplicada
+    except Exception:
+        pg_enabled = False
+
     if not user:
         return {"ok": False, "message": "Não autenticado."}, 401
 
@@ -209,7 +230,10 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     is_afastamento = tipo_solicitacao_out in ("LICENÇA MATERNIDADE", "LICENÇA PATERNIDADE")
 
     if is_dp_or_admin:
-        permitidos = set(listar_emails_colaboradores(only_ativos=True))
+        if pg_enabled and pg_listar_emails:
+            permitidos = set(pg_listar_emails(only_ativos=True))
+        else:
+            permitidos = set(listar_emails_colaboradores(only_ativos=True))
         if colaborador_email not in permitidos:
             return {"ok": False, "message": "Colaborador não encontrado (ou não está Ativo no cadastro)."}, 400
     else:
@@ -239,8 +263,8 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if (not is_dp_or_admin) and (not is_afastamento):
         try:
-            regime = (_colaborador_regime(colaborador_email) or "").strip().upper()
-            adm = _colaborador_admissao(colaborador_email)
+            regime = ((pg_get_regime(colaborador_email) if pg_enabled and pg_get_regime else _colaborador_regime(colaborador_email)) or "").strip().upper()
+            adm = (pg_get_admissao(colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
             if regime == "CLT" and adm:
                 resumo_tmp = get_resumo_ferias(colaborador_email)
                 if resumo_tmp.get("total_solicitacoes", 0) <= 0:
@@ -293,7 +317,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if saldo_tipo_final == "PREMIUM" and not is_dp_or_admin:
         try:
-            adm_c = _colaborador_admissao(colaborador_email)
+            adm_c = (pg_get_admissao(colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
             if not adm_c and prem_saldo <= 0:
                 return {"ok": False, "message": "Licença Certariana ainda não está disponível para este colaborador."}, 400
             dias_base, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio) if adm_c else (0, None, None)
@@ -363,6 +387,49 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         except Exception:
             return False
         return False
+
+    if pg_enabled:
+        try:
+            if pg_existe_duplicada and pg_existe_duplicada(colaborador_email, tipo_solicitacao_out, saldo_tipo_final, dt_inicio, dt_fim, int(dias_novos or 0)):
+                return {"ok": False, "message": "Já existe uma solicitação igual para este colaborador nesse período. A duplicidade foi bloqueada."}, 400
+
+            from .postgres_service import criar_solicitacao
+            ok, msg, solicitacao_id = criar_solicitacao({
+                "colaborador_email": colaborador_email,
+                "gestor_email": gestor_email,
+                "criado_por": gestor_email,
+                "solicitacao": tipo_solicitacao_out,
+                "saldo_tipo": saldo_tipo_final,
+                "data_inicio": dt_inicio,
+                "data_fim": dt_fim,
+                "dias": int(dias_novos or 0),
+                "status": "PENDENTE",
+                "observacoes": observacoes,
+                "is_ajuste": False,
+                "metadata": {
+                    "periodo_aquisitivo": periodo_alloc_txt,
+                    "periodos_consumidos": periodo_alloc,
+                    "origem": "app_postgres",
+                },
+            })
+            if not ok:
+                return {"ok": False, "message": msg or "Erro ao salvar solicitação."}, 500
+        except Exception as e:
+            return {"ok": False, "message": f"Erro ao salvar solicitação no PostgreSQL: {e}"}, 500
+
+        saldo_base = 0 if is_afastamento else (reg_saldo if saldo_tipo_final == "REGULAR" else prem_saldo)
+        saldo_atualizado = saldo_base if is_afastamento else (saldo_base - dias_novos)
+        return {
+            "ok": True,
+            "sheet_id": None,
+            "inserted_ids": [solicitacao_id] if solicitacao_id else [],
+            "row_id": solicitacao_id,
+            "message": f"Solicitação registrada com sucesso. Saldo restante: {saldo_atualizado}.",
+            "saldo_atualizado": saldo_atualizado,
+            "saldo_tipo": saldo_tipo_final,
+            "periodo_aquisitivo": periodo_alloc_txt,
+            "periodos_consumidos": periodo_alloc,
+        }, 200
 
     try:
         client = get_smartsheet_client()
