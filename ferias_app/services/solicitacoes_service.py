@@ -196,6 +196,12 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     if not gestor_email:
         return {"ok": False, "message": "Usuário inválido."}, 400
 
+    # Segurança de servidor: em modo de simulação o usuário pode navegar e
+    # trocar o colaborador visualizado, mas nunca criar novas solicitações.
+    # Isso evita bypass caso alguém tente enviar POST manualmente.
+    if session.get("_simulated_gestor"):
+        return {"ok": False, "message": "Criação de solicitações bloqueada durante a simulação de gestor."}, 403
+
     role = get_user_role(gestor_email)
     is_dp_or_admin = role in ("DP", "admin")
     if not (is_dp_or_admin or is_gestor(gestor_email)):

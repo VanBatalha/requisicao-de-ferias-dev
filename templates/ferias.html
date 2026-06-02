@@ -344,7 +344,7 @@
         <div style="flex: 1;">
           <div style="font-weight: 700; color: #ea580c;">Modo de Simulação Ativo</div>
           <div style="font-size: 13px; margin-top: 4px; opacity: 0.9;">
-            Você está visualizando como {{ simulated_gestor }}. Os botões de ação estão desabilitados.
+            Você está visualizando como {{ simulated_gestor }}. Você pode trocar o colaborador para conferir o acesso desse gestor, mas a criação de novas solicitações fica bloqueada.
             <a href="{{ url_for('ferias.painel_admin') }}" style="color: #0369a1; text-decoration: underline;">Sair da simulação</a>
           </div>
         </div>
@@ -702,20 +702,21 @@ _applyTipoFerias();
   document.getElementById('hist-sort-order')?.addEventListener('change', applyHistoricoFilters);
   applyHistoricoFilters();
 
-  // Desabilita formulário em modo de simulação
+  // Bloqueia somente a criação de novas solicitações em simulação/visualização própria.
+  // O campo Colaborador permanece habilitado para permitir validar exatamente
+  // quais pessoas o gestor simulado consegue visualizar.
   const isSimulating = {{ 'true' if is_simulating else 'false' }};
   const isViewingOwnHolidays = {{ 'true' if is_viewing_own_holidays else 'false' }};
   if ((isSimulating || isViewingOwnHolidays) && form) {
-    const allInputs = form.querySelectorAll('input, select, textarea, button');
-    allInputs.forEach(input => {
-      if (input.id !== 'btn-submit-solicitacao' && input.type !== 'hidden') {
-        input.disabled = true;
-        input.style.opacity = '0.6';
-      }
+    const camposCriacao = form.querySelectorAll('input, select, textarea');
+    camposCriacao.forEach(input => {
+      if (input.id === 'colaborador_email' || input.type === 'hidden') return;
+      input.disabled = true;
+      input.style.opacity = '0.6';
     });
     if (btnSubmitSolicitacao) {
       btnSubmitSolicitacao.disabled = true;
-      const disableReason = isSimulating ? '🔒 Desabilitado em simulação' : '👤 Não é possível solicitar férias para você mesmo';
+      const disableReason = isSimulating ? '🔒 Criação bloqueada em simulação' : '👤 Não é possível solicitar férias para você mesmo';
       btnSubmitSolicitacao.textContent = disableReason;
       btnSubmitSolicitacao.style.opacity = '0.6';
       btnSubmitSolicitacao.style.cursor = 'not-allowed';
@@ -825,6 +826,12 @@ _applyTipoFerias();
       html += `<div style="font-weight: 700; margin-bottom: 6px;">📊 Resumo</div>`;
       html += `<div style="font-size: 13px;">Total de solicitações: <strong>${data.total}</strong></div>`;
       html += `<div style="font-size: 13px;">Total de dias: <strong>${data.total_dias}</strong></div>`;
+      if (data.gestor_referencia) {
+        html += `<div style="font-size: 13px;">Gestor/referência: <strong>${data.gestor_referencia}</strong></div>`;
+      }
+      if (typeof data.total_colaboradores_escopo !== 'undefined') {
+        html += `<div style="font-size: 13px;">Colaboradores no escopo: <strong>${data.total_colaboradores_escopo}</strong></div>`;
+      }
       html += `<div style="font-size: 13px; margin-top: 6px; display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px;">`;
       html += `<span>✓ Aprovadas: ${data.resumo_status.aprovada}</span>`;
       html += `<span>⏳ Análise: ${data.resumo_status.em_analise}</span>`;

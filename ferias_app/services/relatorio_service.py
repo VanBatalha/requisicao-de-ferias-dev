@@ -29,8 +29,24 @@ def gerar_relatorio_lancamento(
         Dicionário com dados do relatório
     """
     try:
-        # Busca todas as solicitações do gestor e seus subordinados
-        todos_emails = [gestor_email] + subordinados
+        # Busca todas as solicitações dos colaboradores dentro do escopo do gestor.
+        # Importante: o relatório deve mostrar os colaboradores que o gestor pode
+        # solicitar/acompanhar, não apenas o e-mail do gestor logado.
+        todos_emails = []
+        seen_emails = set()
+        for email in (subordinados or []):
+            email_norm = str(email or "").strip().lower()
+            if email_norm and email_norm not in seen_emails:
+                seen_emails.add(email_norm)
+                todos_emails.append(email_norm)
+
+        # Compatibilidade: se for chamada sem lista de subordinados, mantém fallback
+        # para o próprio gestor em vez de quebrar ou retornar erro.
+        if not todos_emails and gestor_email:
+            email_norm = str(gestor_email or "").strip().lower()
+            if email_norm:
+                todos_emails.append(email_norm)
+
         solicitacoes = listar_solicitacoes_equipes(todos_emails)
         
         if not solicitacoes:
@@ -46,6 +62,7 @@ def gerar_relatorio_lancamento(
                     "reservada": 0,
                 },
                 "total_dias": 0,
+                "colaboradores_escopo": todos_emails,
             }
         
         # Filtra por mês e ano se fornecidos
@@ -151,6 +168,7 @@ def gerar_relatorio_lancamento(
             "total_dias": round(total_dias, 2),
             "mes": mes,
             "ano": ano,
+            "colaboradores_escopo": todos_emails,
         }
     
     except Exception as e:
