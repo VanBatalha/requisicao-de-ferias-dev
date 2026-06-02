@@ -13,7 +13,7 @@ from flask import g
 
 from ..config import get_settings
 from ..logging_config import get_logger
-from .models import (
+from ..models import (
     Base, Colaborador, ColaboradorComplemento, Solicitacao, AdminConfig, Auditoria, SyncState
 )
 

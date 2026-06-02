@@ -95,8 +95,140 @@
   <div id="smMsg" class="muted" style="margin-top:10px;"></div>
 </div>
 
+<div class="card" style="margin-top:16px;">
+  <h2>Simulação de Gestor</h2>
+  <p class="muted">
+    Simule a visualização de um gestor específico. Você verá exatamente o que aquele gestor vê, sem poder fazer alterações.
+    Todos os botões de ação serão desabilitados durante a simulação.
+  </p>
+
+  <div class="divider"></div>
+
+  <div style="display: flex; gap: 12px; align-items: flex-end;">
+    <div style="flex: 1;">
+      <label class="muted" style="display:block; margin-bottom:6px;">Email do gestor</label>
+      <input id="simGestorEmail" class="input" placeholder="Ex.: gestor@empresa.com" autocomplete="off" />
+    </div>
+    <button class="btn" id="btnSimularGestor">Simular</button>
+    <button class="btn btn-secondary" id="btnSairSimulacao" style="display:none;">Sair da Simulação</button>
+  </div>
+
+  <div id="msgSimulacao" class="muted" style="margin-top:12px;"></div>
+  <div id="statusSimulacao" style="margin-top:12px; padding: 12px; border-radius: 8px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); display:none;">
+    <strong style="color: #22c55e;">✓ Em simulação</strong>
+    <div style="font-size: 13px; margin-top: 6px;">
+      Você está vendo a tela como: <span id="simGestorNome" style="font-weight: 600;"></span>
+    </div>
+  </div>
+</div>
+
 <script>
+  // ============================================
+  // SIMULAÇÃO DE GESTOR
+  // ============================================
+
   const $ = (id) => document.getElementById(id);
+
+  function _setSimMsg(msg, className = "muted") {
+    const el = $("msgSimulacao");
+    el.textContent = msg;
+    el.className = className;
+  }
+
+  async function verificarSimulacao() {
+    try {
+      const resp = await fetch(`/api/admin/status-simulacao`);
+      const data = await resp.json();
+      
+      if (data.in_simulation) {
+        // Mostrar que está em simulação
+        $("statusSimulacao").style.display = "block";
+        $("simGestorNome").textContent = data.simulated_gestor;
+        $("btnSimularGestor").style.display = "none";
+        $("btnSairSimulacao").style.display = "block";
+        $("simGestorEmail").value = data.simulated_gestor || "";
+        $("simGestorEmail").disabled = true;
+      } else {
+        $("statusSimulacao").style.display = "none";
+        $("btnSimularGestor").style.display = "block";
+        $("btnSairSimulacao").style.display = "none";
+        $("simGestorEmail").disabled = false;
+        _setSimMsg("");
+      }
+    } catch (e) {
+      console.error("Erro ao verificar simulação:", e);
+    }
+  }
+
+  async function simularGestor() {
+    const email = ($("simGestorEmail").value || "").trim().toLowerCase();
+    
+    if (!email) {
+      _setSimMsg("Digite o email do gestor.", "text-warning");
+      return;
+    }
+
+    _setSimMsg("Iniciando simulação...", "muted");
+
+    try {
+      const resp = await fetch(`/api/admin/simular-gestor`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gestor_email: email }),
+      });
+      const data = await resp.json();
+
+      if (!data.ok) {
+        _setSimMsg(data.message || "Erro ao simular gestor.", "text-danger");
+        return;
+      }
+
+      _setSimMsg("Simulação iniciada com sucesso! Redirecionando...", "text-success");
+      setTimeout(() => {
+        window.location.href = "{{ url_for('ferias.ferias') }}";
+      }, 800);
+    } catch (e) {
+      _setSimMsg("Erro ao iniciar simulação.", "text-danger");
+      console.error(e);
+    }
+  }
+
+  async function sairSimulacao() {
+    if (!confirm("Deseja encerrar a simulação?")) return;
+
+    _setSimMsg("Encerrando simulação...", "muted");
+
+    try {
+      const resp = await fetch(`/api/admin/sair-simulacao`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await resp.json();
+
+      if (!data.ok) {
+        _setSimMsg(data.message || "Erro ao encerrar simulação.", "text-danger");
+        return;
+      }
+
+      _setSimMsg("Simulação encerrada. Redirecionando...", "text-success");
+      setTimeout(() => {
+        window.location.href = "{{ url_for('ferias.painel_admin') }}";
+      }, 800);
+    } catch (e) {
+      _setSimMsg("Erro ao encerrar simulação.", "text-danger");
+      console.error(e);
+    }
+  }
+
+  $("btnSimularGestor")?.addEventListener("click", simularGestor);
+  $("btnSairSimulacao")?.addEventListener("click", sairSimulacao);
+
+  // Verifica status ao carregar
+  verificarSimulacao();
+</script>
+
+<script>
+  // ============================================
 
   let usuarioSelecionado = null;
 

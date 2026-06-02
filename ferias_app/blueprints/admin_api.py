@@ -22,6 +22,7 @@ from ..core import (
     tem_grupo,
 )
 from ..rules import build_request_window_override_settings
+from ..services.simulation_service import set_simulated_gestor, get_simulated_gestor, clear_simulated_gestor, is_in_simulation
 
 @bp.route("/api/admin/listar-usuarios")
 def api_admin_listar_usuarios():
@@ -196,6 +197,75 @@ def api_admin_set_same_month():
     save_runtime_settings(settings)
 
     return jsonify({"ok": True, "same_month": settings["same_month"]})
+
+# ============================================
+# API: ADMIN - SIMULAÇÃO DE GESTOR
+# ============================================
+
+@bp.route("/api/admin/simular-gestor", methods=["POST"])
+def api_admin_simular_gestor():
+    """Inicia simulação de um gestor no painel admin."""
+    user = session.get("user")
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    gestor_email = (payload.get("gestor_email") or "").strip().lower()
+
+    if not gestor_email:
+        return jsonify({"ok": False, "message": "Email do gestor é obrigatório"}), 400
+
+    # Verifica se o gestor existe e está ativo
+    try:
+        colaboradores = listar_colaboradores()
+        gestor_existe = any(
+            safe_lower(c.get("EMAIL DA EMPRESA") or "") == gestor_email and is_colaborador_ativo(c)
+            for c in colaboradores
+        )
+        if not gestor_existe:
+            return jsonify({"ok": False, "message": "Gestor não encontrado ou inativo"}), 404
+
+        # Inicia simulação
+        set_simulated_gestor(gestor_email)
+        return jsonify({
+            "ok": True,
+            "message": f"Simulação iniciada para {gestor_email}",
+            "simulated_gestor": gestor_email
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao simular gestor: {str(e)}"}), 500
+
+
+@bp.route("/api/admin/sair-simulacao", methods=["POST"])
+def api_admin_sair_simulacao():
+    """Encerra simulação de gestor."""
+    user = session.get("user")
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    try:
+        clear_simulated_gestor()
+        return jsonify({
+            "ok": True,
+            "message": "Simulação encerrada com sucesso"
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao encerrar simulação: {str(e)}"}), 500
+
+
+@bp.route("/api/admin/status-simulacao", methods=["GET"])
+def api_admin_status_simulacao():
+    """Retorna status atual da simulação."""
+    user = session.get("user")
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    simulated_gestor = get_simulated_gestor()
+    return jsonify({
+        "ok": True,
+        "in_simulation": bool(simulated_gestor),
+        "simulated_gestor": simulated_gestor
+    })
 
 # ============================================
 # API: dp - COLABORADORES (Planilha 360944526 - COLABORADORES (Planilha 3609445264215940)

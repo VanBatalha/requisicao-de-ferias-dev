@@ -337,6 +337,33 @@
     <h3 style="margin:0">Nova Solicitação</h3>
     <div class="divider"></div>
 
+    {% if is_simulating %}
+    <div style="padding: 12px 14px; border-radius: 10px; background: rgba(249, 115, 22, 0.1); border: 1px solid rgba(249, 115, 22, 0.3); margin-bottom: 16px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 20px;">⚠️</span>
+        <div style="flex: 1;">
+          <div style="font-weight: 700; color: #ea580c;">Modo de Simulação Ativo</div>
+          <div style="font-size: 13px; margin-top: 4px; opacity: 0.9;">
+            Você está visualizando como {{ simulated_gestor }}. Os botões de ação estão desabilitados.
+            <a href="{{ url_for('ferias.painel_admin') }}" style="color: #0369a1; text-decoration: underline;">Sair da simulação</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% elif is_viewing_own_holidays %}
+    <div style="padding: 12px 14px; border-radius: 10px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); margin-bottom: 16px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 20px;">ℹ️</span>
+        <div style="flex: 1;">
+          <div style="font-weight: 700; color: #0369a1;">Visualizando suas férias</div>
+          <div style="font-size: 13px; margin-top: 4px; opacity: 0.9;">
+            Você está visualizando suas próprias férias. Os botões de ação estão desabilitados nesta visualização.
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
     <form method="post" id="form-solicitacao">
 
       <!-- Linha principal (campos categóricos) -->
@@ -474,6 +501,45 @@
     {% else %}
       <div class="muted">Nenhuma solicitação encontrada.</div>
     {% endif %}
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0">📋 Relatório de Lançamento</h3>
+    <div class="divider"></div>
+    <p class="muted">Gere um relatório detalhado de lançamentos de férias por colaborador ou período específico.</p>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 14px;">
+      <div class="form-group-inline">
+        <label for="rel-mes">Mês (opcional)</label>
+        <select id="rel-mes" class="form-control">
+          <option value="">Todos</option>
+          <option value="1">Janeiro</option>
+          <option value="2">Fevereiro</option>
+          <option value="3">Março</option>
+          <option value="4">Abril</option>
+          <option value="5">Maio</option>
+          <option value="6">Junho</option>
+          <option value="7">Julho</option>
+          <option value="8">Agosto</option>
+          <option value="9">Setembro</option>
+          <option value="10">Outubro</option>
+          <option value="11">Novembro</option>
+          <option value="12">Dezembro</option>
+        </select>
+      </div>
+      
+      <div class="form-group-inline">
+        <label for="rel-ano">Ano (opcional)</label>
+        <input id="rel-ano" type="number" class="form-control" min="2020" max="2030" placeholder="Ex.: 2026" />
+      </div>
+      
+      <div class="form-group-inline">
+        <label>&nbsp;</label>
+        <button type="button" class="btn btn-primary" id="btn-gerar-relatorio" style="width: 100%; min-width: 0; margin: 0;">Gerar Relatório</button>
+      </div>
+    </div>
+    
+    <div id="rel-resultado" style="margin-top: 14px;"></div>
   </div>
 
 </div><!-- /content-narrow -->
@@ -636,6 +702,26 @@ _applyTipoFerias();
   document.getElementById('hist-sort-order')?.addEventListener('change', applyHistoricoFilters);
   applyHistoricoFilters();
 
+  // Desabilita formulário em modo de simulação
+  const isSimulating = {{ 'true' if is_simulating else 'false' }};
+  const isViewingOwnHolidays = {{ 'true' if is_viewing_own_holidays else 'false' }};
+  if ((isSimulating || isViewingOwnHolidays) && form) {
+    const allInputs = form.querySelectorAll('input, select, textarea, button');
+    allInputs.forEach(input => {
+      if (input.id !== 'btn-submit-solicitacao' && input.type !== 'hidden') {
+        input.disabled = true;
+        input.style.opacity = '0.6';
+      }
+    });
+    if (btnSubmitSolicitacao) {
+      btnSubmitSolicitacao.disabled = true;
+      const disableReason = isSimulating ? '🔒 Desabilitado em simulação' : '👤 Não é possível solicitar férias para você mesmo';
+      btnSubmitSolicitacao.textContent = disableReason;
+      btnSubmitSolicitacao.style.opacity = '0.6';
+      btnSubmitSolicitacao.style.cursor = 'not-allowed';
+    }
+  }
+
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (btnSubmitSolicitacao?.disabled) return;
@@ -661,9 +747,95 @@ _applyTipoFerias();
 
     if (btnSubmitSolicitacao) {
       btnSubmitSolicitacao.disabled = false;
-      btnSubmitSolicitacao.textContent = btnSubmitSolicitacao.dataset.originalText || '➕ Fazer Solicitação';
+      btnSubmitSolicitacao.textContent = btnSubmitSolicitacao.data.originalText || '➕ Fazer Solicitação';
     }
   });
+
+  // ============================================
+  // RELATÓRIO DE LANÇAMENTO
+  // ============================================
+
+  const btnGerarRelatorio = document.getElementById('btn-gerar-relatorio');
+  const relResultado = document.getElementById('rel-resultado');
+  const relMes = document.getElementById('rel-mes');
+  const relAno = document.getElementById('rel-ano');
+
+  async function gerarRelatorio() {
+    if (btnGerarRelatorio.disabled) return;
+    
+    const mes = relMes.value ? parseInt(relMes.value, 10) : null;
+    const ano = relAno.value ? parseInt(relAno.value, 10) : null;
+    
+    const params = new URLSearchParams();
+    if (mes) params.append('mes', mes);
+    if (ano) params.append('ano', ano);
+    
+    btnGerarRelatorio.disabled = true;
+    btnGerarRelatorio.textContent = 'Gerando...';
+    relResultado.innerHTML = '<div class="muted">Gerando relatório...</div>';
+    
+    try {
+      const resp = await fetch(`/api/relatorio-lancamento?${params.toString()}`);
+      const data = await resp.json();
+      
+      if (!data.ok) {
+        relResultado.innerHTML = `<div class="text-danger">${data.message || 'Erro ao gerar relatório'}</div>`;
+        return;
+      }
+      
+      // Renderiza relatório
+      let html = '<div style="overflow-x: auto;">';
+      
+      // Resumo
+      html += '<div style="margin-bottom: 16px; padding: 12px; border-radius: 8px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2);">';
+      html += `<div style="font-weight: 700; margin-bottom: 6px;">📊 Resumo</div>`;
+      html += `<div style="font-size: 13px;">Total de solicitações: <strong>${data.total}</strong></div>`;
+      html += `<div style="font-size: 13px;">Total de dias: <strong>${data.total_dias}</strong></div>`;
+      html += `<div style="font-size: 13px; margin-top: 6px; display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px;">`;
+      html += `<span>✓ Aprovadas: ${data.resumo_status.aprovada}</span>`;
+      html += `<span>⏳ Análise: ${data.resumo_status.em_analise}</span>`;
+      html += `<span>⏸ Reservada: ${data.resumo_status.reservada}</span>`;
+      html += `<span>⏳ Pendente: ${data.resumo_status.pendente}</span>`;
+      html += `<span>✗ Negadas: ${data.resumo_status.negada}</span>`;
+      html += '</div></div>';
+      
+      // Tabela por colaborador
+      if (Object.keys(data.por_colaborador).length > 0) {
+        html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+        html += '<thead><tr style="border-bottom: 2px solid rgba(148, 163, 184, 0.4); background: rgba(0,0,0,0.05);">';
+        html += '<th style="padding: 10px; text-align: left;">Colaborador</th>';
+        html += '<th style="padding: 10px; text-align: center;">Solicitações</th>';
+        html += '<th style="padding: 10px; text-align: center;">Total Dias</th>';
+        html += '<th style="padding: 10px; text-align: center;">Aprovadas</th>';
+        html += '</tr></thead>';
+        html += '<tbody>';
+        
+        Object.entries(data.por_colaborador).forEach(([email, info]) => {
+          html += '<tr style="border-bottom: 1px solid rgba(148, 163, 184, 0.2);">';
+          html += `<td style="padding: 10px;">${email}</td>`;
+          html += `<td style="padding: 10px; text-align: center;">${info.solicitacoes.length}</td>`;
+          html += `<td style="padding: 10px; text-align: center;"><strong>${info.total_dias.toFixed(1)}</strong></td>`;
+          html += `<td style="padding: 10px; text-align: center;">${info.total_aprovadas.toFixed(1)}</td>`;
+          html += '</tr>';
+        });
+        
+        html += '</tbody></table>';
+      } else {
+        html += '<div class="muted">Nenhum lançamento encontrado para o período.</div>';
+      }
+      
+      html += '</div>';
+      relResultado.innerHTML = html;
+    } catch (e) {
+      relResultado.innerHTML = '<div class="text-danger">Erro ao gerar relatório. Tente novamente.</div>';
+      console.error(e);
+    } finally {
+      btnGerarRelatorio.disabled = false;
+      btnGerarRelatorio.textContent = 'Gerar Relatório';
+    }
+  }
+
+  btnGerarRelatorio?.addEventListener('click', gerarRelatorio);
 </script>
 
 {% endblock %}

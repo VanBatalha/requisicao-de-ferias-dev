@@ -19,6 +19,7 @@ from ..core import (
     safe_lower,
     tem_grupo,
 )
+from ..services.simulation_service import get_simulated_gestor, is_in_simulation
 @bp.route("/", endpoint="home")
 @bp.route("/")
 def index():
@@ -78,6 +79,19 @@ def ferias():
     role = get_user_role(gestor_email)
     is_dp_or_admin = role in ("DP", "admin")
 
+    # Verifica se está em modo de simulação
+    simulated_gestor = get_simulated_gestor()
+    is_simulating = simulated_gestor is not None and is_dp_or_admin
+    
+    if is_simulating:
+        # Em modo de simulação, o admin vê como se fosse o gestor simulado
+        gestor_email = simulated_gestor
+        is_dp_or_admin = False  # Força a comportamento de gestor
+        # Marca para desabilitar botões de ação na interface
+        render_mode = "simulation"
+    else:
+        render_mode = "normal"
+
     # Gestores podem solicitar para sua equipe; DP/Admin podem solicitar para todos (tela de Solicitações)
     if not (is_dp_or_admin or is_gestor(gestor_email)):
         return render_template(
@@ -133,9 +147,14 @@ def ferias():
         seen = set()
         for e in subs:
             e = safe_lower(e)
-            if e and e not in seen and e != gestor_email:
+            if e and e not in seen:
                 seen.add(e)
                 disponiveis.append(e)
+        
+        # Adiciona o próprio gestor à lista (para que possa ver suas férias)
+        if gestor_email not in seen:
+            seen.add(gestor_email)
+            disponiveis.append(gestor_email)
 
     opcoes = [{"email": e, "nome": (nome_por_email.get(e) or e)} for e in disponiveis]
     opcoes.sort(key=lambda x: ((x.get("nome") or "").casefold(), (x.get("email") or "").casefold()))
@@ -167,6 +186,9 @@ def ferias():
 
     colaborador_nome = next((o["nome"] for o in opcoes if o["email"] == selecionado), selecionado)
 
+    # Verifica se o gestor está visualizando suas próprias férias
+    is_viewing_own_holidays = selecionado == gestor_email and not is_dp_or_admin
+
     return render_template(
         "ferias.html",
         active_page="ferias",
@@ -187,7 +209,10 @@ def ferias():
         premium_usados=premium_usados,
         premium_reservados=premium_reservados,
         premium_saldo=premium_saldo,
-
+        is_simulating=is_simulating,
+        simulated_gestor=simulated_gestor,
+        render_mode=render_mode,
+        is_viewing_own_holidays=is_viewing_own_holidays,
     )
 
 @bp.route("/painel-admin")
