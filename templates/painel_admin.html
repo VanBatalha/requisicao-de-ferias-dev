@@ -122,6 +122,131 @@
   </div>
 </div>
 
+
+
+<div class="card" style="margin-top:16px;">
+  <h2>Editar cadastro no PostgreSQL</h2>
+  <p class="muted">
+    Busque um colaborador e ajuste diretamente os dados cadastrados no banco do app. Atenção: campos vindos do Smartsheet podem ser sobrescritos na próxima sincronização.
+  </p>
+
+  <div class="search-row" style="margin-top:12px;">
+    <input id="cadBusca" class="input" placeholder="Ex.: nome, sobrenome ou e-mail" autocomplete="off" />
+    <button id="cadBtnBuscar" class="btn">Buscar</button>
+  </div>
+
+  <div id="cadStatusBusca" class="muted" style="margin-top:10px;"></div>
+  <div id="cadResultados" class="result-list" style="margin-top:12px;"></div>
+
+  <div id="cadEditor" style="display:none; margin-top:16px;">
+    <div class="divider"></div>
+    <h3 style="margin:0 0 8px;">Dados do colaborador</h3>
+    <div class="muted" id="cadEditorSub" style="margin-bottom:12px;"></div>
+
+    <input type="hidden" id="cadId" />
+
+    <div class="grid-2">
+      <div>
+        <label class="muted">E-mail</label>
+        <input id="cadEmail" class="input" type="email" />
+      </div>
+      <div>
+        <label class="muted">Nome completo</label>
+        <input id="cadNome" class="input" />
+      </div>
+      <div>
+        <label class="muted">Status</label>
+        <input id="cadStatus" class="input" placeholder="ATIVO" />
+      </div>
+      <div>
+        <label class="muted">Data de admissão</label>
+        <input id="cadAdmissao" class="input" type="date" />
+      </div>
+      <div>
+        <label class="muted">Setor</label>
+        <input id="cadSetor" class="input" />
+      </div>
+      <div>
+        <label class="muted">Cargo</label>
+        <input id="cadCargo" class="input" />
+      </div>
+      <div>
+        <label class="muted">Regime</label>
+        <input id="cadRegime" class="input" />
+      </div>
+      <div>
+        <label class="muted">Dias de direito</label>
+        <input id="cadDiasDireito" class="input" type="number" min="0" />
+      </div>
+    </div>
+
+    <h3 style="margin:18px 0 8px;">Acesso e hierarquia</h3>
+    <div class="grid-2">
+      <div>
+        <label class="muted">USER TYPE</label>
+        <select id="cadUserType" class="input">
+          <option value="USER">USER</option>
+          <option value="DP">DP</option>
+          <option value="ADMIN">ADMIN</option>
+        </select>
+      </div>
+      <div>
+        <label class="chk" style="margin-top:24px;"><input type="checkbox" id="cadAtivoNoApp" /> Ativo no app</label>
+      </div>
+      <div>
+        <label class="muted">Gestor direto e-mail</label>
+        <input id="cadGestorDireto" class="input" type="email" />
+      </div>
+      <div>
+        <label class="muted">Gestor superior e-mail</label>
+        <input id="cadGestorSuperior" class="input" />
+      </div>
+    </div>
+
+    <h3 style="margin:18px 0 8px;">Saldos</h3>
+    <p class="muted" style="margin-top:-4px;">Edite com cuidado. A sincronização com recálculo pode atualizar esses valores novamente.</p>
+    <div class="grid-2">
+      <div class="card" style="box-shadow:none; padding:12px;">
+        <strong>Regular</strong>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
+          <div><label class="muted">Direito</label><input id="cadRegDireito" class="input" type="number" /></div>
+          <div><label class="muted">Usado</label><input id="cadRegUsado" class="input" type="number" /></div>
+          <div><label class="muted">Reservado</label><input id="cadRegReservado" class="input" type="number" /></div>
+          <div><label class="muted">Disponível</label><input id="cadRegDisponivel" class="input" type="number" /></div>
+        </div>
+      </div>
+      <div class="card" style="box-shadow:none; padding:12px;">
+        <strong>Premium</strong>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
+          <div><label class="muted">Direito</label><input id="cadPremDireito" class="input" type="number" /></div>
+          <div><label class="muted">Usado</label><input id="cadPremUsado" class="input" type="number" /></div>
+          <div><label class="muted">Reservado</label><input id="cadPremReservado" class="input" type="number" /></div>
+          <div><label class="muted">Disponível</label><input id="cadPremDisponivel" class="input" type="number" /></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:16px;">
+      <button class="btn" id="cadBtnSalvar">Salvar cadastro</button>
+      <button class="btn btn-secondary" id="cadBtnCancelar">Cancelar</button>
+    </div>
+    <div id="cadMsgSalvar" class="muted" style="margin-top:10px;"></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <h2>Sincronização com Smartsheet</h2>
+  <p class="muted">
+    Atualiza o PostgreSQL com a planilha de cadastro <strong>3609445264215940</strong>. O processo lê o Smartsheet, atualiza a tabela <strong>colaboradores</strong> e o complemento de acesso/hierarquia.
+  </p>
+  <div class="actions" style="margin-top:14px;">
+    <button class="btn" id="syncBtnCadastro">Sincronizar cadastro agora</button>
+    <button class="btn btn-secondary" id="syncBtnStatus">Atualizar status</button>
+  </div>
+  <div id="syncMsg" class="muted" style="margin-top:10px;"></div>
+  <div id="syncResumo" class="muted" style="margin-top:10px;"></div>
+</div>
+
 <script>
   // ============================================
   // SIMULAÇÃO DE GESTOR
@@ -225,6 +350,242 @@
 
   // Verifica status ao carregar
   verificarSimulacao();
+</script>
+
+
+
+<script>
+  // ============================================
+  // EDIÇÃO DE CADASTRO + SINCRONIZAÇÃO
+  // ============================================
+  const cad$ = (id) => document.getElementById(id);
+  let cadSelecionado = null;
+
+  function cadNorm(value) {
+    return (value || "").toString().trim();
+  }
+
+  function cadSetMsg(text, cls = "muted") {
+    const el = cad$("cadMsgSalvar");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = cls;
+  }
+
+  function renderCadResultados(lista) {
+    const box = cad$("cadResultados");
+    box.innerHTML = "";
+    if (!lista || lista.length === 0) {
+      box.innerHTML = '<div class="empty">Nenhum colaborador encontrado.</div>';
+      return;
+    }
+    lista.forEach((c) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "result-item";
+      btn.innerHTML = `
+        <div class="result-title">${cadNorm(c.nome_completo) || cadNorm(c.email)}</div>
+        <div class="result-sub">#${c.id} • ${cadNorm(c.email)} • ${cadNorm(c.status) || "—"} • ${cadNorm(c.user_type) || "USER"}</div>
+      `;
+      btn.addEventListener("click", () => carregarCadColaborador(c.id));
+      box.appendChild(btn);
+    });
+  }
+
+  async function buscarCadColaboradores() {
+    const q = cadNorm(cad$("cadBusca").value);
+    cad$("cadStatusBusca").textContent = q ? "Buscando..." : "Digite algo para buscar.";
+    cad$("cadResultados").innerHTML = "";
+    cad$("cadEditor").style.display = "none";
+    cadSelecionado = null;
+    if (!q) return;
+
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaboradores?q=${encodeURIComponent(q)}`);
+      const data = await resp.json();
+      if (!data.ok) {
+        cad$("cadStatusBusca").textContent = data.message || "Erro ao buscar.";
+        return;
+      }
+      cad$("cadStatusBusca").textContent = `${data.colaboradores.length} resultado(s)`;
+      renderCadResultados(data.colaboradores);
+    } catch (e) {
+      cad$("cadStatusBusca").textContent = "Erro ao buscar colaboradores.";
+      console.error(e);
+    }
+  }
+
+  async function carregarCadColaborador(id) {
+    cadSetMsg("Carregando...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${id}`);
+      const data = await resp.json();
+      if (!data.ok) {
+        cadSetMsg(data.message || "Erro ao carregar colaborador.", "text-danger");
+        return;
+      }
+      preencherCadEditor(data.colaborador);
+      cadSetMsg("", "muted");
+    } catch (e) {
+      cadSetMsg("Erro ao carregar colaborador.", "text-danger");
+      console.error(e);
+    }
+  }
+
+  function preencherCadEditor(c) {
+    cadSelecionado = c;
+    cad$("cadId").value = c.id || "";
+    cad$("cadEditorSub").textContent = `ID ${c.id} • origem row ${c.origem_row_id || "—"}`;
+    cad$("cadEmail").value = c.email || "";
+    cad$("cadNome").value = c.nome_completo || "";
+    cad$("cadStatus").value = c.status || "";
+    cad$("cadAdmissao").value = (c.data_admissao || "").toString().slice(0, 10);
+    cad$("cadSetor").value = c.setor || "";
+    cad$("cadCargo").value = c.cargo || "";
+    cad$("cadRegime").value = c.regime || "";
+    cad$("cadDiasDireito").value = c.dias_direito || 0;
+    cad$("cadUserType").value = c.user_type || "USER";
+    cad$("cadAtivoNoApp").checked = !!c.ativo_no_app;
+    cad$("cadGestorDireto").value = c.gestor_direto_email || "";
+    cad$("cadGestorSuperior").value = c.gestor_superior_email || "";
+    cad$("cadRegDireito").value = c.saldo_regular_direito || 0;
+    cad$("cadRegUsado").value = c.saldo_regular_usado || 0;
+    cad$("cadRegReservado").value = c.saldo_regular_reservado || 0;
+    cad$("cadRegDisponivel").value = c.saldo_regular_disponivel || 0;
+    cad$("cadPremDireito").value = c.saldo_premium_direito || 0;
+    cad$("cadPremUsado").value = c.saldo_premium_usado || 0;
+    cad$("cadPremReservado").value = c.saldo_premium_reservado || 0;
+    cad$("cadPremDisponivel").value = c.saldo_premium_disponivel || 0;
+    cad$("cadEditor").style.display = "block";
+  }
+
+  function cadPayload() {
+    return {
+      email: cadNorm(cad$("cadEmail").value).toLowerCase(),
+      nome_completo: cadNorm(cad$("cadNome").value),
+      status: cadNorm(cad$("cadStatus").value),
+      data_admissao: cad$("cadAdmissao").value || null,
+      setor: cadNorm(cad$("cadSetor").value),
+      cargo: cadNorm(cad$("cadCargo").value),
+      regime: cadNorm(cad$("cadRegime").value),
+      dias_direito: parseInt(cad$("cadDiasDireito").value || "0", 10),
+      user_type: cad$("cadUserType").value || "USER",
+      ativo_no_app: cad$("cadAtivoNoApp").checked,
+      gestor_direto_email: cadNorm(cad$("cadGestorDireto").value).toLowerCase(),
+      gestor_superior_email: cadNorm(cad$("cadGestorSuperior").value).toLowerCase(),
+      saldo_regular_direito: parseInt(cad$("cadRegDireito").value || "0", 10),
+      saldo_regular_usado: parseInt(cad$("cadRegUsado").value || "0", 10),
+      saldo_regular_reservado: parseInt(cad$("cadRegReservado").value || "0", 10),
+      saldo_regular_disponivel: parseInt(cad$("cadRegDisponivel").value || "0", 10),
+      saldo_premium_direito: parseInt(cad$("cadPremDireito").value || "0", 10),
+      saldo_premium_usado: parseInt(cad$("cadPremUsado").value || "0", 10),
+      saldo_premium_reservado: parseInt(cad$("cadPremReservado").value || "0", 10),
+      saldo_premium_disponivel: parseInt(cad$("cadPremDisponivel").value || "0", 10),
+    };
+  }
+
+  async function salvarCadColaborador() {
+    const id = cad$("cadId").value;
+    if (!id) return;
+    if (!confirm("Salvar alterações deste cadastro diretamente no PostgreSQL?")) return;
+    cadSetMsg("Salvando...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cadPayload()),
+      });
+      const data = await resp.json();
+      if (!data.ok) {
+        cadSetMsg(data.message || "Erro ao salvar cadastro.", "text-danger");
+        return;
+      }
+      preencherCadEditor(data.colaborador);
+      cadSetMsg("Cadastro atualizado com sucesso.", "text-success");
+    } catch (e) {
+      cadSetMsg("Erro ao salvar cadastro.", "text-danger");
+      console.error(e);
+    }
+  }
+
+  function cancelarCadEditor() {
+    cad$("cadEditor").style.display = "none";
+    cadSelecionado = null;
+    cadSetMsg("", "muted");
+  }
+
+  function syncSetMsg(text, cls = "muted") {
+    const el = cad$("syncMsg");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = cls;
+  }
+
+  function renderSyncResumo(result) {
+    const el = cad$("syncResumo");
+    if (!el) return;
+    if (!result) {
+      el.textContent = "";
+      return;
+    }
+    const extra = result.extra || result;
+    const partes = [];
+    if (extra.last_status) partes.push(`status: ${extra.last_status}`);
+    if (extra.last_success_at) partes.push(`último sucesso: ${extra.last_success_at}`);
+    if (extra.records !== undefined) partes.push(`${extra.records} cadastro(s) processado(s)`);
+    if (extra.inserted !== undefined) partes.push(`${extra.inserted} novo(s)`);
+    if (extra.updated !== undefined) partes.push(`${extra.updated} atualizado(s)`);
+    if (extra.recalculated !== undefined) partes.push(`${extra.recalculated} saldo(s) recalculado(s)`);
+    el.textContent = partes.join(" • ") || "Sem histórico de sincronização.";
+  }
+
+  async function sincronizarCadastro() {
+    if (!confirm("Sincronizar agora a planilha de cadastro do Smartsheet com o PostgreSQL?\n\nCampos editados diretamente no banco podem ser sobrescritos se vierem diferentes na planilha.")) return;
+    syncSetMsg("Sincronizando cadastro... aguarde.", "muted");
+    cad$("syncBtnCadastro").disabled = true;
+    try {
+      const resp = await fetch(`/api/admin/sync-cadastro`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recalculate: true }),
+      });
+      const data = await resp.json();
+      if (!data.ok) {
+        syncSetMsg(data.message || "Erro ao sincronizar.", "text-danger");
+        return;
+      }
+      syncSetMsg("Sincronização concluída com sucesso.", "text-success");
+      renderSyncResumo(data);
+    } catch (e) {
+      syncSetMsg("Erro ao sincronizar cadastro.", "text-danger");
+      console.error(e);
+    } finally {
+      cad$("syncBtnCadastro").disabled = false;
+    }
+  }
+
+  async function carregarSyncStatus() {
+    try {
+      const resp = await fetch(`/api/admin/sync-state`);
+      const data = await resp.json();
+      if (!data.ok) {
+        syncSetMsg(data.message || "Erro ao carregar status.", "text-danger");
+        return;
+      }
+      const cadastro = (data.states || []).find((s) => s.sync_name === "cadastro") || null;
+      renderSyncResumo(cadastro);
+    } catch (e) {
+      syncSetMsg("Erro ao carregar status da sincronização.", "text-danger");
+    }
+  }
+
+  cad$("cadBtnBuscar")?.addEventListener("click", buscarCadColaboradores);
+  cad$("cadBusca")?.addEventListener("keydown", (e) => { if (e.key === "Enter") buscarCadColaboradores(); });
+  cad$("cadBtnSalvar")?.addEventListener("click", salvarCadColaborador);
+  cad$("cadBtnCancelar")?.addEventListener("click", cancelarCadEditor);
+  cad$("syncBtnCadastro")?.addEventListener("click", sincronizarCadastro);
+  cad$("syncBtnStatus")?.addEventListener("click", carregarSyncStatus);
+  carregarSyncStatus();
 </script>
 
 <script>

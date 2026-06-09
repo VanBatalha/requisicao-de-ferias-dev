@@ -78,6 +78,13 @@ def init_db():
     
     # Cria as tabelas se não existirem dentro do schema configurado
     Base.metadata.create_all(_ENGINE)
+
+    # Pequenas migrações defensivas para bases já criadas antes das últimas versões.
+    # create_all() não altera tabelas existentes; por isso garantimos colunas novas
+    # usadas pelo painel sem depender de uma ferramenta externa de migração.
+    with _ENGINE.begin() as conn:
+        conn.execute(text(f"ALTER TABLE {schema_sql}.sync_state ADD COLUMN IF NOT EXISTS extra JSONB"))
+
     log.info("Banco de dados PostgreSQL inicializado no schema %s", schema)
 
 

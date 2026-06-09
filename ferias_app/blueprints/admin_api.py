@@ -23,6 +23,14 @@ from ..core import (
 )
 from ..rules import build_request_window_override_settings
 from ..services.simulation_service import set_simulated_gestor, get_simulated_gestor, clear_simulated_gestor, is_in_simulation
+from ..services.postgres_compat_service import postgres_enabled
+from ..services.admin_cadastro_service import (
+    buscar_colaboradores_admin,
+    obter_colaborador_admin,
+    atualizar_colaborador_admin,
+    atualizar_user_type_por_email,
+)
+from ..services.smartsheet_sync_service import sync_cadastro_from_smartsheet, get_sync_states
 
 @bp.route("/api/admin/listar-usuarios")
 def api_admin_listar_usuarios():
@@ -109,6 +117,33 @@ def api_admin_atualizar_grupos():
     else:
         user_type_value = "USER"
         grupos_validos = ["USER"]
+
+    if postgres_enabled():
+        try:
+            updated = atualizar_user_type_por_email(email, user_type_value, actor_email=user.get("email") or "")
+            if not updated:
+                return jsonify({"ok": False, "message": "Usuário não encontrado no PostgreSQL."}), 404
+
+            # invalida caches para refletir imediatamente
+            try:
+                for attr in ("_colaboradores_list_cache", "_cadastro_colaboradores", "_user_type_map", "_sheet_cadastro"):
+                    if hasattr(g, attr):
+                        delattr(g, attr)
+            except Exception:
+                pass
+
+            print(f"[ADMIN] USER TYPE atualizado no PostgreSQL para {safe_lower(email)}: {user_type_value}")
+            return jsonify({
+                "ok": True,
+                "message": f"Permissão de {email} atualizada com sucesso",
+                "grupos": grupos_validos,
+                "user_type": user_type_value,
+            })
+        except Exception as e:
+            print(f"ERRO em api_admin_atualizar_grupos(PostgreSQL): {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"ok": False, "message": f"Erro ao atualizar permissão no PostgreSQL: {str(e)}"}), 500
 
     client = get_smartsheet_client()
     if not client:
@@ -271,3 +306,93 @@ def api_admin_status_simulacao():
 # API: dp - COLABORADORES (Planilha 360944526 - COLABORADORES (Planilha 3609445264215940)
 # ============================================
 
+
+
+# ============================================
+# API: ADMIN - EDIÇÃO DE CADASTRO POSTGRESQL
+# ============================================
+
+def _admin_required():
+    user = session.get("user")
+    if not user or not tem_grupo(user.get("email"), "Administrador"):
+        return None
+    return user
+
+
+@bp.route("/api/admin/cadastro/colaboradores", methods=["GET"])
+def api_admin_cadastro_buscar_colaboradores():
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    q = (request.args.get("q") or "").strip()
+    try:
+        rows = buscar_colaboradores_admin(q, limit=20)
+        return jsonify({"ok": True, "colaboradores": rows})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao buscar colaboradores: {str(e)}"}), 500
+
+
+@bp.route("/api/admin/cadastro/colaborador/<int:colaborador_id>", methods=["GET"])
+def api_admin_cadastro_obter_colaborador(colaborador_id: int):
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    try:
+        row = obter_colaborador_admin(colaborador_id)
+        if not row:
+            return jsonify({"ok": False, "message": "Colaborador não encontrado"}), 404
+        return jsonify({"ok": True, "colaborador": row})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao carregar colaborador: {str(e)}"}), 500
+
+
+@bp.route("/api/admin/cadastro/colaborador/<int:colaborador_id>", methods=["POST", "PUT"])
+def api_admin_cadastro_atualizar_colaborador(colaborador_id: int):
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        row = atualizar_colaborador_admin(colaborador_id, payload, actor_email=user.get("email") or "")
+        return jsonify({"ok": True, "message": "Cadastro atualizado com sucesso", "colaborador": row})
+    except ValueError as e:
+        return jsonify({"ok": False, "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao atualizar cadastro: {str(e)}"}), 500
+
+
+# ============================================
+# API: ADMIN - SINCRONIZAÇÃO SMARTSHEET -> POSTGRESQL
+# ============================================
+
+@bp.route("/api/admin/sync-cadastro", methods=["POST"])
+def api_admin_sync_cadastro():
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    recalculate = bool(payload.get("recalculate", True))
+    try:
+        result = sync_cadastro_from_smartsheet(
+            triggered_by="manual",
+            actor_email=user.get("email") or "",
+            recalculate=recalculate,
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao sincronizar cadastro: {str(e)}"}), 500
+
+
+@bp.route("/api/admin/sync-state", methods=["GET"])
+def api_admin_sync_state():
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+    try:
+        return jsonify(get_sync_states())
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao consultar sincronização: {str(e)}"}), 500
