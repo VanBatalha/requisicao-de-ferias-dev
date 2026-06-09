@@ -127,7 +127,7 @@
 <div class="card" style="margin-top:16px;">
   <h2>Editar cadastro no PostgreSQL</h2>
   <p class="muted">
-    Busque um colaborador e ajuste diretamente os dados cadastrados no banco do app. Atenção: campos vindos do Smartsheet podem ser sobrescritos na próxima sincronização.
+    Busque um colaborador e ajuste diretamente os dados cadastrados no banco do app. A sincronização do Smartsheet agora é apenas de inclusão: se a matrícula já existir no PostgreSQL, o cadastro não será sobrescrito.
   </p>
 
   <div class="search-row" style="margin-top:12px;">
@@ -208,7 +208,7 @@
     </div>
 
     <h3 style="margin:18px 0 8px;">Saldos</h3>
-    <p class="muted" style="margin-top:-4px;">Edite com cuidado. A sincronização com recálculo pode atualizar esses valores novamente.</p>
+    <p class="muted" style="margin-top:-4px;">Edite com cuidado. O botão de sincronização do Smartsheet não recalcula nem sobrescreve saldos por padrão.</p>
     <div class="grid-2">
       <div class="card" style="box-shadow:none; padding:12px;">
         <strong>Regular</strong>
@@ -241,7 +241,7 @@
 <div class="card" style="margin-top:16px;">
   <h2>Sincronização com Smartsheet</h2>
   <p class="muted">
-    Atualiza o PostgreSQL com a planilha de cadastro <strong>3609445264215940</strong>. O processo lê o Smartsheet, atualiza a tabela <strong>colaboradores</strong> e o complemento de acesso/hierarquia.
+    Inclui no PostgreSQL apenas novos cadastros da planilha <strong>3609445264215940</strong>. A coluna <strong>MATRÍCULA</strong> é usada como ID externo: se a matrícula já existir no banco, os dados editados no app são preservados.
   </p>
   <div class="actions" style="margin-top:14px;">
     <button class="btn" id="syncBtnCadastro">Sincronizar cadastro agora</button>
@@ -540,21 +540,24 @@
     if (extra.last_success_at) partes.push(`último sucesso: ${extra.last_success_at}`);
     if (extra.records !== undefined) partes.push(`${extra.records} cadastro(s) processado(s)`);
     if (extra.inserted !== undefined) partes.push(`${extra.inserted} novo(s)`);
-    if (extra.updated !== undefined) partes.push(`${extra.updated} atualizado(s)`);
+    if (extra.updated !== undefined && extra.updated > 0) partes.push(`${extra.updated} atualizado(s)`);
+    if (extra.existing_skipped !== undefined) partes.push(`${extra.existing_skipped} já existente(s) preservado(s)`);
+    if (extra.linked !== undefined && extra.linked > 0) partes.push(`${extra.linked} vínculo(s) de matrícula criado(s)`);
+    if (extra.sem_matricula !== undefined && extra.sem_matricula > 0) partes.push(`${extra.sem_matricula} sem matrícula ignorado(s)`);
     if (extra.conflicts !== undefined && extra.conflicts > 0) partes.push(`${extra.conflicts} conflito(s) preservado(s)`);
-    if (extra.recalculated !== undefined) partes.push(`${extra.recalculated} saldo(s) recalculado(s)`);
+    if (extra.recalculated !== undefined && extra.recalculated > 0) partes.push(`${extra.recalculated} saldo(s) recalculado(s)`);
     el.textContent = partes.join(" • ") || "Sem histórico de sincronização.";
   }
 
   async function sincronizarCadastro() {
-    if (!confirm("Sincronizar agora a planilha de cadastro do Smartsheet com o PostgreSQL?\n\nCampos editados diretamente no banco podem ser sobrescritos se vierem diferentes na planilha.")) return;
+    if (!confirm("Sincronizar agora a planilha de cadastro do Smartsheet com o PostgreSQL?\n\nModo seguro: apenas matrículas novas serão incluídas. Cadastros já existentes no banco serão preservados.")) return;
     syncSetMsg("Sincronizando cadastro... aguarde.", "muted");
     cad$("syncBtnCadastro").disabled = true;
     try {
       const resp = await fetch(`/api/admin/sync-cadastro`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recalculate: true }),
+        body: JSON.stringify({ recalculate: false }),
       });
       const data = await resp.json();
       if (!data.ok) {

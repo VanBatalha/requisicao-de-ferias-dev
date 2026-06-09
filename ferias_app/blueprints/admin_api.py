@@ -375,7 +375,7 @@ def api_admin_sync_cadastro():
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     payload = request.get_json(silent=True) or {}
-    recalculate = bool(payload.get("recalculate", True))
+    recalculate = bool(payload.get("recalculate", False))
     try:
         result = sync_cadastro_from_smartsheet(
             triggered_by="manual",

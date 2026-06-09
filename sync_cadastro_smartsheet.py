@@ -19,7 +19,7 @@ from ferias_app.services.smartsheet_sync_service import sync_cadastro_from_smart
 def main() -> int:
     app = create_app()
     with app.app_context():
-        result = sync_cadastro_from_smartsheet(triggered_by="cron", actor_email="cron", recalculate=True)
+        result = sync_cadastro_from_smartsheet(triggered_by="cron", actor_email="cron", recalculate=False)
         print("Sincronização de cadastro concluída.")
         print(result)
     return 0
