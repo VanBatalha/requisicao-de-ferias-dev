@@ -48,7 +48,7 @@ class Colaborador(Base):
     setor = Column(String(150), nullable=True)
     cargo = Column(String(150), nullable=True)
     regime = Column(String(100), nullable=True)  # CLT, PJ, etc
-    dias_direito = Column(Integer, nullable=True)  # dias de direito base
+    dias_direito = Column(Integer, nullable=False, default=0, server_default="0")  # dias de direito base
     origem_sheet_id = Column(String(50), nullable=True)  # ID da sheet no Smartsheet
     origem_row_id = Column(String(50), nullable=True)  # ID da linha no Smartsheet
     raw_payload = Column(PGJSON, nullable=True)  # JSON com dados originais completos

@@ -64,6 +64,35 @@ def safe_lower(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def clean_optional(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def coalesce_sheet_value(new_value: Any, current_value: Any = None) -> Any:
+    """Evita que células vazias do Smartsheet apaguem dados já corrigidos no PostgreSQL."""
+    if new_value in (None, "", [], {}):
+        return current_value
+    if isinstance(new_value, str) and not new_value.strip():
+        return current_value
+    return new_value
+
+
+def normalize_user_type_value(value: Any) -> str:
+    raw = normalize_text(value)
+    if not raw:
+        return ""
+    aliases = {
+        "ADMINISTRADOR": "ADMIN",
+        "ADMINISTRADORES": "ADMIN",
+        "ADM": "ADMIN",
+        "RH": "DP",
+        "DEPARTAMENTO PESSOAL": "DP",
+    }
+    raw = aliases.get(raw, raw)
+    return raw if raw in {"USER", "DP", "ADMIN"} else "USER"
+
+
 def parse_date(value: Any) -> Optional[dt.date]:
     if value in (None, ""):
         return None
@@ -187,13 +216,13 @@ def get_sheet(client: smartsheet.Smartsheet, sheet_id: int) -> SheetMaps:
 
 def build_colaborador_record(row: Any, cadastro: SheetMaps) -> Optional[ColaboradorRecord]:
     c_email = col_id(cadastro.columns, "EMAIL DA EMPRESA", "EMAIL", "E-MAIL")
-    c_nome = col_id(cadastro.columns, "NOME COMPLETO", "NOME")
-    c_status = col_id(cadastro.columns, "STATUS")
-    c_adm = col_id(cadastro.columns, "ADMISSAO", "ADMISSÃO", "DATA DE ADMISSAO", "DATA DE ADMISSÃO")
-    c_setor = col_id(cadastro.columns, "SETOR", "AREA", "ÁREA", "DEPARTAMENTO")
-    c_cargo = col_id(cadastro.columns, "CARGO", "FUNCAO", "FUNÇÃO")
+    c_nome = col_id(cadastro.columns, "NOME COMPLETO", "NOME", "COLABORADOR", "NOME DO COLABORADOR", "FUNCIONARIO", "FUNCIONÁRIO")
+    c_status = col_id(cadastro.columns, "STATUS", "SITUACAO", "SITUAÇÃO")
+    c_adm = col_id(cadastro.columns, "ADMISSAO", "ADMISSÃO", "DATA DE ADMISSAO", "DATA DE ADMISSÃO", "DATA ADMISSAO", "DATA ADMISSÃO")
+    c_setor = col_id(cadastro.columns, "SETOR", "AREA", "ÁREA", "DEPARTAMENTO", "CENTRO DE CUSTO")
+    c_cargo = col_id(cadastro.columns, "CARGO", "FUNCAO", "FUNÇÃO", "FUNCAO/CARGO", "FUNÇÃO/CARGO")
     c_regime = col_id(cadastro.columns, "REGIME", "REGIME DE CONTRATACAO", "REGIME DE CONTRATAÇÃO")
-    c_dias_direito = col_id(cadastro.columns, "DIAS DE DIREITO", "DIAS DIREITO")
+    c_dias_direito = col_id(cadastro.columns, "DIAS DE DIREITO", "DIAS DIREITO", "DIREITO", "SALDO DIREITO")
     c_user_type = col_id(cadastro.columns, "USER TYPE", "USER_TYPE", "USERTYPE", "TIPO USUARIO", "TIPO DE USUARIO")
     c_gestor_direto = col_id(cadastro.columns, "GESTOR DIRETO", "GESTOR")
     c_gestor_superior = col_id(cadastro.columns, "GESTOR SUPERIOR")
@@ -206,13 +235,7 @@ def build_colaborador_record(row: Any, cadastro: SheetMaps) -> Optional[Colabora
     status = cell_value(row, c_status)
     ativo_no_app = normalize_text(status) not in STATUS_INATIVO_SET
     payload = row_as_dict(row, cadastro.columns)
-    user_type = normalize_text(cell_value(row, c_user_type)) or "USER"
-    if user_type in {"ADMINISTRADOR"}:
-        user_type = "ADMIN"
-    if user_type in {"RH"}:
-        user_type = "DP"
-    if user_type not in {"USER", "DP", "ADMIN"}:
-        user_type = "USER"
+    user_type = normalize_user_type_value(cell_value(row, c_user_type))
 
     return ColaboradorRecord(
         row_id=row.id,
@@ -335,26 +358,36 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
         if record.matricula:
             payload.setdefault("__matricula_escolhida__", record.matricula)
 
-        if colab:
-            updated += 1
-        else:
-            colab = Colaborador(email=record.email)
+        is_new = colab is None
+        if is_new:
+            colab = Colaborador(email=record.email, dias_direito=int(record.dias_direito or 0))
             session.add(colab)
-            session.flush()
             inserted += 1
+        else:
+            updated += 1
 
+        # Para colaboradores existentes, não apaga dados corrigidos manualmente quando
+        # a célula do Smartsheet vier vazia ou quando a coluna não tiver sido encontrada.
         colab.email = record.email
-        colab.nome_completo = str(record.nome or "").strip() or None
-        colab.status = str(record.status or "").strip() or None
-        colab.data_admissao = record.admissao
-        colab.setor = str(record.setor or "").strip() or None
-        colab.cargo = str(record.cargo or "").strip() or None
-        colab.regime = str(record.regime or "").strip() or None
-        colab.dias_direito = int(record.dias_direito or 0)
+        colab.nome_completo = clean_optional(coalesce_sheet_value(record.nome, None if is_new else colab.nome_completo))
+        colab.status = clean_optional(coalesce_sheet_value(record.status, None if is_new else colab.status))
+        colab.data_admissao = coalesce_sheet_value(record.admissao, None if is_new else colab.data_admissao)
+        colab.setor = clean_optional(coalesce_sheet_value(record.setor, None if is_new else colab.setor))
+        colab.cargo = clean_optional(coalesce_sheet_value(record.cargo, None if is_new else colab.cargo))
+        colab.regime = clean_optional(coalesce_sheet_value(record.regime, None if is_new else colab.regime))
+        incoming_dias = int(record.dias_direito or 0)
+        if is_new or incoming_dias > 0 or colab.dias_direito is None:
+            colab.dias_direito = incoming_dias
+        else:
+            colab.dias_direito = int(colab.dias_direito or 0)
         colab.origem_sheet_id = str(cadastro_sheet_id)
         colab.origem_row_id = str(record.row_id)
         colab.raw_payload = payload
         colab.updated_at = dt.datetime.utcnow()
+
+        # Agora o flush acontece somente depois de preencher dias_direito. Isso evita
+        # violar o NOT NULL da coluna em bases antigas do Render.
+        session.flush()
 
         comp = colab.complemento
         if comp:
@@ -364,9 +397,12 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
             session.add(comp)
             complemento_inserted += 1
 
-        comp.user_type = record.user_type or "USER"
-        comp.gestor_direto_email = record.gestor_direto or None
-        comp.gestor_superior_email = record.gestor_superior or None
+        if record.user_type:
+            comp.user_type = record.user_type
+        elif not comp.user_type:
+            comp.user_type = "USER"
+        comp.gestor_direto_email = clean_optional(coalesce_sheet_value(record.gestor_direto, comp.gestor_direto_email))
+        comp.gestor_superior_email = clean_optional(coalesce_sheet_value(record.gestor_superior, comp.gestor_superior_email))
         comp.ativo_no_app = bool(record.ativo_no_app)
         comp.origem_sheet_id = str(cadastro_sheet_id)
         comp.origem_row_id = str(record.row_id)
@@ -479,7 +515,7 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
     started = dt.datetime.utcnow()
     with get_session() as session:
         _mark_sync(session, "cadastro", "running", extra={"triggered_by": triggered_by, "actor_email": actor_email, "sheet_id": sheet_id})
-        session.flush()
+        session.commit()
         try:
             cadastro = get_sheet(client, sheet_id)
             result = _sync_colaboradores(session, cadastro, sheet_id)
@@ -513,8 +549,11 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
             return {"ok": True, **extra}
         except Exception as exc:
             err = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            _mark_sync(session, "cadastro", "error", error=err[:4000], success=False, extra={"triggered_by": triggered_by, "actor_email": actor_email, "sheet_id": sheet_id})
+            # Depois de erro em flush/commit, a Session fica bloqueada até rollback().
+            # Sem isso, a tela mostra apenas o erro genérico de transação já revertida.
+            session.rollback()
             try:
+                _mark_sync(session, "cadastro", "error", error=err[:4000], success=False, extra={"triggered_by": triggered_by, "actor_email": actor_email, "sheet_id": sheet_id})
                 session.commit()
             except Exception:
                 session.rollback()

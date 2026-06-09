@@ -84,6 +84,10 @@ def init_db():
     # usadas pelo painel sem depender de uma ferramenta externa de migração.
     with _ENGINE.begin() as conn:
         conn.execute(text(f"ALTER TABLE {schema_sql}.sync_state ADD COLUMN IF NOT EXISTS extra JSONB"))
+        # Bases antigas podem ter sido criadas com dias_direito NOT NULL.
+        # Garante valor padrão para importações/sincronizações com linhas incompletas no Smartsheet.
+        conn.execute(text(f"UPDATE {schema_sql}.colaboradores SET dias_direito = 0 WHERE dias_direito IS NULL"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaboradores ALTER COLUMN dias_direito SET DEFAULT 0"))
 
     log.info("Banco de dados PostgreSQL inicializado no schema %s", schema)
 
