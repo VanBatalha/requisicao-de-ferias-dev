@@ -36,3 +36,10 @@ Sugestão de periodicidade: a cada 1 hora ou 1 vez ao dia, dependendo da frequê
 ## Observação importante
 
 Edições manuais feitas diretamente no Painel Admin podem ser sobrescritas pela próxima sincronização se o mesmo campo vier diferente na planilha Smartsheet.
+
+## Observações da V8
+
+- A sincronização agora localiza colaboradores nesta ordem: origem do Smartsheet (`origem_sheet_id` + `origem_row_id`), matrícula e, por último, e-mail.
+- Isso evita duplicidade quando um e-mail é alterado no Smartsheet, pois a linha de origem continua sendo a mesma.
+- A coluna `matricula` em `colaboradores` é usada como ID externo/código de cadastro vindo da coluna `MATRÍCULA` da planilha. O campo `id` continua sendo a chave técnica interna do PostgreSQL, usada por relacionamentos e solicitações.
+- Em caso de conflito entre origem/matrícula/e-mail, a sincronização preserva os dados existentes para evitar violar restrições únicas e registra o conflito no resumo da sincronização.

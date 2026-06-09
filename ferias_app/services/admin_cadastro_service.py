@@ -16,6 +16,7 @@ log = get_logger(__name__)
 
 EDITABLE_COLAB_FIELDS = {
     "email",
+    "matricula",
     "nome_completo",
     "status",
     "data_admissao",
@@ -102,6 +103,7 @@ def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
     comp = colab.complemento
     return {
         "id": colab.id,
+        "matricula": colab.matricula or "",
         "email": colab.email or "",
         "nome_completo": colab.nome_completo or "",
         "status": colab.status or "",
@@ -143,7 +145,11 @@ def buscar_colaboradores_admin(q: str, limit: int = 20) -> List[Dict[str, Any]]:
     rows = (
         session.query(Colaborador)
         .outerjoin(ColaboradorComplemento)
-        .filter(or_(func.lower(Colaborador.email).like(pattern), func.lower(Colaborador.nome_completo).like(pattern)))
+        .filter(or_(
+            func.lower(Colaborador.email).like(pattern),
+            func.lower(Colaborador.nome_completo).like(pattern),
+            func.lower(Colaborador.matricula).like(pattern),
+        ))
         .order_by(Colaborador.nome_completo.asc().nullslast(), Colaborador.email.asc())
         .limit(max(1, min(int(limit or 20), 50)))
         .all()
@@ -153,6 +159,7 @@ def buscar_colaboradores_admin(q: str, limit: int = 20) -> List[Dict[str, Any]]:
         comp = c.complemento
         out.append({
             "id": c.id,
+            "matricula": c.matricula or "",
             "email": c.email or "",
             "nome_completo": c.nome_completo or "",
             "status": c.status or "",
@@ -191,7 +198,17 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
         if field not in payload:
             continue
         value = payload.get(field)
-        if field == "email":
+        if field == "matricula":
+            matricula = str(value or "").strip().upper() or None
+            # Matrícula é o ID externo do cadastro. Não exigimos unicidade rígida
+            # no banco para não bloquear cadastros legados, mas avisamos em caso
+            # de duplicidade inequívoca.
+            if matricula:
+                dup = session.query(Colaborador).filter(func.lower(Colaborador.matricula) == matricula.lower(), Colaborador.id != colab.id).first()
+                if dup:
+                    raise ValueError("Já existe outro colaborador com esta matrícula.")
+            setattr(colab, field, matricula)
+        elif field == "email":
             value = safe_lower(value or "")
             if not value:
                 raise ValueError("E-mail é obrigatório.")
@@ -237,6 +254,9 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
     # Mantém algumas chaves do raw_payload coerentes para a camada legada.
     raw = dict(colab.raw_payload or {}) if isinstance(colab.raw_payload, dict) else {}
     raw.update({
+        "MATRICULA": colab.matricula,
+        "MATRÍCULA": colab.matricula,
+        "__matricula_escolhida__": colab.matricula,
         "EMAIL DA EMPRESA": colab.email,
         "NOME COMPLETO": colab.nome_completo,
         "STATUS": colab.status,

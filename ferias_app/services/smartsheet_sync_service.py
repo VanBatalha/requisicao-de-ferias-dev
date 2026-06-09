@@ -93,6 +93,19 @@ def normalize_user_type_value(value: Any) -> str:
     return raw if raw in {"USER", "DP", "ADMIN"} else "USER"
 
 
+def normalize_matricula(value: Any) -> str:
+    """Normaliza a matrícula como código externo do cadastro.
+
+    Não converte para número porque valores como MAT00061 perderiam zeros/prefixo.
+    """
+    return str(value or "").strip().upper()
+
+
+def _single_or_none(rows: list):
+    """Retorna o único item quando a busca é inequívoca; evita vincular matrícula duplicada."""
+    return rows[0] if len(rows) == 1 else None
+
+
 def parse_date(value: Any) -> Optional[dt.date]:
     if value in (None, ""):
         return None
@@ -251,7 +264,7 @@ def build_colaborador_record(row: Any, cadastro: SheetMaps) -> Optional[Colabora
         gestor_direto=safe_lower(cell_value(row, c_gestor_direto)),
         gestor_superior=safe_lower(cell_value(row, c_gestor_superior)),
         ativo_no_app=ativo_no_app,
-        matricula=str(cell_value(row, c_matricula) or "").strip(),
+        matricula=normalize_matricula(cell_value(row, c_matricula)),
         payload=payload,
     )
 
@@ -346,29 +359,92 @@ def _mark_sync(session, sync_name: str, status: str, error: Optional[str] = None
 
 def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) -> dict:
     records, duplicates = deduplicate_colaboradores(cadastro)
-    inserted = updated = complemento_inserted = complemento_updated = skipped = 0
+    inserted = updated = complemento_inserted = complemento_updated = skipped = conflicts = 0
+    matched_by = {"origem": 0, "matricula": 0, "email": 0, "novo": 0}
+    conflict_details: list[dict] = []
+
+    sheet_id_str = str(cadastro_sheet_id)
 
     for record in records:
         if not record.email:
             skipped += 1
             continue
 
-        colab = session.query(Colaborador).filter(func.lower(Colaborador.email) == record.email.lower()).first()
+        row_id_str = str(record.row_id)
+        record_matricula = normalize_matricula(record.matricula)
+
+        # Upsert precisa considerar a origem do Smartsheet antes do e-mail.
+        # Caso um e-mail mude na planilha, a origem continua a mesma. Se buscarmos
+        # apenas por e-mail, o app tenta inserir uma nova linha e quebra na unique
+        # constraint uq_colaboradores_origem.
+        colab = (
+            session.query(Colaborador)
+            .filter(
+                Colaborador.origem_sheet_id == sheet_id_str,
+                Colaborador.origem_row_id == row_id_str,
+            )
+            .first()
+        )
+        match_key = "origem" if colab else ""
+
+        if not colab and record_matricula:
+            rows = (
+                session.query(Colaborador)
+                .filter(func.lower(Colaborador.matricula) == record_matricula.lower())
+                .limit(2)
+                .all()
+            )
+            colab = _single_or_none(rows)
+            match_key = "matricula" if colab else ""
+
+        if not colab:
+            colab = session.query(Colaborador).filter(func.lower(Colaborador.email) == record.email.lower()).first()
+            match_key = "email" if colab else ""
+
         payload = dict(record.payload)
-        if record.matricula:
-            payload.setdefault("__matricula_escolhida__", record.matricula)
+        if record_matricula:
+            payload.setdefault("__matricula_escolhida__", record_matricula)
 
         is_new = colab is None
         if is_new:
-            colab = Colaborador(email=record.email, dias_direito=int(record.dias_direito or 0))
+            colab = Colaborador(
+                email=record.email,
+                matricula=record_matricula or None,
+                dias_direito=int(record.dias_direito or 0),
+                origem_sheet_id=sheet_id_str,
+                origem_row_id=row_id_str,
+            )
             session.add(colab)
             inserted += 1
+            matched_by["novo"] += 1
         else:
             updated += 1
+            matched_by[match_key or "email"] = matched_by.get(match_key or "email", 0) + 1
+
+        # Evita violar unique(email) caso existam cadastros legados conflitantes.
+        # O caso normal é: achou por origem/matrícula e atualiza o e-mail. Se outro
+        # colaborador já usa esse e-mail, preservamos o e-mail atual e registramos conflito.
+        email_owner = session.query(Colaborador).filter(func.lower(Colaborador.email) == record.email.lower()).first()
+        if email_owner and colab.id is not None and email_owner.id != colab.id:
+            conflicts += 1
+            conflict_details.append({
+                "email": record.email,
+                "matricula": record_matricula,
+                "origem_row_id": row_id_str,
+                "colaborador_id_por_origem": colab.id,
+                "colaborador_id_por_email": email_owner.id,
+                "acao": "email_preservado_para_evitar_duplicidade",
+            })
+        else:
+            colab.email = record.email
 
         # Para colaboradores existentes, não apaga dados corrigidos manualmente quando
         # a célula do Smartsheet vier vazia ou quando a coluna não tiver sido encontrada.
-        colab.email = record.email
+        if record_matricula:
+            colab.matricula = record_matricula
+        elif is_new and not colab.matricula:
+            colab.matricula = None
+
         colab.nome_completo = clean_optional(coalesce_sheet_value(record.nome, None if is_new else colab.nome_completo))
         colab.status = clean_optional(coalesce_sheet_value(record.status, None if is_new else colab.status))
         colab.data_admissao = coalesce_sheet_value(record.admissao, None if is_new else colab.data_admissao)
@@ -380,13 +456,13 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
             colab.dias_direito = incoming_dias
         else:
             colab.dias_direito = int(colab.dias_direito or 0)
-        colab.origem_sheet_id = str(cadastro_sheet_id)
-        colab.origem_row_id = str(record.row_id)
+        colab.origem_sheet_id = sheet_id_str
+        colab.origem_row_id = row_id_str
         colab.raw_payload = payload
         colab.updated_at = dt.datetime.utcnow()
 
-        # Agora o flush acontece somente depois de preencher dias_direito. Isso evita
-        # violar o NOT NULL da coluna em bases antigas do Render.
+        # Agora o flush acontece somente depois de preencher campos mínimos obrigatórios
+        # e depois de resolver conflitos de origem/e-mail.
         session.flush()
 
         comp = colab.complemento
@@ -404,8 +480,8 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
         comp.gestor_direto_email = clean_optional(coalesce_sheet_value(record.gestor_direto, comp.gestor_direto_email))
         comp.gestor_superior_email = clean_optional(coalesce_sheet_value(record.gestor_superior, comp.gestor_superior_email))
         comp.ativo_no_app = bool(record.ativo_no_app)
-        comp.origem_sheet_id = str(cadastro_sheet_id)
-        comp.origem_row_id = str(record.row_id)
+        comp.origem_sheet_id = sheet_id_str
+        comp.origem_row_id = row_id_str
         comp.updated_at = dt.datetime.utcnow()
 
     return {
@@ -415,6 +491,9 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
         "complemento_inserted": complemento_inserted,
         "complemento_updated": complemento_updated,
         "skipped": skipped,
+        "conflicts": conflicts,
+        "matched_by": matched_by,
+        "conflict_details": conflict_details[:50],
         "duplicates": {email: sorted(set(rows)) for email, rows in duplicates.items()},
     }
 

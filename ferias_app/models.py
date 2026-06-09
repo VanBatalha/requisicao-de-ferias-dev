@@ -42,6 +42,7 @@ class Colaborador(Base):
 
     id = Column(Integer, primary_key=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    matricula = Column(String(50), nullable=True, index=True)  # ID externo/código de cadastro vindo da coluna MATRÍCULA
     nome_completo = Column(String(255), nullable=True)
     status = Column(String(50), nullable=True)  # ATIVO, INATIVO
     data_admissao = Column(Date, nullable=True)
@@ -63,6 +64,7 @@ class Colaborador(Base):
         return {
             'id': self.id,
             'email': self.email,
+            'matricula': self.matricula,
             'nome_completo': self.nome_completo,
             'status': self.status,
             'data_admissao': self.data_admissao.isoformat() if self.data_admissao else None,

@@ -84,6 +84,21 @@ def init_db():
     # usadas pelo painel sem depender de uma ferramenta externa de migração.
     with _ENGINE.begin() as conn:
         conn.execute(text(f"ALTER TABLE {schema_sql}.sync_state ADD COLUMN IF NOT EXISTS extra JSONB"))
+        # Bases antigas podem ter sido criadas sem a matrícula do colaborador.
+        # Mantemos o ID inteiro interno como chave técnica, e usamos matricula como ID externo/cadastro.
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaboradores ADD COLUMN IF NOT EXISTS matricula VARCHAR(50)"))
+        conn.execute(text(f"""
+            UPDATE {schema_sql}.colaboradores
+               SET matricula = COALESCE(
+                   NULLIF(raw_payload->>'__matricula_escolhida__', ''),
+                   NULLIF(raw_payload->>'MATRICULA', ''),
+                   NULLIF(raw_payload->>'MATRÍCULA', ''),
+                   NULLIF(raw_payload->>'MATRICULA DO COLABORADOR', '')
+               )
+             WHERE (matricula IS NULL OR btrim(matricula) = '')
+               AND raw_payload IS NOT NULL
+        """))
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_colaboradores_matricula_lower ON {schema_sql}.colaboradores (lower(matricula))"))
         # Bases antigas podem ter sido criadas com dias_direito NOT NULL.
         # Garante valor padrão para importações/sincronizações com linhas incompletas no Smartsheet.
         conn.execute(text(f"UPDATE {schema_sql}.colaboradores SET dias_direito = 0 WHERE dias_direito IS NULL"))
