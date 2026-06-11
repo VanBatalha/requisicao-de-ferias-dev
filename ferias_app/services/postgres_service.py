@@ -23,15 +23,15 @@ log = get_logger(__name__)
 def _db_schema_name() -> str:
     """Schema PostgreSQL usado pelo app.
 
-    Por padrão usa ferias_app, que é o schema onde a base importada está.
+    Por padrão usa app_ferias, que é o schema onde a base importada está.
     Mantém validação simples para evitar SQL inválido/injeção via variável de ambiente.
     """
     import re
 
-    schema = (os.getenv("DB_SCHEMA") or "ferias_app").strip()
+    schema = (os.getenv("DB_SCHEMA") or "app_ferias").strip()
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
-        log.warning("DB_SCHEMA inválido (%r); usando ferias_app", schema)
-        schema = "ferias_app"
+        log.warning("DB_SCHEMA inválido (%r); usando app_ferias", schema)
+        schema = "app_ferias"
     return schema
 
 
