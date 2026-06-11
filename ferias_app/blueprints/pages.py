@@ -111,12 +111,12 @@ def ferias():
             continue
         nome_por_email[em] = c.get("NOME COMPLETO") or em
 
-    # lista de colaboradores disponíveis:
-    # - Gestor: somente subordinados
+    # Lista de colaboradores disponíveis:
+    # - Gestor: somente subordinados ATIVOS
     # - DP/Admin: todos ativos
     disponiveis: list[str] = []
     subs: list[str] = []
-
+    
     if is_dp_or_admin:
         seen = set()
         for c in colaboradores_all:
@@ -139,11 +139,12 @@ def ferias():
                 user=user,
                 gestor_email=gestor_email,
                 message=(
-                    "Nenhum subordinado vinculado ao seu usuário. "
-                    "Peça ao DP para preencher a coluna 'GESTOR DIRETO' (ou 'GESTOR') na planilha de cadastro."
+                    "Nenhum subordinado ATIVO vinculado ao seu usuário. "
+                    "Peça ao DP para preencher a coluna 'GESTOR DIRETO' (ou 'GESTOR SUPERIOR') "
+                    "na planilha de cadastro."
                 ),
             ), 403
-
+        
         seen = set()
         for e in subs:
             e = safe_lower(e)
