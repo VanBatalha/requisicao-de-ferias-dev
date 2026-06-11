@@ -79,12 +79,12 @@ def tem_grupo(email: str, grupo: str) -> bool:
 
     return False
 
-
 def _subordinados_emails(email: str) -> List[str]:
+    """Retorna emails dos subordinados de um gestor (apenas ATIVOS)."""
     email = safe_lower(email or "")
     if not email:
         return []
-
+    
     if _postgres_available():
         try:
             from .postgres_compat_service import subordinados_do_gestor_postgres
@@ -92,12 +92,16 @@ def _subordinados_emails(email: str) -> List[str]:
             out = []
             for s in subs:
                 em = safe_lower((s or {}).get("EMAIL DA EMPRESA") or (s or {}).get("email") or "")
-                if em:
+                status = safe_lower((s or {}).get("STATUS") or "ativo")
+                
+                # ⚠️ CRÍTICO: só considera subordinados ATIVOS
+                if em and status in ("ativo", "atv"):
                     out.append(em)
             return sorted(set(out))
         except Exception as exc:
             log.warning("Falha ao consultar subordinados no PostgreSQL para %s: %s", email, exc)
-
+    
+    # Fallback para Smartsheet (mantém lógica antiga)
     token = get_access_token()
     if not token:
         return []
@@ -107,14 +111,12 @@ def _subordinados_emails(email: str) -> List[str]:
         try:
             if isinstance(s, dict):
                 em = safe_lower(s.get("email") or s.get("EMAIL DA EMPRESA") or "")
-            else:
-                em = safe_lower(str(s))
-            if em:
-                out.append(em)
+                status = safe_lower(s.get("STATUS") or "ativo")
+                if em and status in ("ativo", "atv"):
+                    out.append(em)
         except Exception:
             continue
     return sorted(set(out))
-
 
 def is_gestor(email: str) -> bool:
     return len(_subordinados_emails(email)) > 0
