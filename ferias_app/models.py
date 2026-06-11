@@ -33,33 +33,35 @@ def _model_schema_name() -> str:
 
 _MODEL_SCHEMA = _model_schema_name()
 
-
-
 class Colaborador(Base):
     """Cadastro base do colaborador - origem CONTROLE_DP (Smartsheet)."""
     __tablename__ = 'colaboradores'
     __table_args__ = {'schema': _MODEL_SCHEMA}
-
-    id = Column(Integer, primary_key=True)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    matricula = Column(String(50), nullable=True, index=True)  # ID externo/código de cadastro vindo da coluna MATRÍCULA
-    nome_completo = Column(String(255), nullable=True)
+    
+    # ⚠️ MUDANÇA: ID agora é explícito (número da matrícula), não auto-incremento
+    id = Column(Integer, primary_key=True, autoincrement=False)  # autoincrement=False
+    
+    email = Column(String(255), nullable=True, index=True)  # Removido unique=True para permitir histórico
+    matricula = Column(String(50), nullable=False, unique=True, index=True)
+    nome_completo = Column(String(255), nullable=False)
     status = Column(String(50), nullable=True)  # ATIVO, INATIVO
     data_admissao = Column(Date, nullable=True)
     setor = Column(String(150), nullable=True)
     cargo = Column(String(150), nullable=True)
-    regime = Column(String(100), nullable=True)  # CLT, PJ, etc
-    dias_direito = Column(Integer, nullable=False, default=0, server_default="0")  # dias de direito base
-    origem_sheet_id = Column(String(50), nullable=True)  # ID da sheet no Smartsheet
-    origem_row_id = Column(String(50), nullable=True)  # ID da linha no Smartsheet
-    raw_payload = Column(PGJSON, nullable=True)  # JSON com dados originais completos
+    regime = Column(String(100), nullable=True)
+    dias_direito = Column(Integer, nullable=False, default=0, server_default="0")
+    origem_sheet_id = Column(String(50), nullable=True)
+    origem_row_id = Column(String(50), nullable=True)
+    raw_payload = Column(PGJSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
+    
     # Relacionamentos
-    complemento = relationship("ColaboradorComplemento", back_populates="colaborador", uselist=False, cascade="all, delete-orphan")
-    solicitacoes = relationship("Solicitacao", back_populates="colaborador", cascade="all, delete-orphan")
-
+    complemento = relationship("ColaboradorComplemento", back_populates="colaborador", 
+                               uselist=False, cascade="all, delete-orphan")
+    solicitacoes = relationship("Solicitacao", back_populates="colaborador", 
+                               cascade="all, delete-orphan")
+    
     def to_dict(self):
         return {
             'id': self.id,
