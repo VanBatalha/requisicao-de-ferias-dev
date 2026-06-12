@@ -12,17 +12,15 @@ from .services.auth_service import inject_user_context
 
 def create_app() -> Flask:
     """Cria e configura a aplicação Flask (app factory)."""
-
     setup_logging()
+
     settings = get_settings()
 
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
     app = Flask(
         __name__,
         template_folder=os.path.join(base_dir, "templates"),
     )
-
     app.secret_key = settings.secret_key
 
     # Inicializa o banco de dados PostgreSQL
@@ -48,7 +46,6 @@ def create_app() -> Flask:
         except Exception:
             pass
 
-
     # Log de exceções (ajuda debug no Render)
     from .logging_config import get_logger  # noqa: E402
     log = get_logger(__name__)
@@ -67,7 +64,7 @@ def create_app() -> Flask:
             return e
 
         # Para erros 500, retorna uma página simples (evita loops)
-                # Para rotas de API, devolve JSON para facilitar debug no front-end
+        # Para rotas de API, devolve JSON para facilitar debug no front-end
         try:
             if request.path.startswith("/api/"):
                 return jsonify({"ok": False, "message": "Internal Server Error", "detail": str(e)}), 500
@@ -76,5 +73,17 @@ def create_app() -> Flask:
 
         # Para erros 500 em páginas HTML, retorna texto simples (evita loops)
         return ("Internal Server Error", 500)
+
+    # ============================================
+    # INICIALIZAÇÃO DO SCHEDULER (AGENDADOR AUTOMÁTICO)
+    # ============================================
+    # Inicia o scheduler apenas se não estiver em modo de teste
+    if not app.testing:
+        try:
+            from .services.scheduler_service import start_scheduler
+            start_scheduler()
+            log.info("✅ Scheduler de sincronização automática inicializado com sucesso.")
+        except Exception as e:
+            log.warning("⚠️ Falha ao iniciar scheduler: %s. Sincronização automática desabilitada.", e)
 
     return app
