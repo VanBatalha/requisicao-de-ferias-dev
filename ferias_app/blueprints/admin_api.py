@@ -396,3 +396,21 @@ def api_admin_sync_state():
         return jsonify(get_sync_states())
     except Exception as e:
         return jsonify({"ok": False, "message": f"Erro ao consultar sincronização: {str(e)}"}), 500
+
+# ============================================
+# API: ADMIN - STATUS DO SCHEDULER
+# ============================================
+
+@bp.route("/api/admin/scheduler-status", methods=["GET"])
+def api_admin_scheduler_status():
+    """Retorna o status do scheduler de sincronização automática."""
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+    
+    try:
+        from ..services.scheduler_service import get_scheduler_status
+        status = get_scheduler_status()
+        return jsonify({"ok": True, **status})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao consultar scheduler: {str(e)}"}), 500
