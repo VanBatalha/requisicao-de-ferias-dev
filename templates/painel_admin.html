@@ -838,4 +838,59 @@
   carregarSameMonth();
 </script>
 
+<!-- ============================================ -->
+<!-- STATUS DO SCHEDULER (AGENDADOR AUTOMÁTICO) -->
+<!-- ============================================ -->
+<div class="card mt-4">
+    <h5>🕒 Sincronização Automática</h5>
+    <p class="text-muted">
+        O sistema sincroniza automaticamente o cadastro de colaboradores com a planilha Smartsheet 
+        todos os dias às <strong>12:00 (horário de Fortaleza)</strong>.
+    </p>
+    <div id="scheduler-status">
+        <p>Carregando status do scheduler...</p>
+    </div>
+    <button class="btn btn-sm btn-outline-primary mt-2" onclick="carregarStatusScheduler()">
+        🔄 Atualizar Status
+    </button>
+</div>
+
+<script>
+async function carregarStatusScheduler() {
+    const container = document.getElementById('scheduler-status');
+    container.innerHTML = '<p>Carregando...</p>';
+    
+    try {
+        const response = await fetch('/api/admin/scheduler-status');
+        const data = await response.json();
+        
+        if (data.ok) {
+            let html = '<div class="alert alert-info">';
+            html += `<strong>Status:</strong> ${data.running ? '✅ Ativo' : '❌ Inativo'}<br>`;
+            
+            if (data.jobs && data.jobs.length > 0) {
+                html += '<strong>Jobs agendados:</strong><ul>';
+                for (const job of data.jobs) {
+                    html += `<li><strong>${job.name}</strong><br>`;
+                    html += `Próxima execução: ${job.next_run_time ? new Date(job.next_run_time).toLocaleString('pt-BR') : 'N/A'}</li>`;
+                }
+                html += '</ul>';
+            } else {
+                html += '<em>Nenhum job agendado.</em>';
+            }
+            
+            html += '</div>';
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = `<div class="alert alert-danger">Erro: ${data.message}</div>`;
+        }
+    } catch (error) {
+        container.innerHTML = `<div class="alert alert-danger">Erro ao carregar status: ${error.message}</div>`;
+    }
+}
+
+// Carrega o status ao carregar a página
+document.addEventListener('DOMContentLoaded', carregarStatusScheduler);
+</script>
+
 {% endblock %}
