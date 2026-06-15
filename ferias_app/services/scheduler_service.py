@@ -1,8 +1,5 @@
-"""Serviço de agendamento automático para sincronização diária com Smartsheet.
-
-Configura um job para rodar todos os dias às 12:00 (horário de Fortaleza)
-e sincronizar o cadastro de colaboradores da planilha Smartsheet para o PostgreSQL.
-"""
+# ferias_app/services/scheduler_service.py
+"""Serviço de agendamento automático para sincronização diária com Smartsheet."""
 from __future__ import annotations
 
 import atexit
@@ -20,20 +17,24 @@ _scheduler: Optional[BackgroundScheduler] = None
 
 
 def start_scheduler():
-    """Inicia o agendador de background para sincronização diária."""
+    """Inicia o agendador de background para sincronização diária.
+    
+    Agenda a sincronização do Smartsheet para todos os dias às 12:00 
+    no horário de Fortaleza (UTC-3).
+    """
     global _scheduler
     
     if _scheduler is not None and _scheduler.running:
         log.warning("Scheduler já está em execução.")
         return
     
-    # Fuso horário de Fortaleza (UTC-3)
+    # Fuso horário de Fortaleza
     tz_fortaleza = pytz.timezone('America/Fortaleza')
     
     # Cria o scheduler
     _scheduler = BackgroundScheduler()
     
-    # Configura o job: todos os dias às 12:00 (horário de Fortaleza)
+    # Configura o job: todos os dias às 12:00
     trigger = CronTrigger(hour=12, minute=0, timezone=tz_fortaleza)
     
     def job_sync_cadastro():
@@ -42,13 +43,9 @@ def start_scheduler():
             log.info("🕒 Iniciando sincronização automática de cadastro (12:00 Fortaleza)...")
             
             # Importa aqui para evitar circular dependency
-            from .smartsheet_sync_service import sync_cadastro_from_smartsheet
+            from .sync_service import sincronizar_cadastro_smartsheet
             
-            result = sync_cadastro_from_smartsheet(
-                triggered_by="scheduler",
-                actor_email="scheduler@certare.com.br",
-                recalculate=False
-            )
+            result = sincronizar_cadastro_smartsheet()
             
             log.info("✅ Sincronização automática concluída: %s", result)
             
@@ -85,7 +82,11 @@ def stop_scheduler():
 
 
 def get_scheduler_status() -> dict:
-    """Retorna o status atual do scheduler."""
+    """Retorna o status atual do scheduler.
+    
+    Returns:
+        dict: Status do scheduler com informações dos jobs agendados
+    """
     if _scheduler is None:
         return {
             "running": False,
