@@ -365,26 +365,35 @@ def api_admin_cadastro_atualizar_colaborador(colaborador_id: int):
 
 
 # ============================================
-# API: ADMIN - SINCRONIZAÇÃO SMARTSHEET -> POSTGRESQL
+# API: ADMIN - SINCRONIZAÇÃO MANUAL
 # ============================================
 
 @bp.route("/api/admin/sync-cadastro", methods=["POST"])
 def api_admin_sync_cadastro():
-    user = _admin_required()
+    """Executa a sincronização manual do cadastro via Smartsheet."""
+    from flask import session
+    from ..services.auth_service import get_current_user
+    
+    user = get_current_user()
     if not user:
+        return jsonify({"ok": False, "message": "Não autenticado"}), 401
+    
+    # Verifica se é Admin ou DP
+    user_groups = user.get('groups', [])
+    if 'Administrador' not in user_groups and 'DP' not in user_groups:
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
-
-    payload = request.get_json(silent=True) or {}
-    recalculate = bool(payload.get("recalculate", False))
+    
     try:
-        result = sync_cadastro_from_smartsheet(
-            triggered_by="manual",
-            actor_email=user.get("email") or "",
-            recalculate=recalculate,
-        )
-        return jsonify(result)
+        from ..services.sync_service import sincronizar_cadastro_smartsheet
+        result = sincronizar_cadastro_smartsheet()
+        
+        if 'Erro' in result:
+            return jsonify({"ok": False, "message": result}), 500
+        
+        return jsonify({"ok": True, "message": result})
+        
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao sincronizar cadastro: {str(e)}"}), 500
+        return jsonify({"ok": False, "message": f"Erro: {str(e)}"}), 500
 
 
 @bp.route("/api/admin/sync-state", methods=["GET"])
@@ -404,8 +413,16 @@ def api_admin_sync_state():
 @bp.route("/api/admin/scheduler-status", methods=["GET"])
 def api_admin_scheduler_status():
     """Retorna o status do scheduler de sincronização automática."""
-    user = _admin_required()
+    from flask import session
+    from ..services.auth_service import get_current_user
+    
+    user = get_current_user()
     if not user:
+        return jsonify({"ok": False, "message": "Não autenticado"}), 401
+    
+    # Verifica se é Admin
+    user_groups = user.get('groups', [])
+    if 'Administrador' not in user_groups:
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
     
     try:
