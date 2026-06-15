@@ -1,12 +1,26 @@
 # ferias_app/services/__init__.py
 """Serviços do aplicativo de gestão de férias."""
+"""Serviços do aplicativo de gestão de férias."""
 
-# Não criar o app aqui! Isso causa loop de importação.
-# O app é criado em ferias_app/__init__.py
+try:
+    from .postgres_service import get_session, init_db, postgres_enabled
+except ImportError:
+    # Fallback se postgres_service não estiver disponível
+    def get_session():
+        raise NotImplementedError("PostgreSQL não configurado")
+    def init_db():
+        pass
+    def postgres_enabled():
+        return False
 
-# Apenas exponha os serviços que outros módulos precisam
-from .postgres_service import get_session, init_db, postgres_enabled
-from .normalization_service import normalize_email, normalize_status
+try:
+    from .normalization_service import normalize_email, normalize_status
+except ImportError:
+    # Fallback se normalization_service não estiver disponível
+    def normalize_email(email):
+        return email.strip().lower() if email else ""
+    def normalize_status(status):
+        return status.strip().upper() if status else ""
 
 __all__ = [
     'get_session',
