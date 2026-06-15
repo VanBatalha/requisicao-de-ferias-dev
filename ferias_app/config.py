@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Carrega variáveis do arquivo .env
 
+
 class Config:
     """Configuração base da aplicação."""
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -18,7 +19,7 @@ class Config:
     
     # Smartsheet (opcional)
     SMARTSHEET_SERVICE_TOKEN = os.getenv('SMARTSHEET_SERVICE_TOKEN', '')
-    ID_FOLHA_COLABORADORES = os.getenv('ID_FOLHA_COLABORADORES', '')
+    ID_FOLHA_COLABORADORES = os.getenv('-ID_FOLHA_COLABORADORES', '')
     
     # Debug
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
@@ -53,3 +54,22 @@ config = {
     'testing': TestingConfig,
     'default': DevelopmentConfig
 }
+
+
+def get_settings():
+    """Retorna as configurações da aplicação baseado no ambiente.
+    
+    Esta função é usada por serviços que precisam acessar as configurações
+    sem depender do contexto do Flask app.
+    
+    Returns:
+        Config: Instância da classe de configuração apropriada
+    """
+    env = os.getenv('FLASK_ENV', 'production')
+    
+    if env == 'development':
+        return DevelopmentConfig()
+    elif env == 'testing':
+        return TestingConfig()
+    else:
+        return ProductionConfig()
