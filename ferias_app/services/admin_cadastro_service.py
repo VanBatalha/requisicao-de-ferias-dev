@@ -91,6 +91,21 @@ def _as_bool(value: Any) -> bool:
     return text in {"1", "true", "sim", "s", "yes", "y", "on", "ativo"}
 
 
+def _is_active_status_expr():
+    return func.upper(func.coalesce(Colaborador.status, "ATIVO")).in_(["ATIVO", "ACTIVE"])
+
+
+def _active_colaborador_by_email(session, email: str):
+    email = safe_lower(email or "")
+    if not email:
+        return None
+    rows = session.query(Colaborador).filter(func.lower(Colaborador.email) == email.lower()).all()
+    if rows:
+        rows.sort(key=lambda c: (1 if str(c.status or "").strip().upper() in {"ATIVO", "ACTIVE"} else 0, int(c.id or 0)), reverse=True)
+        return rows[0]
+    return None
+
+
 def _serialize_date(value: Any) -> Optional[str]:
     if isinstance(value, dt.datetime):
         return value.date().isoformat()
@@ -116,8 +131,8 @@ def _sincronizar_comp_com_tabelas_novas(session, colab: Colaborador, comp: Colab
     # Hierarquia simples por e-mail. Quando encontrar matrícula do gestor, também grava.
     gd_email = safe_lower(comp.gestor_direto_email or '') or None
     gs_email = safe_lower(comp.gestor_superior_email or '') or None
-    gd = session.query(Colaborador).filter(func.lower(Colaborador.email) == gd_email).first() if gd_email else None
-    gs = session.query(Colaborador).filter(func.lower(Colaborador.email) == gs_email).first() if gs_email and gs_email != 'dp' else None
+    gd = _active_colaborador_by_email(session, gd_email) if gd_email else None
+    gs = _active_colaborador_by_email(session, gs_email) if gs_email and gs_email != 'dp' else None
     h = session.query(HierarquiaGestao).filter(HierarquiaGestao.colaborador_matricula == colab.matricula).first()
     if not h:
         h = HierarquiaGestao(colaborador_id=colab.id, colaborador_matricula=colab.matricula)
@@ -217,6 +232,7 @@ def buscar_colaboradores_admin(q: str, limit: int = 20) -> List[Dict[str, Any]]:
     rows = (
         session.query(Colaborador)
         .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
+        .filter(_is_active_status_expr())
         .filter(or_(
             func.lower(Colaborador.email).like(pattern),
             func.lower(Colaborador.nome_completo).like(pattern),
@@ -285,9 +301,9 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
             if not value:
                 raise ValueError("E-mail é obrigatório.")
             # impede duplicidade de e-mail em outro cadastro
-            dup = session.query(Colaborador).filter(func.lower(Colaborador.email) == value.lower(), Colaborador.id != colab.id).first()
+            dup = session.query(Colaborador).filter(func.lower(Colaborador.email) == value.lower(), Colaborador.id != colab.id, _is_active_status_expr()).first()
             if dup:
-                raise ValueError("Já existe outro colaborador com este e-mail.")
+                raise ValueError("Já existe outro colaborador ativo com este e-mail.")
             setattr(colab, field, value)
         elif field == "data_admissao":
             setattr(colab, field, _as_date(value))
@@ -370,7 +386,7 @@ def atualizar_user_type_por_email(email: str, user_type: str, actor_email: str =
     email = safe_lower(email or "")
     if not email:
         raise ValueError("E-mail é obrigatório.")
-    colab = session.query(Colaborador).filter(func.lower(Colaborador.email) == email.lower()).first()
+    colab = _active_colaborador_by_email(session, email)
     if not colab:
         return None
     return atualizar_colaborador_admin(colab.id, {"user_type": user_type}, actor_email=actor_email)

@@ -9,6 +9,7 @@ import datetime as dt
 import json
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from sqlalchemy import func, or_
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..utils import safe_lower
@@ -102,6 +103,33 @@ def _is_ativo_value(value: Any) -> bool:
     return st in {"ATIVO", "ACTIVE", "1", "SIM", "YES", "TRUE", "OK"}
 
 
+def _status_rank_colaborador(colab: Colaborador) -> int:
+    """Prioriza cadastros ativos quando o mesmo e-mail aparece em mais de uma matrícula."""
+    return 2 if _is_ativo_value(getattr(colab, "status", None)) else 0
+
+
+def _choose_preferred_colaborador(rows: list[Colaborador]) -> Optional[Colaborador]:
+    """Escolhe o cadastro ativo mais provável entre duplicidades por e-mail/local-part."""
+    if not rows:
+        return None
+    rows_sorted = sorted(
+        rows,
+        key=lambda c: (
+            _status_rank_colaborador(c),
+            1 if getattr(c, "email", None) else 0,
+            int(getattr(c, "id", 0) or 0),
+        ),
+        reverse=True,
+    )
+    return rows_sorted[0]
+
+
+def _active_query_filter(query):
+    """Aplica filtro de status ativo em consultas de usuário por nome/e-mail."""
+    from sqlalchemy import func
+    return query.filter(func.upper(func.coalesce(Colaborador.status, "ATIVO")).in_(["ATIVO", "ACTIVE"]))
+
+
 def is_colaborador_ativo_legacy(colab: Dict[str, Any]) -> bool:
     return _is_ativo_value(colab.get("STATUS") or colab.get("status") or colab.get("ativo_no_app"))
 
@@ -170,28 +198,29 @@ def _row_identity_filter(query, email: str):
 
 
 def get_colaborador_model(email: str) -> Optional[Colaborador]:
+    """Localiza colaborador por e-mail priorizando sempre o cadastro ATIVO.
+
+    Isso evita que logins/buscas com e-mail duplicado caiam em um contrato antigo
+    ou matrícula inativa. O registro inativo continua no banco para histórico, mas
+    não deve ser usado como identidade operacional do app.
+    """
     session = get_db_session()
     email = safe_lower(email or "")
     if not email:
         return None
-    colab = session.query(Colaborador).filter(Colaborador.email == email).first()
-    if colab:
-        return colab
+
+    exact = session.query(Colaborador).filter(func.lower(Colaborador.email) == email).all()
+    if exact:
+        return _choose_preferred_colaborador(exact)
+
     local = _email_local(email)
     if not local:
         return None
     try:
-        from sqlalchemy import func
-        matches = session.query(Colaborador).filter(func.split_part(Colaborador.email, '@', 1) == local).all()
+        matches = session.query(Colaborador).filter(func.split_part(func.lower(Colaborador.email), '@', 1) == local).all()
     except Exception:
         matches = [c for c in session.query(Colaborador).all() if _email_local(c.email) == local]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        active = [c for c in matches if _is_ativo_value(c.status)]
-        return active[0] if active else matches[0]
-    return None
-
+    return _choose_preferred_colaborador(matches)
 
 
 def _role_for_colaborador(colab: Colaborador) -> str:
@@ -332,12 +361,13 @@ def colaborador_to_legacy(colab: Colaborador) -> Dict[str, Any]:
 
 def listar_colaboradores_legacy(only_ativos: Optional[bool] = None) -> List[Dict[str, Any]]:
     session = get_db_session()
-    rows = (
+    query = (
         session.query(Colaborador)
         .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
-        .order_by(Colaborador.nome_completo)
-        .all()
     )
+    if only_ativos is True:
+        query = _active_query_filter(query)
+    rows = query.order_by(Colaborador.nome_completo).all()
     out = [colaborador_to_legacy(c) for c in rows]
     if only_ativos is True:
         out = [c for c in out if is_colaborador_ativo_legacy(c)]

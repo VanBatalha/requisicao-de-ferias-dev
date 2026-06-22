@@ -242,12 +242,12 @@
 </div>
 
 <div class="card" style="margin-top:16px;">
-  <h2>Importação de novos cadastros</h2>
+  <h2>Sincronização com Smartsheet</h2>
   <p class="muted">
-    Inclui no PostgreSQL apenas novos cadastros da planilha <strong>3609445264215940</strong>. A coluna <strong>MATRÍCULA</strong> é usada como ID externo: se a matrícula já existir no banco, os dados editados no app são preservados.
+    Lê a planilha de cadastro <strong>3609445264215940</strong>. A coluna <strong>MATRÍCULA</strong> é usada como ID externo. Cadastros já existentes preservam os dados principais editados no app, mas a sincronização atualiza <strong>permissões</strong>, <strong>hierarquia de gestão</strong> e o cache de acesso.
   </p>
   <div class="actions" style="margin-top:14px;">
-    <button class="btn" id="syncBtnCadastro">Importar novos cadastros agora</button>
+    <button class="btn" id="syncBtnCadastro">Sincronizar cadastro, permissões e hierarquia</button>
     <button class="btn btn-secondary" id="syncBtnStatus">Atualizar status</button>
   </div>
   <div id="syncMsg" class="muted" style="margin-top:10px;"></div>
@@ -566,7 +566,9 @@
     if (extra.records !== undefined) partes.push(`${extra.records} cadastro(s) processado(s)`);
     if (extra.inserted !== undefined) partes.push(`${extra.inserted} novo(s)`);
     if (extra.updated !== undefined && extra.updated > 0) partes.push(`${extra.updated} atualizado(s)`);
-    if (extra.existing_skipped !== undefined) partes.push(`${extra.existing_skipped} já existente(s) preservado(s)`);
+    if (extra.existing_skipped !== undefined) partes.push(`${extra.existing_skipped} cadastro(s) já existente(s) preservado(s)`);
+    if (extra.permissoes_synced !== undefined) partes.push(`${extra.permissoes_synced} permissões sincronizada(s)`);
+    if (extra.hierarquia_synced !== undefined) partes.push(`${extra.hierarquia_synced} hierarquia(s) sincronizada(s)`);
     if (extra.linked !== undefined && extra.linked > 0) partes.push(`${extra.linked} vínculo(s) de matrícula criado(s)`);
     if (extra.sem_matricula !== undefined && extra.sem_matricula > 0) partes.push(`${extra.sem_matricula} sem matrícula ignorado(s)`);
     if (extra.conflicts !== undefined && extra.conflicts > 0) partes.push(`${extra.conflicts} conflito(s) preservado(s)`);
@@ -575,8 +577,8 @@
   }
 
   async function sincronizarCadastro() {
-    if (!confirm("Importar agora novos cadastros para o PostgreSQL?\n\nModo seguro: apenas matrículas novas serão incluídas. Cadastros já existentes no banco serão preservados.")) return;
-    syncSetMsg("Sincronizando cadastro... aguarde.", "muted");
+    if (!confirm("Sincronizar agora o cadastro do Smartsheet com o PostgreSQL?\n\nOs dados principais dos colaboradores já existentes serão preservados, mas permissões e hierarquia serão atualizadas com base no Smartsheet.")) return;
+    syncSetMsg("Sincronizando cadastro, permissões e hierarquia... aguarde.", "muted");
     cad$("syncBtnCadastro").disabled = true;
     try {
       const resp = await fetch(`/api/admin/sync-cadastro`, {

@@ -24,7 +24,7 @@ def listar_colaboradores_bridge() -> List[Dict[str, Any]]:
     Retorna no formato esperado pelos blueprints (compatível com Smartsheet).
     """
     try:
-        colabs = listar_colaboradores()
+        colabs = listar_colaboradores(status_filter="ATIVO")
         
         # Converte para formato compatible com o código legado
         result = []
@@ -118,7 +118,7 @@ def listar_gestores_bridge() -> List[str]:
 def listar_emails_colaboradores_bridge() -> List[str]:
     """Bridge para listar todos os emails de colaboradores."""
     try:
-        colabs = listar_colaboradores()
+        colabs = listar_colaboradores(status_filter="ATIVO")
         return [c.get('email', '').lower() for c in colabs if c.get('email')]
     except Exception as e:
         log.error(f"Erro ao listar emails: {e}")
@@ -139,7 +139,8 @@ def get_subordinados_bridge(gestor_email: str) -> List[Dict[str, Any]]:
         subordinados = session.query(Colaborador).join(
             ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id
         ).filter(
-            ColaboradorComplemento.gestor_direto_email == gestor_email
+            ColaboradorComplemento.gestor_direto_email == gestor_email,
+            Colaborador.status.in_(["ATIVO", "Ativo", "ACTIVE"])
         ).all()
         
         result = []
@@ -208,7 +209,7 @@ def atualizar_relacao_gestor_bridge(email_colaborador: str, email_gestor: str) -
         session = get_db_session()
         from ..models import Colaborador, ColaboradorComplemento
         
-        colab = session.query(Colaborador).filter_by(email=email_colab).first()
+        colab = session.query(Colaborador).filter(Colaborador.email == email_colab, Colaborador.status.in_(["ATIVO", "Ativo", "ACTIVE"])).first()
         if not colab:
             return False
         

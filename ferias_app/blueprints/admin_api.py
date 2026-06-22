@@ -376,11 +376,13 @@ def api_admin_sync_cadastro():
 
     payload = request.get_json(silent=True) or {}
     recalculate = bool(payload.get("recalculate", False))
+    include_solicitacoes = bool(payload.get("include_solicitacoes", True))
     try:
         result = sync_cadastro_from_smartsheet(
             triggered_by="manual",
             actor_email=user.get("email") or "",
             recalculate=recalculate,
+            include_solicitacoes=include_solicitacoes,
         )
         return jsonify(result)
     except Exception as e:

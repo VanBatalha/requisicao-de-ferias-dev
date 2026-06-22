@@ -7,7 +7,7 @@ from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
 import json
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, text, func
 from sqlalchemy.orm import sessionmaker, Session
 from flask import g
 
@@ -214,10 +214,12 @@ def get_colaborador(email: str) -> Optional[Dict[str, Any]]:
     """Retorna dados do colaborador por email."""
     session = get_db_session()
     try:
-        colab = session.query(Colaborador).filter(
-            Colaborador.email == email.lower()
-        ).first()
-        
+        rows = session.query(Colaborador).filter(
+            func.lower(Colaborador.email) == email.lower()
+        ).all()
+        rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
+        colab = rows[0] if rows else None
+
         if not colab:
             return None
         
@@ -240,7 +242,7 @@ def listar_colaboradores(status_filter: Optional[str] = None) -> List[Dict[str, 
         query = session.query(Colaborador)
         
         if status_filter:
-            query = query.filter(Colaborador.status == status_filter.upper())
+            query = query.filter(func.upper(func.coalesce(Colaborador.status, 'ATIVO')) == str(status_filter).upper())
         
         colaboradores = query.order_by(Colaborador.nome_completo).all()
         
@@ -254,10 +256,10 @@ def get_saldos_colaborador(email: str) -> Dict[str, Any]:
     """Retorna saldos do colaborador."""
     session = get_db_session()
     try:
-        colab = session.query(Colaborador).filter(
-            Colaborador.email == email.lower()
-        ).first()
-        
+        rows = session.query(Colaborador).filter(func.lower(Colaborador.email) == email.lower()).all()
+        rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
+        colab = rows[0] if rows else None
+
         if not colab or not colab.complemento:
             return {
                 'regular': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
@@ -290,7 +292,15 @@ def _usuario_por_email(session, email: str):
     email = (email or "").strip().lower()
     if not email:
         return None
-    return session.query(Colaborador).filter(Colaborador.email == email).first()
+    rows = session.query(Colaborador).filter(func.lower(Colaborador.email) == email).all()
+    if rows:
+        rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
+        return rows[0]
+    local = email.split('@', 1)[0] if '@' in email else email
+    rows = session.query(Colaborador).filter(func.split_part(func.lower(Colaborador.email), '@', 1) == local).all()
+    rows = [c for c in rows if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'}]
+    rows.sort(key=lambda c: int(c.id or 0), reverse=True)
+    return rows[0] if rows else None
 
 
 def _atualizar_complemento_cache(session, colab: Colaborador):
