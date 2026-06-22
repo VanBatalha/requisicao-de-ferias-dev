@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from flask import redirect, render_template, request, session, url_for
+from sqlalchemy import func
 from .base import bp
 from ..logging_config import get_logger
 from ..services.ldap_service import authenticate
@@ -26,26 +27,32 @@ def login():
             raise ValueError("Email não encontrado no LDAP.")
         
         # 3. Consulta o banco de dados
+        # get_session() é um context manager. Na V13 ele estava sendo usado como
+        # se fosse uma Session direta, gerando o erro:
+        # '_GeneratorContextManager' object has no attribute 'query'.
         from ..models import Colaborador
-        db = get_session()
-        colaborador = db.query(Colaborador).filter(
-            Colaborador.email == email,
-            Colaborador.status == 'Ativo'  # ⚠️ CRÍTICO: só permite login se estiver ATIVO
-        ).first()
-        
-        if not colaborador:
-            log.warning("Tentativa de login de usuário inativo ou não cadastrado: %s", email)
-            raise ValueError("Usuário não autorizado. Verifique se seu email está cadastrado e ativo no sistema.")
+        with get_session() as db:
+            colaborador = db.query(Colaborador).filter(
+                func.lower(Colaborador.email) == email,
+                func.upper(func.coalesce(Colaborador.status, 'ATIVO')).in_(['ATIVO', 'ACTIVE'])
+            ).first()
+            
+            if not colaborador:
+                log.warning("Tentativa de login de usuário inativo ou não cadastrado: %s", email)
+                raise ValueError("Usuário não autorizado. Verifique se seu email está cadastrado e ativo no sistema.")
+            
+            colaborador_id = colaborador.id
+            colaborador_matricula = colaborador.matricula
         
         # 4. Sessão mínima usada pelo restante do app
         session["user"] = {
             "email": email,
             "name": u.name or username,
-            "id": colaborador.id,  # ID agora é o número da matrícula
+            "id": colaborador_id,  # ID interno/número da matrícula
             "username": u.username,
             "dn": u.dn,
             "groups": u.groups,
-            "matricula": colaborador.matricula,
+            "matricula": colaborador_matricula,
         }
         
         return redirect(url_for("ferias.home"))
