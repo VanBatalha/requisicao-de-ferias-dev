@@ -63,9 +63,20 @@ class Colaborador(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    complemento = relationship("ColaboradorComplemento", back_populates="colaborador", uselist=False, cascade="all, delete-orphan")
+    complemento = relationship(
+        "ColaboradorComplemento",
+        back_populates="colaborador",
+        uselist=False,
+        cascade="all, delete-orphan",
+        foreign_keys="ColaboradorComplemento.colaborador_id",
+    )
     solicitacoes = relationship("Solicitacao", back_populates="colaborador", foreign_keys="Solicitacao.colaborador_id")
-    periodos = relationship("PeriodoAquisitivo", back_populates="colaborador", cascade="all, delete-orphan")
+    periodos = relationship(
+        "PeriodoAquisitivo",
+        back_populates="colaborador",
+        cascade="all, delete-orphan",
+        foreign_keys="PeriodoAquisitivo.colaborador_id",
+    )
 
     def to_dict(self):
         return {
@@ -125,7 +136,7 @@ class PeriodoAquisitivo(Base):
     data_fim = Column(Date, nullable=False)
     is_atual = Column(Boolean, default=False)
 
-    colaborador = relationship("Colaborador", back_populates="periodos")
+    colaborador = relationship("Colaborador", back_populates="periodos", foreign_keys=[colaborador_id])
     saldos = relationship("SaldoPeriodo", back_populates="periodo", cascade="all, delete-orphan")
 
 
@@ -266,7 +277,7 @@ class ColaboradorComplemento(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    colaborador = relationship("Colaborador", back_populates="complemento")
+    colaborador = relationship("Colaborador", back_populates="complemento", foreign_keys=[colaborador_id])
 
     def to_dict(self):
         return {
