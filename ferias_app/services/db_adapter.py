@@ -137,7 +137,7 @@ def get_subordinados_bridge(gestor_email: str) -> List[Dict[str, Any]]:
         from ..models import Colaborador, ColaboradorComplemento
         
         subordinados = session.query(Colaborador).join(
-            ColaboradorComplemento
+            ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id
         ).filter(
             ColaboradorComplemento.gestor_direto_email == gestor_email
         ).all()

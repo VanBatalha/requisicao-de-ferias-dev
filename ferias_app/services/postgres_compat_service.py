@@ -332,7 +332,12 @@ def colaborador_to_legacy(colab: Colaborador) -> Dict[str, Any]:
 
 def listar_colaboradores_legacy(only_ativos: Optional[bool] = None) -> List[Dict[str, Any]]:
     session = get_db_session()
-    rows = session.query(Colaborador).outerjoin(ColaboradorComplemento).order_by(Colaborador.nome_completo).all()
+    rows = (
+        session.query(Colaborador)
+        .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
+        .order_by(Colaborador.nome_completo)
+        .all()
+    )
     out = [colaborador_to_legacy(c) for c in rows]
     if only_ativos is True:
         out = [c for c in out if is_colaborador_ativo_legacy(c)]

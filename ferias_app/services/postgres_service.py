@@ -60,10 +60,14 @@ def init_db():
     _ENGINE = create_engine(db_url, echo=False, pool_pre_ping=True)
 
     @event.listens_for(_ENGINE, "connect")
-    def _set_search_path(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
+    def _set_search_path_and_timezone(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute(f"SET search_path TO {schema_sql}, public")
+            # Mantem NOW(), CURRENT_TIMESTAMP e exibicao de TIMESTAMPTZ no fuso da empresa.
+            app_timezone = getattr(settings, "app_timezone", None) or "America/Fortaleza"
+            safe_tz = str(app_timezone).replace("'", "''")
+            cursor.execute(f"SET TIME ZONE '{safe_tz}'")
         finally:
             cursor.close()
 
@@ -73,6 +77,8 @@ def init_db():
     with _ENGINE.begin() as conn:
         conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}"))
         conn.execute(text(f"SET search_path TO {schema_sql}, public"))
+        safe_tz = str(getattr(settings, "app_timezone", "America/Fortaleza") or "America/Fortaleza").replace("'", "''")
+        conn.execute(text(f"SET TIME ZONE '{safe_tz}'"))
 
     _SessionLocal = sessionmaker(bind=_ENGINE, expire_on_commit=False)
     

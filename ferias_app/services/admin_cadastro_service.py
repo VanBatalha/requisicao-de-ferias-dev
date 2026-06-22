@@ -216,7 +216,7 @@ def buscar_colaboradores_admin(q: str, limit: int = 20) -> List[Dict[str, Any]]:
     pattern = f"%{q.lower()}%"
     rows = (
         session.query(Colaborador)
-        .outerjoin(ColaboradorComplemento)
+        .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
         .filter(or_(
             func.lower(Colaborador.email).like(pattern),
             func.lower(Colaborador.nome_completo).like(pattern),

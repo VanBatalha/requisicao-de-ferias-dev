@@ -52,5 +52,9 @@ class Settings:
     # Runtime
     environment: str = _env("ENVIRONMENT", _env("FLASK_ENV", "production"))
 
+    # Timezone de negocio do app. O Render registra logs em UTC, mas as conexoes
+    # PostgreSQL e o scheduler podem operar no fuso da empresa.
+    app_timezone: str = _env("APP_TIMEZONE", "America/Fortaleza")
+
 def get_settings() -> Settings:
     return Settings()
