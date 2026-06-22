@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+from ..logging_config import get_logger
+
 from ..services.core_support import (
     _canonical_status,
     _col_id,
@@ -18,6 +20,8 @@ from ..services.core_support import (
     safe_lower,
 )
 
+
+log = get_logger(__name__)
 
 def _iter_solicitacoes(sheet_sol):
     cols = get_col_map(sheet_sol)
@@ -39,9 +43,14 @@ def listar_solicitacoes(email: str):
     try:
         from .postgres_compat_service import postgres_enabled, listar_solicitacoes_postgres
         if postgres_enabled():
-            return listar_solicitacoes_postgres(email)
-    except Exception:
-        pass
+            try:
+                return listar_solicitacoes_postgres(email)
+            except Exception as exc:
+                log.exception("Falha ao listar solicitações no PostgreSQL: %s", exc)
+                return []
+    except Exception as exc:
+        log.exception("Falha ao verificar PostgreSQL para solicitações: %s", exc)
+        return []
 
     client = get_smartsheet_client()
     if not client:
@@ -75,9 +84,14 @@ def listar_solicitacoes_equipes(emails: list[str]):
     try:
         from .postgres_compat_service import postgres_enabled, listar_solicitacoes_equipes_postgres
         if postgres_enabled():
-            return listar_solicitacoes_equipes_postgres(emails)
-    except Exception:
-        pass
+            try:
+                return listar_solicitacoes_equipes_postgres(emails)
+            except Exception as exc:
+                log.exception("Falha ao listar solicitações de equipe no PostgreSQL: %s", exc)
+                return []
+    except Exception as exc:
+        log.exception("Falha ao verificar PostgreSQL para solicitações de equipe: %s", exc)
+        return []
 
     client = get_smartsheet_client()
     if not client:
@@ -114,9 +128,14 @@ def listar_solicitacoes_todas():
     try:
         from .postgres_compat_service import postgres_enabled, listar_solicitacoes_todas_postgres
         if postgres_enabled():
-            return listar_solicitacoes_todas_postgres()
-    except Exception:
-        pass
+            try:
+                return listar_solicitacoes_todas_postgres()
+            except Exception as exc:
+                log.exception("Falha ao listar todas as solicitações no PostgreSQL: %s", exc)
+                return []
+    except Exception as exc:
+        log.exception("Falha ao verificar PostgreSQL para todas as solicitações: %s", exc)
+        return []
 
     client = get_smartsheet_client()
     if not client:

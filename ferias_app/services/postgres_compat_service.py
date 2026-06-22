@@ -258,6 +258,8 @@ def _saldos_por_periodo(colab: Colaborador, saldo_tipo: str = 'REGULAR') -> list
             'numero': int(p.periodo_numero or 0),
             'inicio': p.data_inicio,
             'fim': p.data_fim,
+            'inicio_fmt': _formatar_data_br(p.data_inicio),
+            'fim_fmt': _formatar_data_br(p.data_fim),
             'direito': direito,
             'usados': usados,
             'reservados': reservados,
@@ -479,8 +481,12 @@ def listar_solicitacoes_postgres(email: str):
     colab = get_colaborador_model(email)
     if not colab:
         return []
-    rows = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula == colab.matricula, Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
-    return [_solicitacao_tuple(s, include_email=False) for s in rows]
+    try:
+        rows = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula == colab.matricula, Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
+        return [_solicitacao_tuple(s, include_email=False) for s in rows]
+    except Exception as exc:
+        log.exception("Falha ao listar solicitações no PostgreSQL para %s: %s", email, exc)
+        return []
 
 
 def listar_solicitacoes_equipes_postgres(emails: Sequence[str]):
@@ -488,15 +494,27 @@ def listar_solicitacoes_equipes_postgres(emails: Sequence[str]):
     if not allowed:
         return []
     session = get_db_session()
-    matriculas = [c.matricula for c in session.query(Colaborador).filter(Colaborador.email.in_(allowed)).all()]
-    rows = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula.in_(matriculas), Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
-    return [_solicitacao_tuple(s, include_email=True) for s in rows]
+    try:
+        locals_allowed = {_email_local(e) for e in allowed if _email_local(e)}
+        colaboradores = session.query(Colaborador).all()
+        matriculas = [c.matricula for c in colaboradores if safe_lower(c.email) in allowed or _email_local(c.email) in locals_allowed]
+        if not matriculas:
+            return []
+        rows = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula.in_(matriculas), Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
+        return [_solicitacao_tuple(s, include_email=True) for s in rows]
+    except Exception as exc:
+        log.exception("Falha ao listar solicitações da equipe no PostgreSQL: %s", exc)
+        return []
 
 
 def listar_solicitacoes_todas_postgres():
     session = get_db_session()
-    rows = session.query(Solicitacao).filter(Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
-    return [_solicitacao_tuple(s, include_email=True) for s in rows]
+    try:
+        rows = session.query(Solicitacao).filter(Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
+        return [_solicitacao_tuple(s, include_email=True) for s in rows]
+    except Exception as exc:
+        log.exception("Falha ao listar todas as solicitações no PostgreSQL: %s", exc)
+        return []
 
 
 def get_ferias_mes_postgres(mes, ano):

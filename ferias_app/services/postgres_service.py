@@ -140,6 +140,38 @@ def init_db():
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_superior_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.auditoria_saldos ADD COLUMN IF NOT EXISTS usuario_alterou_matricula VARCHAR(50)"))
 
+        # Hotfix V16: bancos criados manualmente/por dumps parciais podem ter as tabelas
+        # canônicas, mas não todas as colunas que os modelos SQLAlchemy selecionam.
+        # Como o SQLAlchemy seleciona todas as colunas mapeadas, a ausência de apenas
+        # uma delas derruba a rota /ferias com 500. Estes ALTERs são idempotentes.
+        conn.execute(text(f"ALTER TABLE {schema_sql}.saldos_periodo ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS origem_sheet_id VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS smartsheet_row_id VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS source_created_at TIMESTAMP"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS source_modified_at TIMESTAMP"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS gestor_superior_email VARCHAR(255)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS flags_internas JSONB"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_direito INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_usado INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_reservado INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_disponivel INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_direito INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_usado INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_reservado INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_disponivel INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS total_solicitacoes INTEGER DEFAULT 0"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS periodo_aquisitivo_atual JSONB"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS calculated_at TIMESTAMP"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS origem_sheet_id VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS origem_row_id VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+
     log.info("Banco de dados PostgreSQL inicializado no schema %s", schema)
 
 

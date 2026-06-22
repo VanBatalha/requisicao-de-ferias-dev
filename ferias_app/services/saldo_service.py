@@ -21,11 +21,24 @@ from ..services.core_support import (
     get_smartsheet_client,
     safe_lower,
 )
+from ..logging_config import get_logger
+
 from .periodo_aquisitivo_service import (
     allocate_period_balance,
     completed_aquisitive_periods,
     get_periodo_aquisitivo_atual,
 )
+
+
+log = get_logger(__name__)
+
+
+def _empty_resumo_ferias():
+    return {
+        "regular": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "ajustes": 0, "periodos": [], "periodo_atual": None},
+        "premium": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "ajustes": 0, "periodos": []},
+        "total_solicitacoes": 0,
+    }
 
 
 def _max_periodo_aquisitivo_numero(value) -> int:
@@ -38,17 +51,25 @@ def _max_periodo_aquisitivo_numero(value) -> int:
 
 
 def get_resumo_ferias(email: str):
-    # Caminho principal no Render: PostgreSQL. Mantém fallback para Smartsheet legado.
+    # Caminho principal no Render: PostgreSQL.
+    # Se o PostgreSQL estiver habilitado e falhar, não caímos no Smartsheet
+    # silenciosamente, pois no Render normalmente não há token/sessão Smartsheet
+    # e isso geraria 500 pouco explicativo.
     try:
         from .postgres_compat_service import postgres_enabled, get_resumo_ferias_postgres
         if postgres_enabled():
-            return get_resumo_ferias_postgres(email)
-    except Exception:
-        pass
+            try:
+                return get_resumo_ferias_postgres(email)
+            except Exception as exc:
+                log.exception("Falha ao montar resumo de férias no PostgreSQL para %s: %s", email, exc)
+                return _empty_resumo_ferias()
+    except Exception as exc:
+        log.exception("Falha ao verificar PostgreSQL para resumo de férias: %s", exc)
+        return _empty_resumo_ferias()
 
     client = get_smartsheet_client()
     if not client:
-        raise RuntimeError("Usuário não autenticado")
+        return _empty_resumo_ferias()
 
     email = safe_lower(email)
     regular_base = 0
