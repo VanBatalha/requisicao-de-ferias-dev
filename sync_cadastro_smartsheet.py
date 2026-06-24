@@ -12,15 +12,33 @@ Variáveis necessárias no ambiente:
 """
 from __future__ import annotations
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from ferias_app import create_app
 from ferias_app.services.smartsheet_sync_service import sync_cadastro_from_smartsheet
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "sim", "s", "yes", "y"}
+
+
 def main() -> int:
+    # Por padrão sincroniza somente cadastro/permissões/hierarquia.
+    # Para incluir histórico de solicitações, defina INCLUDE_SOLICITACOES=true.
+    include_solicitacoes = _truthy(os.getenv("INCLUDE_SOLICITACOES"))
+
     app = create_app()
     with app.app_context():
-        result = sync_cadastro_from_smartsheet(triggered_by="cron", actor_email="cron", recalculate=False, include_solicitacoes=True)
-        print("Sincronização de cadastro/permissões/hierarquia concluída.")
+        result = sync_cadastro_from_smartsheet(
+            triggered_by="cron",
+            actor_email="cron",
+            recalculate=False,
+            include_solicitacoes=include_solicitacoes,
+        )
+        print("Sincronização concluída.")
         print(result)
     return 0
 

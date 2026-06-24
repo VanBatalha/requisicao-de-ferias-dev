@@ -57,7 +57,24 @@ def init_db():
     schema = _db_schema_name()
     schema_sql = _quote_ident(schema)
 
-    _ENGINE = create_engine(db_url, echo=False, pool_pre_ping=True)
+    # Conexão externa do Render pode derrubar sessões SSL que ficam paradas
+    # enquanto o Smartsheet responde. pool_pre_ping ajuda, pool_recycle força
+    # renovação periódica e keepalives reduzem quedas em sincronizações longas.
+    connect_args = {
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
+    _ENGINE = create_engine(
+        db_url,
+        echo=False,
+        pool_pre_ping=True,
+        pool_recycle=60,
+        pool_timeout=30,
+        pool_reset_on_return="rollback",
+        connect_args=connect_args,
+    )
 
     @event.listens_for(_ENGINE, "connect")
     def _set_search_path_and_timezone(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
@@ -188,6 +205,23 @@ def get_db_session() -> Session:
             init_db()
         g._db_session = _SessionLocal()
     return g._db_session
+
+
+
+def dispose_engine():
+    """Descarta conexões do pool para forçar nova conexão no próximo uso.
+
+    Útil no sincronizador local: o app inicializa o banco, depois espera o
+    Smartsheet responder por vários minutos; nesse intervalo a conexão SSL
+    externa do Render pode ser encerrada.
+    """
+    global _ENGINE
+    if _ENGINE is not None:
+        try:
+            _ENGINE.dispose()
+            log.info("Pool PostgreSQL descartado; próxima sessão abrirá nova conexão.")
+        except Exception as exc:  # pragma: no cover
+            log.warning("Falha ao descartar pool PostgreSQL: %s", exc)
 
 
 @contextmanager

@@ -9,7 +9,9 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import json
+import os
 import re
+import time
 import traceback
 import unicodedata
 from dataclasses import dataclass
@@ -21,9 +23,24 @@ from sqlalchemy import func
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..models import Auditoria, Colaborador, ColaboradorComplemento, Solicitacao, SyncState, PermissaoUsuario, HierarquiaGestao
-from .postgres_service import get_session
+from .postgres_service import get_session, dispose_engine
 
 log = get_logger(__name__)
+
+
+def _log_progress(stage: str, current: int | None = None, total: int | None = None, started_ts: float | None = None, message: str = "") -> None:
+    """Emite progresso visivel no console/Render durante sincronizacoes longas."""
+    if current is not None and total:
+        pct = (current / total) * 100 if total else 0
+        elapsed = time.monotonic() - started_ts if started_ts else 0
+        if current and elapsed > 0:
+            rate = current / elapsed
+            remaining = max(total - current, 0) / rate if rate > 0 else 0
+            log.info("SYNC %s: %s/%s (%.1f%%) - estimativa restante %.0fs%s", stage, current, total, pct, remaining, f" - {message}" if message else "")
+        else:
+            log.info("SYNC %s: %s/%s (%.1f%%)%s", stage, current, total, pct, f" - {message}" if message else "")
+    else:
+        log.info("SYNC %s%s", stage, f": {message}" if message else "")
 
 STATUS_ATIVO_SET = {"ATIVO", "ACTIVE"}
 STATUS_INATIVO_SET = {"INATIVO", "INACTIVE", "DESLIGADO", "DEMITIDO", "RESCINDIDO", "AFASTADO"}
@@ -430,15 +447,39 @@ def _get_colaborador_by_matricula(session, matricula: Any) -> Optional[Colaborad
 
 
 def _max_matricula_numero_pg(session) -> int:
-    max_num = 0
-    for value in session.query(Colaborador.matricula).all():
+    """Retorna a maior matricula apenas para estatistica do relatório de sync.
+
+    Essa consulta não é necessária para a carga funcionar. Em execução local usando
+    a External Database URL do Render, varrer a tabela logo no início podia dar a
+    impressão de travamento ou segurar a conexão por tempo demais. Por padrão,
+    pulamos essa estatística e retornamos 0. Para habilitar novamente, defina
+    SYNC_CALC_MAX_MATRICULA=true.
+    """
+    enabled = str(os.getenv("SYNC_CALC_MAX_MATRICULA", "false") or "").strip().lower()
+    if enabled not in {"1", "true", "sim", "yes", "y"}:
+        _log_progress("postgres", message="pulando leitura de maior matricula inicial (estatistica opcional)")
+        return 0
+
+    try:
+        _log_progress("postgres", message="calculando maior matricula inicial")
+        max_num = 0
+        # yield_per evita carregar tudo de uma vez em bases maiores.
+        for (matricula,) in session.query(Colaborador.matricula).yield_per(100):
+            try:
+                n = extract_id_from_matricula(matricula)
+                if n is not None and n > max_num:
+                    max_num = n
+            except Exception:
+                continue
+        return max_num
+    except Exception as exc:
+        log.warning("Nao foi possivel calcular maior matricula inicial; seguindo sync sem essa estatistica: %s", exc)
         try:
-            n = extract_id_from_matricula(value[0])
-            if n is not None and n > max_num:
-                max_num = n
+            session.rollback()
         except Exception:
-            continue
-    return max_num
+            pass
+        dispose_engine()
+        return 0
 
 
 def _values_equal(a: Any, b: Any) -> bool:
@@ -575,7 +616,7 @@ def _sync_hierarquia_gestao(session, colab: Colaborador, record: ColaboradorReco
     return created
 
 
-def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) -> dict:
+def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, precomputed: Optional[tuple[list[ColaboradorRecord], dict]] = None) -> dict:
     """Sincroniza cadastro, permissões e hierarquia a partir do Smartsheet.
 
     Regras atuais:
@@ -586,7 +627,15 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
       pois essas tabelas estavam vazias na nova base e são essenciais para menus,
       admins, gestores e DP.
     """
-    records, duplicates = deduplicate_colaboradores(cadastro)
+    # V22: em execuções locais usando a External Database URL do Render, a
+    # deduplicação da planilha pode levar tempo. Se ela ocorrer depois que
+    # uma conexão PostgreSQL já foi aberta, a conexão SSL pode ficar ociosa
+    # e ser derrubada antes da primeira consulta real. Por isso aceitamos
+    # registros já pré-processados antes de abrir a sessão/transação.
+    if precomputed is not None:
+        records, duplicates = precomputed
+    else:
+        records, duplicates = deduplicate_colaboradores(cadastro)
     inserted = linked = existing_skipped = existing_updated = skipped = conflicts = sem_matricula = 0
     new_above_last_matricula = existing_changed = existing_unchanged = 0
     max_matricula_pg_inicio = _max_matricula_numero_pg(session)
@@ -595,7 +644,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
     matched_by = {
         "matricula_existente": 0,
         "origem_existente": 0,
-        "email_existente": 0,
+        "email_existente": 0,  # legado: não usado para vínculo cadastral desde a V23
         "vinculado_por_email_ou_origem": 0,
         "novo": 0,
         "sem_matricula": 0,
@@ -606,7 +655,21 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
 
     sheet_id_str = str(cadastro_sheet_id)
 
-    for record in records:
+    total_records = len(records)
+    started_progress = time.monotonic()
+    cadastro_batch_size = 25
+    _log_progress("cadastro", 0, total_records, started_progress, "iniciando inclusao/atualizacao em lotes")
+
+    for idx, record in enumerate(records, start=1):
+        if idx == 1 or idx % cadastro_batch_size == 0 or idx == total_records:
+            if idx > 1 and idx % cadastro_batch_size == 0:
+                try:
+                    session.commit()
+                    _log_progress("cadastro", idx - 1, total_records, started_progress, "lote de cadastro gravado")
+                except Exception:
+                    session.rollback()
+                    raise
+            _log_progress("cadastro", idx, total_records, started_progress, "processando colaboradores")
         row_id_str = str(record.row_id)
         record_matricula = normalize_matricula(record.matricula)
 
@@ -638,12 +701,16 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
             Colaborador.origem_sheet_id == sheet_id_str,
             Colaborador.origem_row_id == row_id_str,
         ).first()
-        by_email = _resolve_colaborador_by_email(session, record.email) if record.email else None
-        legacy_colab = by_origem or by_email
+        # V23: a matrícula é a chave de negócio. Não usamos mais e-mail como
+        # critério de vínculo de cadastro, porque existem recontratações/trocas
+        # de modalidade em que o mesmo e-mail aparece em duas matrículas
+        # diferentes (uma inativa e outra ativa). A busca operacional do app
+        # já prioriza status ATIVO, então o histórico pode coexistir.
+        legacy_colab = by_origem
         if legacy_colab:
             if legacy_colab.matricula and legacy_colab.matricula.upper() != record_matricula:
                 conflicts += 1
-                matched_by["origem_existente" if by_origem else "email_existente"] += 1
+                matched_by["origem_existente"] += 1
                 conflict_details.append({
                     "email": record.email,
                     "matricula_smartsheet": record_matricula,
@@ -651,7 +718,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
                     "origem_row_id": row_id_str,
                     "colaborador_id": legacy_colab.id,
                     "acao": "preservado_sem_alterar",
-                    "motivo": "Registro existente tem outra matrícula. Nenhum dado cadastral foi sobrescrito.",
+                    "motivo": "Mesma linha de origem aponta para outra matrícula. Registro preservado para evitar sobrescrita indevida.",
                 })
                 processed_for_access.append((legacy_colab, record, row_id_str))
                 continue
@@ -718,32 +785,90 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
         matched_by["novo"] += 1
         processed_for_access.append((colab, record, row_id_str))
 
-    # Segunda passada: agora todos os colaboradores existentes/novos já estão visíveis
-    # na sessão, então é possível resolver gestores por e-mail/matrícula.
-    for colab, record, row_id_str in processed_for_access:
+    # Commit intermediario antes da etapa de acessos.
+    # Na External Database URL do Render, transacoes muito longas derrubam SSL.
+    # Gravamos o cadastro em lote e iniciamos a etapa seguinte com transacoes curtas.
+    try:
+        session.commit()
+        _log_progress("postgres", message="cadastro gravado; iniciando permissoes/hierarquia em lotes")
+    except Exception:
+        session.rollback()
+        raise
+
+    # Segunda passada: agora todos os colaboradores existentes/novos ja estao visiveis
+    # no banco. As permissoes/hierarquia sao gravadas em pequenos lotes, com commit
+    # a cada 25 registros. Se a conexao externa cair no meio, fazemos rollback,
+    # descartamos o pool e seguimos para o proximo registro, evitando efeito cascata
+    # de PendingRollbackError ate o fim da sincronizacao.
+    total_access = len(processed_for_access)
+    access_progress = time.monotonic()
+    access_batch_size = 25
+    _log_progress("acessos", 0, total_access, access_progress, "permissoes e hierarquia")
+    for access_idx, (colab, record, row_id_str) in enumerate(processed_for_access, start=1):
+        if access_idx == 1 or access_idx % access_batch_size == 0 or access_idx == total_access:
+            _log_progress("acessos", access_idx, total_access, access_progress, "permissoes e hierarquia")
         try:
-            created_comp = _upsert_complemento_acesso(session, colab, record, sheet_id_str, row_id_str)
-            if created_comp:
-                complemento_inserted += 1
-            else:
-                complemento_updated += 1
-            _sync_permissoes_usuario(session, colab, record.user_type or "USER")
-            permissoes_synced += 1
-            created_h = _sync_hierarquia_gestao(session, colab, record)
-            hierarquia_synced += 1
-            if created_h:
-                hierarquia_inserted += 1
+            # Recarrega o colaborador na sessao atual; depois de commits/rollbacks
+            # intermediarios, evita usar um objeto ORM com estado antigo.
+            fresh_colab = session.get(Colaborador, getattr(colab, "id", None))
+            if not fresh_colab:
+                conflicts += 1
+                conflict_details.append({
+                    "email": record.email,
+                    "matricula": getattr(colab, "matricula", None),
+                    "acao": "falha_acesso_hierarquia",
+                    "motivo": "Colaborador nao encontrado ao sincronizar acesso/hierarquia.",
+                })
+                continue
+
+            with session.begin_nested():
+                created_comp = _upsert_complemento_acesso(session, fresh_colab, record, sheet_id_str, row_id_str)
+                if created_comp:
+                    complemento_inserted += 1
+                else:
+                    complemento_updated += 1
+                _sync_permissoes_usuario(session, fresh_colab, record.user_type or "USER")
+                permissoes_synced += 1
+                created_h = _sync_hierarquia_gestao(session, fresh_colab, record)
+                hierarquia_synced += 1
+                if created_h:
+                    hierarquia_inserted += 1
         except Exception as exc:
             conflicts += 1
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            log.exception("Falha ao sincronizar acesso/hierarquia para %s (%s)", record.email, getattr(colab, "matricula", None))
             conflict_details.append({
                 "email": record.email,
-                "matricula": colab.matricula,
+                "matricula": getattr(colab, "matricula", None),
                 "acao": "falha_acesso_hierarquia",
                 "motivo": str(exc)[:500],
             })
+            continue
+
+        if access_idx % access_batch_size == 0 or access_idx == total_access:
+            try:
+                session.commit()
+                _log_progress("acessos", access_idx, total_access, access_progress, "lote gravado")
+            except Exception as exc:
+                conflicts += 1
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+                log.exception("Falha ao gravar lote de permissoes/hierarquia ate o item %s", access_idx)
+                conflict_details.append({
+                    "email": record.email,
+                    "matricula": getattr(colab, "matricula", None),
+                    "acao": "falha_commit_lote_acesso",
+                    "motivo": str(exc)[:500],
+                })
+                continue
 
     return {
-        "mode": "sync_by_matricula_insert_new_update_source_fields_and_access",
+        "mode": "sync_by_matricula_chunked_commits_v27",
         "records": len(records),
         "inserted": inserted,
         "updated": existing_updated,
@@ -768,12 +893,17 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int) ->
 
 def _canonical_status(value: Any) -> str:
     raw = normalize_text(value)
-    if raw in {"APROVADA", "APROVADO", "APROVADAS"}:
-        return "APROVADA"
+    # O banco novo usa enum com valores masculinos em algumas instalações
+    # (APROVADO/CANCELADO/REPROVADO). A planilha antiga usa APROVADA/CANCELADA.
+    # Mantemos compatibilidade normalizando para os valores mais aceitos pelo enum.
+    if raw in {"APROVADA", "APROVADO", "APROVADAS", "APROVADOS"}:
+        return "APROVADO"
     if raw in {"PENDENTE", "EM ANALISE", "EM ANÁLISE", "ANALISE", "ANÁLISE", "RESERVA", "RESERVADO"}:
-        return "RESERVA"
-    if raw in {"CANCELADA", "CANCELADO", "REPROVADA", "REPROVADO"}:
-        return raw
+        return "PENDENTE"
+    if raw in {"CANCELADA", "CANCELADO", "CANCELADAS", "CANCELADOS"}:
+        return "CANCELADO"
+    if raw in {"REPROVADA", "REPROVADO", "REPROVADAS", "REPROVADOS"}:
+        return "REPROVADO"
     return raw or "PENDENTE"
 
 
@@ -852,8 +982,9 @@ def _sync_solicitacoes(session, solicitacoes: SheetMaps, solicitacoes_sheet_id: 
             skipped += 1
             continue
 
-        colab = _resolve_colaborador_by_email(session, colaborador_email, only_active=True)
-        solicitante = _resolve_colaborador_by_email(session, gestor_email or criado_por, only_active=True)
+        with session.no_autoflush:
+            colab = _resolve_colaborador_by_email(session, colaborador_email, only_active=True)
+            solicitante = _resolve_colaborador_by_email(session, gestor_email or criado_por, only_active=True)
         if not colab:
             sem_colaborador += 1
 
@@ -925,7 +1056,7 @@ def _recalculate_complemento(session) -> dict:
             data_inicio = sol.data_inicio if isinstance(sol.data_inicio, dt.date) else parse_date(sol.data_inicio)
 
             if bool(sol.is_ajuste):
-                if status == "APROVADA":
+                if status in {"APROVADA", "APROVADO"}:
                     if saldo_tipo == "PREMIUM":
                         ajuste_premium += dias
                     else:
@@ -939,14 +1070,14 @@ def _recalculate_complemento(session) -> dict:
             if saldo_tipo == "PREMIUM":
                 if premium_ini and premium_fim_excl and data_inicio and not (premium_ini <= data_inicio < premium_fim_excl):
                     continue
-                if status == "APROVADA":
+                if status in {"APROVADA", "APROVADO"}:
                     premium_usados += dias
-                elif status == "RESERVA":
+                elif status in {"RESERVA", "RESERVADO", "PENDENTE"}:
                     premium_reservados += dias
             else:
-                if status == "APROVADA":
+                if status in {"APROVADA", "APROVADO"}:
                     regular_usados += dias
-                elif status == "RESERVA":
+                elif status in {"RESERVA", "RESERVADO", "PENDENTE"}:
                     regular_reservados += dias
 
         regular_direito = max(0, regular_base + ajuste_regular)
@@ -987,19 +1118,63 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
     client.errors_as_exceptions(True)
 
     started = dt.datetime.utcnow()
-    with get_session() as session:
-        _mark_sync(session, "cadastro", "running", extra={"triggered_by": triggered_by, "actor_email": actor_email, "sheet_id": sheet_id})
-        session.commit()
-        try:
-            cadastro = get_sheet(client, sheet_id)
-            result = _sync_colaboradores(session, cadastro, sheet_id)
-            solicitacoes_result = {}
-            if include_solicitacoes and settings.id_folha_solicitacoes:
-                solicitacoes_sheet_id = int(settings.id_folha_solicitacoes)
-                solicitacoes_sheet = get_sheet(client, solicitacoes_sheet_id)
+    _log_progress("inicio", message=f"baixando cadastro Smartsheet {sheet_id}")
+
+    # Baixa as planilhas antes de abrir transação com PostgreSQL.
+    # Isso evita conexão/transaction idle por vários minutos enquanto o Smartsheet responde.
+    cadastro = get_sheet(client, sheet_id)
+    _log_progress("smartsheet", message=f"cadastro baixado: {len(cadastro.rows)} linha(s)")
+
+    solicitacoes_sheet_id = int(settings.id_folha_solicitacoes or 0)
+    solicitacoes_sheet = None
+    if include_solicitacoes and solicitacoes_sheet_id:
+        _log_progress("smartsheet", message=f"baixando solicitacoes {solicitacoes_sheet_id}")
+        solicitacoes_sheet = get_sheet(client, solicitacoes_sheet_id)
+        _log_progress("smartsheet", message=f"solicitacoes baixadas: {len(solicitacoes_sheet.rows)} linha(s)")
+
+    # Deduplica/processa a planilha antes de abrir uma conexão/transação
+    # com o PostgreSQL. Na execução local pela External Database URL do Render,
+    # esse processamento pode deixar a conexão SSL ociosa por tempo suficiente
+    # para o servidor fechá-la, gerando "SSL connection has been closed unexpectedly".
+    _log_progress("preprocessamento", message="deduplicando cadastro por matricula")
+    cadastro_precomputed = deduplicate_colaboradores(cadastro)
+    _log_progress("preprocessamento", message=f"{len(cadastro_precomputed[0])} registro(s) apos deduplicacao")
+
+    # Marca execução iniciada usando uma sessão curta e fecha tudo em seguida.
+    try:
+        with get_session() as session:
+            _mark_sync(session, "cadastro", "running", extra={
+                "triggered_by": triggered_by,
+                "actor_email": actor_email,
+                "sheet_id": sheet_id,
+                "progress_message": "Iniciando sincronização",
+                "progress_percent": 0,
+            })
+            session.commit()
+    finally:
+        dispose_engine()
+
+    result = {}
+    solicitacoes_result = {}
+    recalc_result = {"recalculated": 0}
+    extra = {}
+
+    try:
+        # Transação principal: grava dados. O status final é marcado depois,
+        # em sessão nova, para uma falha no sync_state não desfazer a carga.
+        _log_progress("postgres", message="abrindo transacao principal")
+        with get_session() as session:
+            result = _sync_colaboradores(session, cadastro, sheet_id, precomputed=cadastro_precomputed)
+            session.flush()
+
+            if include_solicitacoes and solicitacoes_sheet is not None and solicitacoes_sheet_id:
+                _log_progress("solicitacoes", message="sincronizando folha historica")
                 solicitacoes_result = _sync_solicitacoes(session, solicitacoes_sheet, solicitacoes_sheet_id)
-                _mark_sync(session, "solicitacoes", "success", success=True, extra={"sheet_id": solicitacoes_sheet_id, **solicitacoes_result})
-            recalc_result = _recalculate_complemento(session) if recalculate else {"recalculated": 0}
+
+            if recalculate:
+                _log_progress("saldos", message="recalculando complementos")
+                recalc_result = _recalculate_complemento(session)
+
             finished = dt.datetime.utcnow()
             extra = {
                 **result,
@@ -1011,9 +1186,6 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
                 "started_at": started.isoformat(),
                 "finished_at": finished.isoformat(),
             }
-            _mark_sync(session, "cadastro", "success", success=True, extra=extra)
-            if recalculate:
-                _mark_sync(session, "saldos", "success", success=True, extra=recalc_result)
             try:
                 session.add(Auditoria(
                     actor_email=safe_lower(actor_email or triggered_by),
@@ -1026,21 +1198,48 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
                 ))
             except Exception:
                 pass
-            log.info("Sincronização de cadastro concluída: %s", extra)
-            return {"ok": True, **extra}
-        except Exception as exc:
-            err = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            # Depois de erro em flush/commit, a Session fica bloqueada até rollback().
-            # Sem isso, a tela mostra apenas o erro genérico de transação já revertida.
-            session.rollback()
-            try:
-                _mark_sync(session, "cadastro", "error", error=err[:4000], success=False, extra={"triggered_by": triggered_by, "actor_email": actor_email, "sheet_id": sheet_id, "include_solicitacoes": include_solicitacoes})
-                session.commit()
-            except Exception:
-                session.rollback()
-            log.exception("Falha na sincronização de cadastro")
-            raise
+            session.commit()
 
+        dispose_engine()
+
+        # Sessão curta apenas para status final. Se falhar, os dados já foram gravados.
+        try:
+            with get_session() as status_session:
+                _mark_sync(status_session, "cadastro", "success", success=True, extra={
+                    **extra,
+                    "progress_message": "Sincronização concluída",
+                    "progress_percent": 100,
+                })
+                if include_solicitacoes and solicitacoes_result:
+                    _mark_sync(status_session, "solicitacoes", "success", success=True, extra={"sheet_id": solicitacoes_sheet_id, **solicitacoes_result})
+                if recalculate:
+                    _mark_sync(status_session, "saldos", "success", success=True, extra=recalc_result)
+                status_session.commit()
+        except Exception:
+            log.exception("Dados sincronizados, mas houve falha ao gravar sync_state final.")
+
+        log.info("Sincronização de cadastro concluída: %s", extra)
+        _log_progress("fim", message="sincronizacao concluida")
+        return {"ok": True, **extra}
+
+    except Exception as exc:
+        err = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        try:
+            dispose_engine()
+            with get_session() as status_session:
+                _mark_sync(status_session, "cadastro", "error", error=err[:4000], success=False, extra={
+                    "triggered_by": triggered_by,
+                    "actor_email": actor_email,
+                    "sheet_id": sheet_id,
+                    "include_solicitacoes": include_solicitacoes,
+                    "progress_message": "Erro na sincronização",
+                    "progress_percent": None,
+                })
+                status_session.commit()
+        except Exception:
+            log.exception("Falha ao registrar erro de sincronização no sync_state.")
+        log.exception("Falha na sincronização de cadastro")
+        raise
 
 def get_sync_states() -> dict:
     with get_session() as session:
