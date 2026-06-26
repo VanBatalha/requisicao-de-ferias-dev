@@ -162,6 +162,40 @@ class SaldoPeriodo(Base):
         return float((self.dias_direito or 0) - (self.dias_reservados or 0) - (self.dias_usados or 0))
 
 
+class SaldoPeriodoNovo(Base):
+    """Fonte oficial de saldo por período aquisitivo.
+
+    Esta tabela é intencionalmente independente de auditoria_saldos.
+    solicitacoes_ferias guarda os eventos; saldo_periodo guarda o saldo vivo
+    por matrícula/período/tipo.
+    """
+    __tablename__ = "saldo_periodo"
+    __table_args__ = (
+        UniqueConstraint("colaborador_matricula", "periodo_numero", "tipo_saldo", name="uq_saldo_periodo_matricula_periodo_tipo"),
+        {"schema": _MODEL_SCHEMA},
+    )
+
+    id = Column(Integer, primary_key=True)
+    colaborador_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=False, index=True)
+    colaborador_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=False, index=True)
+    periodo_numero = Column(Integer, nullable=False)
+    data_inicio = Column(Date, nullable=False)
+    data_fim = Column(Date, nullable=False)
+    is_atual = Column(Boolean, default=False)
+    tipo_saldo = Column(String(20), nullable=False, default="REGULAR")
+    saldo_inicial = Column(Numeric(6, 2), default=0)
+    saldo_utilizado = Column(Numeric(6, 2), default=0)
+    saldo_reservado = Column(Numeric(6, 2), default=0)
+    saldo_disponivel = Column(Numeric(6, 2), default=0)
+    ultima_alteracao = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    @property
+    def disponivel(self) -> float:
+        return float(self.saldo_disponivel or 0)
+
+
 class Solicitacao(Base):
     """Solicitações no novo banco.
 
@@ -197,6 +231,7 @@ class Solicitacao(Base):
     dias = Column(Integer, nullable=True)
     is_ajuste = Column(Boolean, default=False)
     metadata_json = Column("metadata", JSONB, nullable=True)
+    periodo_aquisitivo_origem = Column(Text, nullable=True)
     raw_payload = Column(JSONB, nullable=True)
     source_created_at = Column(DateTime, nullable=True)
     source_modified_at = Column(DateTime, nullable=True)
@@ -222,6 +257,7 @@ class Solicitacao(Base):
             "observacoes": self.observacoes,
             "is_ajuste": self.is_ajuste,
             "metadata": self.metadata_json,
+            "periodo_aquisitivo_origem": self.periodo_aquisitivo_origem,
         }
 
 
@@ -254,8 +290,12 @@ class ColaboradorComplemento(Base):
     colaborador_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=False, unique=True)
     colaborador_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=True, index=True)
     user_type = Column(String(50), nullable=True, default="USER")
+    # Campos legados por e-mail continuam para compatibilidade, mas a relação
+    # operacional nova é por matrícula/texto especial (DP/GESTOR).
     gestor_direto_email = Column(String(255), nullable=True)
     gestor_superior_email = Column(String(255), nullable=True)
+    gestor_direto = Column(String(50), nullable=True)
+    gestor_superior = Column(String(50), nullable=True)
     ativo_no_app = Column(Boolean, default=True)
     flags_internas = Column(JSONB, nullable=True)
 
@@ -283,6 +323,9 @@ class ColaboradorComplemento(Base):
         return {
             "user_type": self.user_type,
             "gestor_direto_email": self.gestor_direto_email,
+            "gestor_superior_email": self.gestor_superior_email,
+            "gestor_direto": self.gestor_direto,
+            "gestor_superior": self.gestor_superior,
             "ativo_no_app": self.ativo_no_app,
             "saldo_regular": {
                 "direito": self.saldo_regular_direito,

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, or_
 
 from ..logging_config import get_logger
-from ..models import Auditoria, Colaborador, ColaboradorComplemento, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, AuditoriaSaldos
+from ..models import Auditoria, Colaborador, ColaboradorComplemento, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo, AuditoriaSaldos
 from ..utils import safe_lower
 from .postgres_service import get_db_session
 
@@ -159,29 +159,29 @@ def _sincronizar_comp_com_tabelas_novas(session, colab: Colaborador, comp: Colab
 
 def _saldos_periodo_json(session, colab: Colaborador):
     rows = (
-        session.query(PeriodoAquisitivo, SaldoPeriodo)
-        .join(SaldoPeriodo, SaldoPeriodo.periodo_id == PeriodoAquisitivo.id)
-        .filter(PeriodoAquisitivo.colaborador_matricula == colab.matricula)
-        .order_by(PeriodoAquisitivo.data_inicio.asc(), PeriodoAquisitivo.periodo_numero.asc(), SaldoPeriodo.tipo_saldo.asc())
+        session.query(SaldoPeriodoNovo)
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
+        .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc(), SaldoPeriodoNovo.tipo_saldo.asc())
         .all()
     )
     out = []
-    for p, s in rows:
-        direito = int(round(float(s.dias_direito or 0)))
-        usados = int(round(float(s.dias_usados or 0)))
-        reservados = int(round(float(s.dias_reservados or 0)))
+    for s in rows:
+        direito = int(round(float(s.saldo_inicial or 0)))
+        usados = int(round(float(s.saldo_utilizado or 0)))
+        reservados = int(round(float(s.saldo_reservado or 0)))
+        disponivel = int(round(float(s.saldo_disponivel or 0)))
         out.append({
             'saldo_id': s.id,
-            'periodo_id': p.id,
+            'periodo_id': s.id,
             'tipo_saldo': s.tipo_saldo,
-            'periodo_numero': p.periodo_numero,
-            'data_inicio': p.data_inicio.isoformat() if p.data_inicio else None,
-            'data_fim': p.data_fim.isoformat() if p.data_fim else None,
-            'is_atual': bool(p.is_atual),
+            'periodo_numero': s.periodo_numero,
+            'data_inicio': s.data_inicio.isoformat() if s.data_inicio else None,
+            'data_fim': s.data_fim.isoformat() if s.data_fim else None,
+            'is_atual': bool(s.is_atual),
             'dias_direito': direito,
             'dias_usados': usados,
             'dias_reservados': reservados,
-            'dias_disponiveis': max(0, direito - usados - reservados),
+            'dias_disponiveis': max(0, disponivel),
         })
     return out
 
@@ -204,6 +204,8 @@ def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
         "user_type": (comp.user_type if comp else "USER") or "USER",
         "gestor_direto_email": (comp.gestor_direto_email if comp else "") or "",
         "gestor_superior_email": (comp.gestor_superior_email if comp else "") or "",
+        "gestor_direto": (getattr(comp, "gestor_direto", None) if comp else "") or "",
+        "gestor_superior": (getattr(comp, "gestor_superior", None) if comp else "") or "",
         "ativo_no_app": bool(comp.ativo_no_app) if comp else True,
         "flags_internas": comp.flags_internas if comp else {},
         "saldo_regular_direito": int((comp.saldo_regular_direito if comp else 0) or 0),
@@ -328,6 +330,8 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
             setattr(comp, field, ut)
         elif field in {"gestor_direto_email", "gestor_superior_email"}:
             setattr(comp, field, safe_lower(value or "") or None)
+        elif field in {"gestor_direto", "gestor_superior"}:
+            setattr(comp, field, str(value or "").strip().upper() or None)
         elif field == "ativo_no_app":
             setattr(comp, field, _as_bool(value))
         elif field in INTEGER_FIELDS:
@@ -357,6 +361,8 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
         "USER TYPE": comp.user_type,
         "GESTOR DIRETO": comp.gestor_direto_email,
         "GESTOR SUPERIOR": comp.gestor_superior_email,
+        "GESTOR_DIRETO_MATRICULA": getattr(comp, "gestor_direto", None),
+        "GESTOR_SUPERIOR_MATRICULA": getattr(comp, "gestor_superior", None),
     })
     colab.raw_payload = raw
 

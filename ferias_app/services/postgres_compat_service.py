@@ -13,7 +13,7 @@ from sqlalchemy import func, or_
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..utils import safe_lower
-from ..models import Colaborador, ColaboradorComplemento, Solicitacao, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo
+from ..models import Colaborador, ColaboradorComplemento, Solicitacao, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo
 from .postgres_service import get_db_session
 from .normalization_service import canonical_status, is_ajuste, infer_saldo_tipo, norm_status
 
@@ -197,6 +197,38 @@ def _row_identity_filter(query, email: str):
         return query.filter(Colaborador.email == email)
 
 
+
+def get_colaborador_model_by_matricula(matricula: str) -> Optional[Colaborador]:
+    session = get_db_session()
+    matricula = str(matricula or "").strip().upper()
+    if not matricula:
+        return None
+    return session.query(Colaborador).filter(func.upper(Colaborador.matricula) == matricula).first()
+
+
+def _identidade_gestor_para_email(valor: str | None) -> str:
+    valor = str(valor or "").strip()
+    if not valor:
+        return ""
+    if valor.lower() in {"dp", "gestor"}:
+        return valor.lower()
+    if "@" in valor:
+        return safe_lower(valor)
+    colab = get_colaborador_model_by_matricula(valor)
+    return safe_lower(colab.email if colab else valor)
+
+
+def _identidade_gestor_para_matricula(valor: str | None) -> str:
+    valor = str(valor or "").strip()
+    if not valor:
+        return ""
+    if valor.lower() in {"dp", "gestor"}:
+        return valor.upper()
+    if "@" in valor:
+        colab = get_colaborador_model(valor)
+        return (colab.matricula if colab else valor).upper()
+    return valor.upper()
+
 def get_colaborador_model(email: str) -> Optional[Colaborador]:
     """Localiza colaborador por e-mail priorizando sempre o cadastro ATIVO.
 
@@ -262,39 +294,42 @@ def _hierarquia_for_colaborador(colab: Colaborador) -> tuple[str, str]:
     except Exception:
         pass
     comp = getattr(colab, 'complemento', None)
-    return safe_lower(getattr(comp, 'gestor_direto_email', '') if comp else ''), safe_lower(getattr(comp, 'gestor_superior_email', '') if comp else '')
+    gd = getattr(comp, 'gestor_direto', '') if comp else ''
+    gs = getattr(comp, 'gestor_superior', '') if comp else ''
+    gd_email = _identidade_gestor_para_email(gd) or safe_lower(getattr(comp, 'gestor_direto_email', '') if comp else '')
+    gs_email = _identidade_gestor_para_email(gs) or safe_lower(getattr(comp, 'gestor_superior_email', '') if comp else '')
+    return safe_lower(gd_email), safe_lower(gs_email)
 
 
 def _saldos_por_periodo(colab: Colaborador, saldo_tipo: str = 'REGULAR') -> list[dict]:
     session = get_db_session()
     saldo_tipo = (saldo_tipo or 'REGULAR').upper()
     rows = (
-        session.query(PeriodoAquisitivo, SaldoPeriodo)
-        .join(SaldoPeriodo, SaldoPeriodo.periodo_id == PeriodoAquisitivo.id)
-        .filter(PeriodoAquisitivo.colaborador_matricula == colab.matricula, SaldoPeriodo.tipo_saldo == saldo_tipo)
-        .order_by(PeriodoAquisitivo.data_inicio.asc(), PeriodoAquisitivo.periodo_numero.asc())
+        session.query(SaldoPeriodoNovo)
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
+        .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
         .all()
     )
     out = []
-    for p, s in rows:
-        direito = int(round(float(s.dias_direito or 0)))
-        usados = int(round(float(s.dias_usados or 0)))
-        reservados = int(round(float(s.dias_reservados or 0)))
-        saldo = max(0, direito - usados - reservados)
+    for s in rows:
+        direito = int(round(float(s.saldo_inicial or 0)))
+        usados = int(round(float(s.saldo_utilizado or 0)))
+        reservados = int(round(float(s.saldo_reservado or 0)))
+        saldo = max(0, int(round(float(s.saldo_disponivel or 0))))
         out.append({
             'id': s.id,
-            'periodo_id': p.id,
-            'numero': int(p.periodo_numero or 0),
-            'inicio': p.data_inicio,
-            'fim': p.data_fim,
-            'inicio_fmt': _formatar_data_br(p.data_inicio),
-            'fim_fmt': _formatar_data_br(p.data_fim),
+            'periodo_id': s.id,
+            'numero': int(s.periodo_numero or 0),
+            'inicio': s.data_inicio,
+            'fim': s.data_fim,
+            'inicio_fmt': _formatar_data_br(s.data_inicio),
+            'fim_fmt': _formatar_data_br(s.data_fim),
             'direito': direito,
             'usados': usados,
             'reservados': reservados,
             'saldo': saldo,
-            'label': _periodo_label(int(p.periodo_numero or 0), p.data_inicio, p.data_fim),
-            'atual': bool(p.is_atual),
+            'label': _periodo_label(int(s.periodo_numero or 0), s.data_inicio, s.data_fim),
+            'atual': bool(s.is_atual),
             'tipo_saldo': saldo_tipo,
         })
     return out
@@ -315,11 +350,15 @@ def colaborador_to_legacy(colab: Colaborador) -> Dict[str, Any]:
 
     gestor_direto = None
     gestor_superior = None
+    gestor_direto_matricula = ""
+    gestor_superior_matricula = ""
     user_type = None
     ativo_no_app = True
     if comp:
         gestor_direto = comp.gestor_direto_email
         gestor_superior = comp.gestor_superior_email
+        gestor_direto_matricula = _identidade_gestor_para_matricula(getattr(comp, 'gestor_direto', '') or '')
+        gestor_superior_matricula = _identidade_gestor_para_matricula(getattr(comp, 'gestor_superior', '') or '')
         user_type = comp.user_type
         ativo_no_app = comp.ativo_no_app
 
@@ -330,6 +369,9 @@ def colaborador_to_legacy(colab: Colaborador) -> Dict[str, Any]:
 
     out.update({
         "id": getattr(colab, "id", None),
+        "matricula": getattr(colab, "matricula", "") or "",
+        "MATRICULA": getattr(colab, "matricula", "") or "",
+        "MATRÍCULA": getattr(colab, "matricula", "") or "",
         "email": email,
         "nome": nome,
         "status": status,
@@ -341,6 +383,10 @@ def colaborador_to_legacy(colab: Colaborador) -> Dict[str, Any]:
         "user_type": user_type,
         "gestor_direto_email": gestor_direto,
         "gestor_superior_email": gestor_superior,
+        "gestor_direto": gestor_direto_matricula,
+        "gestor_superior": gestor_superior_matricula,
+        "GESTOR_DIRETO_MATRICULA": gestor_direto_matricula,
+        "GESTOR_SUPERIOR_MATRICULA": gestor_superior_matricula,
         "EMAIL DA EMPRESA": email,
         "NOME COMPLETO": nome,
         "STATUS": status,
@@ -404,28 +450,38 @@ def subordinados_do_gestor_postgres(gestor_email: str, only_ativos: bool = True)
     gestor_email = safe_lower(gestor_email or "")
     if not gestor_email:
         return []
+    gestor_colab = get_colaborador_model(gestor_email)
+    gestor_matricula = (gestor_colab.matricula or "").upper() if gestor_colab else ""
     is_dp_user = get_user_type_postgres(gestor_email) == "DP"
     out: List[Dict[str, Any]] = []
     seen = set()
     for c in listar_colaboradores_legacy(only_ativos=only_ativos):
         colab_email = safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
+        colab_matricula = str(c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or "").strip().upper()
         if not colab_email or emails_equivalentes(colab_email, gestor_email) or colab_email in seen:
             continue
-        gestor_direto = c.get("GESTOR DIRETO") or c.get("GESTOR") or c.get("gestor_direto_email")
-        gestor_superior = c.get("GESTOR SUPERIOR") or c.get("gestor_superior_email")
+        gestor_direto_email = c.get("GESTOR DIRETO") or c.get("GESTOR") or c.get("gestor_direto_email")
+        gestor_superior_email = c.get("GESTOR SUPERIOR") or c.get("gestor_superior_email")
+        gestor_direto_matricula = str(c.get("GESTOR_DIRETO_MATRICULA") or c.get("gestor_direto") or "").strip().upper()
+        gestor_superior_matricula = str(c.get("GESTOR_SUPERIOR_MATRICULA") or c.get("gestor_superior") or "").strip().upper()
         match = False
-        if is_dp_user and safe_lower(gestor_superior or "") == "dp":
+        if is_dp_user and safe_lower(gestor_superior_email or "") == "dp":
             match = True
-        elif gestor_superior and emails_equivalentes(gestor_superior, gestor_email):
+        elif is_dp_user and gestor_superior_matricula == "DP":
             match = True
-        elif gestor_direto and emails_equivalentes(gestor_direto, gestor_email):
+        elif gestor_matricula and gestor_superior_matricula == gestor_matricula:
+            match = True
+        elif gestor_superior_email and emails_equivalentes(gestor_superior_email, gestor_email):
+            match = True
+        elif gestor_matricula and gestor_direto_matricula == gestor_matricula:
+            match = True
+        elif gestor_direto_email and emails_equivalentes(gestor_direto_email, gestor_email):
             match = True
         if match:
             seen.add(colab_email)
             out.append(c)
-    out.sort(key=lambda x: (str(x.get("NOME COMPLETO") or "").casefold(), str(x.get("EMAIL DA EMPRESA") or "").casefold()))
+    out.sort(key=lambda x: (str(x.get("NOME COMPLETO") or "").casefold(), str(x.get("MATRICULA") or ""), str(x.get("EMAIL DA EMPRESA") or "").casefold()))
     return out
-
 
 def get_admissao_postgres(email: str) -> Optional[dt.date]:
     row = get_colaborador_legacy(email) or {}

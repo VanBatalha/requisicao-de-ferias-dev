@@ -370,14 +370,17 @@
       <div class="form-grid-main">
         <div class="form-group span-5">
           <label for="colaborador_email">Colaborador</label>
-          <select class="form-control" id="colaborador_email" name="colaborador_email" required>
+          <input type="text" class="form-control" id="colaborador_busca" list="colaboradores-opcoes"
+                 value="{% for c in colaboradores_opcoes %}{% if c.email == colaborador_email %}{{ c.matricula }} | {{ c.nome }}{% endif %}{% endfor %}"
+                 placeholder="Digite matrícula ou nome do colaborador..." autocomplete="off" required>
+          <input type="hidden" id="colaborador_email" name="colaborador_email" value="{{ colaborador_email }}">
+          <datalist id="colaboradores-opcoes">
             {% for c in colaboradores_opcoes %}
-              <option value="{{ c.email }}" {{ 'selected' if c.email == colaborador_email else '' }}>
-                {{ c.nome }}
-              </option>
+              <option value="{{ c.matricula }} | {{ c.nome }}"></option>
             {% endfor %}
-          </select>
-          <div class="hint">Ao alterar o colaborador, o painel é recarregado automaticamente.</div>
+          </datalist>
+          <script id="colaboradores-opcoes-json" type="application/json">{{ colaboradores_opcoes|tojson }}</script>
+          <div class="hint">Digite parte do nome ou matrícula. Ao selecionar, o painel é recarregado automaticamente.</div>
         </div>
 
         <div class="form-group span-2" id="grupo-tipo-solicitacao">
@@ -637,13 +640,35 @@ selTipoSolic?.addEventListener('change', _applyTipoFerias);
 inpInicio?.addEventListener('change', applyAfastamentoDates);
 _applyTipoFerias();
 
-  // Atualiza o painel ao trocar o colaborador (recarrega a página com ?colaborador=...)
-  const selColab = document.getElementById('colaborador_email');
-  selColab?.addEventListener('change', () => {
-    const email = (selColab.value || '').trim();
-    if (!email) return;
+  // Atualiza o painel ao trocar o colaborador (autocomplete por matrícula/nome)
+  const hiddenColab = document.getElementById('colaborador_email');
+  const inputColab = document.getElementById('colaborador_busca');
+  let opcoesColab = [];
+  try {
+    opcoesColab = JSON.parse(document.getElementById('colaboradores-opcoes-json')?.textContent || '[]');
+  } catch (e) { opcoesColab = []; }
+
+  function normMatFerias(v){ return (v || '').toString().trim().toUpperCase(); }
+  function labelColabFerias(c){
+    const mat = normMatFerias(c.matricula || c.MATRICULA || c['MATRÍCULA'] || '');
+    const nome = (c.nome || c['NOME COMPLETO'] || c.email || '').toString();
+    return mat ? `${mat} | ${nome}` : nome;
+  }
+  function findColabFerias(value){
+    const raw = (value || '').toString().trim();
+    if (!raw) return null;
+    const mat = normMatFerias(raw.split('|')[0]);
+    return opcoesColab.find(c => normMatFerias(c.matricula) === mat)
+      || opcoesColab.find(c => labelColabFerias(c).toLowerCase() === raw.toLowerCase())
+      || opcoesColab.find(c => labelColabFerias(c).toLowerCase().includes(raw.toLowerCase()));
+  }
+  inputColab?.addEventListener('change', () => {
+    const c = findColabFerias(inputColab.value);
+    if (!c || !c.email) return;
+    inputColab.value = labelColabFerias(c);
+    hiddenColab.value = c.email;
     const url = new URL(window.location.href);
-    url.searchParams.set('colaborador', email);
+    url.searchParams.set('colaborador', c.email);
     window.location.href = url.toString();
   });
 
@@ -731,8 +756,8 @@ _applyTipoFerias();
   }
 
   function montarResumoConfirmacao(){
-    const colaboradorSelect = document.getElementById('colaborador_email');
-    const colaboradorNome = colaboradorSelect?.selectedOptions?.[0]?.textContent?.trim() || colaboradorSelect?.value || '-';
+    const colaboradorSelect = document.getElementById('colaborador_busca');
+    const colaboradorNome = colaboradorSelect?.value?.trim() || document.getElementById('colaborador_email')?.value || '-';
     const tipo = document.getElementById('tipo_solicitacao')?.value || '-';
     const saldoTipo = document.getElementById('saldo_tipo')?.value === 'PREMIUM' ? 'Licença Certariana' : 'Férias regulares';
     const inicio = formatDatePtBrFromInput(document.getElementById('data_inicio')?.value || '');

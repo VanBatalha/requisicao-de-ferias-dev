@@ -103,13 +103,15 @@ def ferias():
 
     colaboradores_all = listar_colaboradores_cached()
 
-    # carrega nomes (para exibição)
+    # carrega nomes e matrículas (para exibição e desambiguação)
     nome_por_email = {}
+    matricula_por_email = {}
     for c in colaboradores_all:
-        em = safe_lower(c.get("EMAIL DA EMPRESA") or "")
+        em = safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
         if not em:
             continue
-        nome_por_email[em] = c.get("NOME COMPLETO") or em
+        nome_por_email[em] = c.get("NOME COMPLETO") or c.get("nome") or em
+        matricula_por_email[em] = c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or ""
 
     # lista de colaboradores disponíveis:
     # - Gestor: somente subordinados
@@ -156,7 +158,7 @@ def ferias():
             seen.add(gestor_email)
             disponiveis.append(gestor_email)
 
-    opcoes = [{"email": e, "nome": (nome_por_email.get(e) or e)} for e in disponiveis]
+    opcoes = [{"email": e, "nome": (nome_por_email.get(e) or e), "matricula": (matricula_por_email.get(e) or "")} for e in disponiveis]
     opcoes.sort(key=lambda x: ((x.get("nome") or "").casefold(), (x.get("email") or "").casefold()))
 
     selecionado = safe_lower(request.args.get("colaborador") or (opcoes[0]["email"] if opcoes else ""))

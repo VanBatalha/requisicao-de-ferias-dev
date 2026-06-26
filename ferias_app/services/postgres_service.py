@@ -14,7 +14,7 @@ from flask import g
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..models import (
-    Base, Colaborador, ColaboradorComplemento, Solicitacao, AdminConfig, Auditoria, SyncState, PeriodoAquisitivo, SaldoPeriodo, AuditoriaSaldos, PermissaoUsuario, HierarquiaGestao
+    Base, Colaborador, ColaboradorComplemento, Solicitacao, AdminConfig, Auditoria, SyncState, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo, AuditoriaSaldos, PermissaoUsuario, HierarquiaGestao
 )
 
 log = get_logger(__name__)
@@ -106,6 +106,31 @@ def init_db():
     # create_all() não altera tabelas existentes; por isso garantimos colunas novas
     # usadas pelo painel sem depender de uma ferramenta externa de migração.
     with _ENGINE.begin() as conn:
+        # Se a base antiga tiver status_solicitacao_enum, garante valores usados pela sincronização.
+        # Em bases novas a coluna é texto; nesse caso o bloco não faz nada.
+        conn.execute(text(f"""
+        DO $$
+        DECLARE
+            enum_reg regtype;
+            enum_value text;
+            enum_values text[] := ARRAY['PENDENTE','APROVADO','APROVADA','CANCELADO','CANCELADA','REPROVADO','REPROVADA','RESERVA','RESERVADO'];
+        BEGIN
+            SELECT to_regtype('{schema}.status_solicitacao_enum') INTO enum_reg;
+            IF enum_reg IS NOT NULL THEN
+                FOREACH enum_value IN ARRAY enum_values LOOP
+                    IF NOT EXISTS (
+                        SELECT 1
+                          FROM pg_enum e
+                         WHERE e.enumtypid = enum_reg
+                           AND e.enumlabel = enum_value
+                    ) THEN
+                        EXECUTE format('ALTER TYPE %s ADD VALUE %L', enum_reg::text, enum_value);
+                    END IF;
+                END LOOP;
+            END IF;
+        END $$;
+        """))
+
         conn.execute(text(f"ALTER TABLE {schema_sql}.sync_state ADD COLUMN IF NOT EXISTS extra JSONB"))
 
         # Compatibilidade com bancos criados manualmente a partir do novo modelo
@@ -154,6 +179,7 @@ def init_db():
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS dias INTEGER"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS is_ajuste BOOLEAN DEFAULT FALSE"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS metadata JSONB"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS periodo_aquisitivo_origem TEXT"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS raw_payload JSONB"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.periodos_aquisitivos ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.permissoes_usuario ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
@@ -168,6 +194,28 @@ def init_db():
         # Como o SQLAlchemy seleciona todas as colunas mapeadas, a ausência de apenas
         # uma delas derruba a rota /ferias com 500. Estes ALTERs são idempotentes.
         conn.execute(text(f"ALTER TABLE {schema_sql}.saldos_periodo ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        conn.execute(text(f"""
+        CREATE TABLE IF NOT EXISTS {schema_sql}.saldo_periodo (
+            id SERIAL PRIMARY KEY,
+            colaborador_id INTEGER NOT NULL REFERENCES {schema_sql}.colaboradores(id),
+            colaborador_matricula VARCHAR(50) NOT NULL REFERENCES {schema_sql}.colaboradores(matricula),
+            periodo_numero INTEGER NOT NULL,
+            data_inicio DATE NOT NULL,
+            data_fim DATE NOT NULL,
+            is_atual BOOLEAN DEFAULT FALSE,
+            tipo_saldo VARCHAR(20) NOT NULL DEFAULT 'REGULAR',
+            saldo_inicial NUMERIC(6,2) DEFAULT 0,
+            saldo_utilizado NUMERIC(6,2) DEFAULT 0,
+            saldo_reservado NUMERIC(6,2) DEFAULT 0,
+            saldo_disponivel NUMERIC(6,2) DEFAULT 0,
+            ultima_alteracao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_saldo_periodo_matricula_periodo_tipo UNIQUE (colaborador_matricula, periodo_numero, tipo_saldo)
+        )
+        """))
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_saldo_periodo_matricula_tipo ON {schema_sql}.saldo_periodo (colaborador_matricula, tipo_saldo)"))
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_saldo_periodo_colaborador ON {schema_sql}.saldo_periodo (colaborador_id)"))
 
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS origem_sheet_id VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS smartsheet_row_id VARCHAR(50)"))
@@ -178,6 +226,48 @@ def init_db():
 
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS gestor_superior_email VARCHAR(255)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS gestor_direto VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS gestor_superior VARCHAR(50)"))
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_colaborador_complemento_gestor_direto ON {schema_sql}.colaborador_complemento (gestor_direto)"))
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_colaborador_complemento_gestor_superior ON {schema_sql}.colaborador_complemento (gestor_superior)"))
+        conn.execute(text(f"""
+            UPDATE {schema_sql}.colaborador_complemento cc
+               SET gestor_direto = COALESCE(NULLIF(cc.gestor_direto, ''), h.gestor_direto_matricula)
+              FROM {schema_sql}.hierarquia_gestao h
+             WHERE h.colaborador_matricula = cc.colaborador_matricula
+               AND h.gestor_direto_matricula IS NOT NULL
+               AND (cc.gestor_direto IS NULL OR btrim(cc.gestor_direto) = '')
+        """))
+        conn.execute(text(f"""
+            UPDATE {schema_sql}.colaborador_complemento cc
+               SET gestor_direto = g.matricula
+              FROM {schema_sql}.colaboradores g
+             WHERE lower(g.email) = lower(cc.gestor_direto_email)
+               AND upper(coalesce(g.status, 'ATIVO')) IN ('ATIVO','ACTIVE')
+               AND (cc.gestor_direto IS NULL OR btrim(cc.gestor_direto) = '')
+        """))
+        conn.execute(text(f"""
+            UPDATE {schema_sql}.colaborador_complemento cc
+               SET gestor_superior = COALESCE(NULLIF(cc.gestor_superior, ''), h.gestor_superior_matricula)
+              FROM {schema_sql}.hierarquia_gestao h
+             WHERE h.colaborador_matricula = cc.colaborador_matricula
+               AND h.gestor_superior_matricula IS NOT NULL
+               AND (cc.gestor_superior IS NULL OR btrim(cc.gestor_superior) = '')
+        """))
+        conn.execute(text(f"""
+            UPDATE {schema_sql}.colaborador_complemento
+               SET gestor_superior = upper(gestor_superior_email)
+             WHERE lower(coalesce(gestor_superior_email, '')) IN ('dp', 'gestor')
+               AND (gestor_superior IS NULL OR btrim(gestor_superior) = '')
+        """))
+        conn.execute(text(f"""
+            UPDATE {schema_sql}.colaborador_complemento cc
+               SET gestor_superior = g.matricula
+              FROM {schema_sql}.colaboradores g
+             WHERE lower(g.email) = lower(cc.gestor_superior_email)
+               AND upper(coalesce(g.status, 'ATIVO')) IN ('ATIVO','ACTIVE')
+               AND (cc.gestor_superior IS NULL OR btrim(cc.gestor_superior) = '')
+        """))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS flags_internas JSONB"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_direito INTEGER DEFAULT 0"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_usado INTEGER DEFAULT 0"))
@@ -337,6 +427,128 @@ def _usuario_por_email(session, email: str):
     return rows[0] if rows else None
 
 
+def _format_periodo_alloc_v29(movimentos: List[Dict[str, Any]]) -> str:
+    partes = []
+    for m in movimentos or []:
+        numero = int(m.get('periodo_numero') or 0)
+        dias = float(m.get('dias') or 0)
+        if numero <= 0 or dias <= 0:
+            continue
+        dias_txt = str(int(dias)) if float(dias).is_integer() else str(round(dias, 2)).rstrip('0').rstrip('.')
+        partes.append(f"P{numero}:{dias_txt}")
+    return " | ".join(partes)
+
+
+def _parse_periodo_alloc_v29(value: Any) -> List[Dict[str, Any]]:
+    import re
+    text = str(value or '').strip()
+    out: List[Dict[str, Any]] = []
+    for numero, dias in re.findall(r"P\s*(\d+)\s*[:=\-]\s*(\d+(?:[\.,]\d+)?)", text, flags=re.IGNORECASE):
+        try:
+            out.append({'periodo_numero': int(numero), 'dias': float(str(dias).replace(',', '.'))})
+        except Exception:
+            continue
+    return out
+
+
+def _saldo_periodo_por_numero_v29(session, colab: Colaborador, tipo_saldo: str, numero: int):
+    return (
+        session.query(SaldoPeriodoNovo)
+        .filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.tipo_saldo == (tipo_saldo or 'REGULAR').upper(),
+            SaldoPeriodoNovo.periodo_numero == int(numero or 0),
+        )
+        .first()
+    )
+
+
+def _mover_saldo_status_v29(session, colab: Colaborador, solicitacao: Solicitacao, old_status: str, new_status: str):
+    saldo_tipo = (solicitacao.saldo_tipo or solicitacao.tipo_ferias or 'REGULAR').upper()
+    dias = _to_int_days(solicitacao.dias or solicitacao.dias_solicitados or 0)
+    if dias <= 0 or saldo_tipo not in {'REGULAR', 'PREMIUM'}:
+        _atualizar_complemento_cache(session, colab)
+        return
+    if bool(solicitacao.is_ajuste):
+        if new_status in {'APROVADO', 'APROVADA'} and old_status not in {'APROVADO', 'APROVADA'}:
+            movimentos = _aplicar_ajuste_saldo(session, colab, saldo_tipo, dias, solicitacao.id, None)
+            if movimentos:
+                solicitacao.periodo_aquisitivo_origem = _format_periodo_alloc_v29(movimentos)
+        return
+    alloc = _parse_periodo_alloc_v29(solicitacao.periodo_aquisitivo_origem)
+    # Aprovação: transforma reserva em utilizado quando houver reserva; se não houver origem, debita do saldo disponível.
+    if new_status in {'APROVADO', 'APROVADA'} and old_status not in {'APROVADO', 'APROVADA'}:
+        if not alloc:
+            movimentos = _reservar_saldo_periodos(session, colab, saldo_tipo, dias, solicitacao.id, None)
+            alloc = movimentos
+            solicitacao.periodo_aquisitivo_origem = _format_periodo_alloc_v29(movimentos)
+        for item in alloc:
+            saldo = _saldo_periodo_por_numero_v29(session, colab, saldo_tipo, int(item.get('periodo_numero') or 0))
+            if not saldo:
+                continue
+            qtd = float(item.get('dias') or 0)
+            reserva_abater = min(float(saldo.saldo_reservado or 0), qtd)
+            saldo.saldo_reservado = max(0, float(saldo.saldo_reservado or 0) - reserva_abater)
+            falta = max(0, qtd - reserva_abater)
+            if falta:
+                saldo.saldo_disponivel = max(0, float(saldo.saldo_disponivel or 0) - falta)
+            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + qtd
+            saldo.ultima_alteracao = datetime.utcnow()
+            saldo.updated_at = datetime.utcnow()
+        _atualizar_complemento_cache(session, colab)
+        return
+    # Cancelamento/reprovação: libera a reserva ou estorna o uso, usando o mapa gravado.
+    if new_status in {'CANCELADO', 'CANCELADA', 'REPROVADO', 'REPROVADA'} and old_status not in {'CANCELADO', 'CANCELADA', 'REPROVADO', 'REPROVADA'}:
+        for item in alloc:
+            saldo = _saldo_periodo_por_numero_v29(session, colab, saldo_tipo, int(item.get('periodo_numero') or 0))
+            if not saldo:
+                continue
+            qtd = float(item.get('dias') or 0)
+            if old_status in {'APROVADO', 'APROVADA'}:
+                abater = min(float(saldo.saldo_utilizado or 0), qtd)
+                saldo.saldo_utilizado = max(0, float(saldo.saldo_utilizado or 0) - abater)
+            else:
+                abater = min(float(saldo.saldo_reservado or 0), qtd)
+                saldo.saldo_reservado = max(0, float(saldo.saldo_reservado or 0) - abater)
+            saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + qtd
+            saldo.ultima_alteracao = datetime.utcnow()
+            saldo.updated_at = datetime.utcnow()
+        _atualizar_complemento_cache(session, colab)
+
+
+def _saldo_periodo_destino_ajuste_v29(session, colab: Colaborador, saldo_tipo: str):
+    saldo_tipo = (saldo_tipo or 'REGULAR').upper()
+    saldo = (
+        session.query(SaldoPeriodoNovo)
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
+        .order_by(SaldoPeriodoNovo.is_atual.desc(), SaldoPeriodoNovo.data_inicio.desc(), SaldoPeriodoNovo.periodo_numero.desc())
+        .first()
+    )
+    if saldo:
+        return saldo
+    hoje = date.today()
+    adm = colab.data_admissao or hoje
+    saldo = SaldoPeriodoNovo(
+        colaborador_id=colab.id,
+        colaborador_matricula=colab.matricula,
+        periodo_numero=1,
+        data_inicio=adm,
+        data_fim=adm + dt.timedelta(days=364),
+        is_atual=True,
+        tipo_saldo=saldo_tipo,
+        saldo_inicial=0,
+        saldo_utilizado=0,
+        saldo_reservado=0,
+        saldo_disponivel=0,
+        ultima_alteracao=datetime.utcnow(),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    session.add(saldo)
+    session.flush()
+    return saldo
+
+
 def _atualizar_complemento_cache(session, colab: Colaborador):
     comp = colab.complemento
     if not comp:
@@ -344,22 +556,21 @@ def _atualizar_complemento_cache(session, colab: Colaborador):
         session.add(comp)
         session.flush()
     rows = (
-        session.query(SaldoPeriodo)
-        .join(PeriodoAquisitivo, SaldoPeriodo.periodo_id == PeriodoAquisitivo.id)
-        .filter(PeriodoAquisitivo.colaborador_matricula == colab.matricula)
+        session.query(SaldoPeriodoNovo)
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
         .all()
     )
     def sumtipo(tipo, attr):
         return int(round(sum(float(getattr(r, attr) or 0) for r in rows if (r.tipo_saldo or '').upper() == tipo)))
     comp.colaborador_matricula = colab.matricula
-    comp.saldo_regular_direito = sumtipo('REGULAR', 'dias_direito')
-    comp.saldo_regular_usado = sumtipo('REGULAR', 'dias_usados')
-    comp.saldo_regular_reservado = sumtipo('REGULAR', 'dias_reservados')
-    comp.saldo_regular_disponivel = max(0, comp.saldo_regular_direito - comp.saldo_regular_usado - comp.saldo_regular_reservado)
-    comp.saldo_premium_direito = sumtipo('PREMIUM', 'dias_direito')
-    comp.saldo_premium_usado = sumtipo('PREMIUM', 'dias_usados')
-    comp.saldo_premium_reservado = sumtipo('PREMIUM', 'dias_reservados')
-    comp.saldo_premium_disponivel = max(0, comp.saldo_premium_direito - comp.saldo_premium_usado - comp.saldo_premium_reservado)
+    comp.saldo_regular_direito = sumtipo('REGULAR', 'saldo_inicial')
+    comp.saldo_regular_usado = sumtipo('REGULAR', 'saldo_utilizado')
+    comp.saldo_regular_reservado = sumtipo('REGULAR', 'saldo_reservado')
+    comp.saldo_regular_disponivel = sumtipo('REGULAR', 'saldo_disponivel')
+    comp.saldo_premium_direito = sumtipo('PREMIUM', 'saldo_inicial')
+    comp.saldo_premium_usado = sumtipo('PREMIUM', 'saldo_utilizado')
+    comp.saldo_premium_reservado = sumtipo('PREMIUM', 'saldo_reservado')
+    comp.saldo_premium_disponivel = sumtipo('PREMIUM', 'saldo_disponivel')
     comp.total_solicitacoes = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula == colab.matricula, Solicitacao.is_ajuste.is_(False)).count()
     comp.calculated_at = datetime.utcnow()
     comp.updated_at = datetime.utcnow()
@@ -372,34 +583,24 @@ def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias:
     if restante <= 0:
         return []
     saldos = (
-        session.query(SaldoPeriodo)
-        .join(PeriodoAquisitivo, SaldoPeriodo.periodo_id == PeriodoAquisitivo.id)
-        .filter(PeriodoAquisitivo.colaborador_matricula == colab.matricula, SaldoPeriodo.tipo_saldo == saldo_tipo)
-        .order_by(PeriodoAquisitivo.data_inicio.asc(), PeriodoAquisitivo.periodo_numero.asc())
+        session.query(SaldoPeriodoNovo)
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
+        .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
         .all()
     )
     movimentos = []
     for saldo in saldos:
-        disponivel = float((saldo.dias_direito or 0) - (saldo.dias_usados or 0) - (saldo.dias_reservados or 0))
+        disponivel = float(saldo.saldo_disponivel or 0)
         if disponivel <= 0:
             continue
         consumir = min(int(disponivel), restante)
         if consumir <= 0:
             continue
-        antes = float(saldo.dias_reservados or 0)
-        saldo.dias_reservados = antes + consumir
+        saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + consumir
+        saldo.saldo_disponivel = max(0, float(saldo.saldo_disponivel or 0) - consumir)
+        saldo.ultima_alteracao = datetime.utcnow()
         saldo.updated_at = datetime.utcnow()
-        movimentos.append({"saldo_id": saldo.id, "dias": consumir, "periodo_id": saldo.periodo_id})
-        session.add(AuditoriaSaldos(
-            saldo_id=saldo.id,
-            usuario_alterou_id=actor.id if actor else None,
-            usuario_alterou_matricula=actor.matricula if actor else None,
-            tipo_movimento="RESERVA_SOLICITACAO",
-            dias_anteriores=antes,
-            dias_alterados=consumir,
-            dias_novos=float(saldo.dias_reservados or 0),
-            observacoes=f"Reserva criada pela solicitação {solicitacao_id or ''}".strip(),
-        ))
+        movimentos.append({"saldo_id": saldo.id, "periodo_numero": saldo.periodo_numero, "dias": consumir})
         restante -= consumir
         if restante <= 0:
             break
@@ -436,61 +637,41 @@ def _periodo_destino_ajuste(session, colab: Colaborador):
 def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: int, solicitacao_id: int | None, actor: Colaborador | None = None):
     saldo_tipo = (saldo_tipo or 'REGULAR').upper()
     dias = _to_int_days(dias)
+    movimentos = []
     if dias == 0:
-        return
+        return movimentos
     if dias > 0:
-        periodo = _periodo_destino_ajuste(session, colab)
-        saldo = session.query(SaldoPeriodo).filter(SaldoPeriodo.periodo_id == periodo.id, SaldoPeriodo.tipo_saldo == saldo_tipo).first()
-        if not saldo:
-            saldo = SaldoPeriodo(periodo_id=periodo.id, tipo_saldo=saldo_tipo, dias_direito=0, dias_reservados=0, dias_usados=0)
-            session.add(saldo)
-            session.flush()
-        antes = float(saldo.dias_direito or 0)
-        saldo.dias_direito = antes + dias
+        saldo = _saldo_periodo_destino_ajuste_v29(session, colab, saldo_tipo)
+        saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + dias
+        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + dias
+        saldo.ultima_alteracao = datetime.utcnow()
         saldo.updated_at = datetime.utcnow()
-        session.add(AuditoriaSaldos(
-            saldo_id=saldo.id,
-            usuario_alterou_id=actor.id if actor else None,
-            usuario_alterou_matricula=actor.matricula if actor else None,
-            tipo_movimento='AJUSTE_SALDO',
-            dias_anteriores=antes,
-            dias_alterados=dias,
-            dias_novos=float(saldo.dias_direito or 0),
-            observacoes=f'Ajuste positivo pela solicitação {solicitacao_id or ""}'.strip(),
-        ))
+        movimentos.append({"saldo_id": saldo.id, "periodo_numero": saldo.periodo_numero, "dias": dias})
     else:
         restante = abs(dias)
         saldos = (
-            session.query(SaldoPeriodo)
-            .join(PeriodoAquisitivo, SaldoPeriodo.periodo_id == PeriodoAquisitivo.id)
-            .filter(PeriodoAquisitivo.colaborador_matricula == colab.matricula, SaldoPeriodo.tipo_saldo == saldo_tipo)
-            .order_by(PeriodoAquisitivo.data_inicio.desc(), PeriodoAquisitivo.periodo_numero.desc())
+            session.query(SaldoPeriodoNovo)
+            .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
+            .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
             .all()
         )
         for saldo in saldos:
-            disponivel = float((saldo.dias_direito or 0) - (saldo.dias_usados or 0) - (saldo.dias_reservados or 0))
+            disponivel = float(saldo.saldo_disponivel or 0)
             if disponivel <= 0:
                 continue
-            retirar = min(restante, int(disponivel))
-            antes = float(saldo.dias_direito or 0)
-            saldo.dias_direito = max(0, antes - retirar)
+            retirar = min(int(disponivel), restante)
+            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + retirar
+            saldo.saldo_disponivel = max(0, float(saldo.saldo_disponivel or 0) - retirar)
+            saldo.ultima_alteracao = datetime.utcnow()
             saldo.updated_at = datetime.utcnow()
-            session.add(AuditoriaSaldos(
-                saldo_id=saldo.id,
-                usuario_alterou_id=actor.id if actor else None,
-                usuario_alterou_matricula=actor.matricula if actor else None,
-                tipo_movimento='AJUSTE_SALDO',
-                dias_anteriores=antes,
-                dias_alterados=-retirar,
-                dias_novos=float(saldo.dias_direito or 0),
-                observacoes=f'Ajuste negativo pela solicitação {solicitacao_id or ""}'.strip(),
-            ))
+            movimentos.append({"saldo_id": saldo.id, "periodo_numero": saldo.periodo_numero, "dias": retirar})
             restante -= retirar
             if restante <= 0:
                 break
         if restante > 0:
             raise ValueError(f'Ajuste negativo maior que o saldo disponível. Faltam {restante} dia(s).')
     _atualizar_complemento_cache(session, colab)
+    return movimentos
 
 def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]]:
     """Cria uma nova solicitação no banco novo, gravando matrícula como ID de negócio."""
@@ -529,6 +710,7 @@ def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]
             is_ajuste=is_aj,
             metadata_json=payload.get('metadata'),
             raw_payload=payload.get('raw_payload'),
+            periodo_aquisitivo_origem=(payload.get('metadata') or {}).get('periodo_aquisitivo') if isinstance(payload.get('metadata'), dict) else None,
             source_created_at=datetime.utcnow(),
         )
         session.add(solicitacao)
@@ -536,10 +718,19 @@ def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]
 
         # Ajustes aprovados alteram o saldo real por período.
         if is_aj and status in {'APROVADO', 'APROVADA'} and dias != 0 and saldo_tipo in {'REGULAR', 'PREMIUM'}:
-            _aplicar_ajuste_saldo(session, colab, saldo_tipo, dias, solicitacao.id, solicitante)
+            movimentos = _aplicar_ajuste_saldo(session, colab, saldo_tipo, dias, solicitacao.id, solicitante)
+            if movimentos:
+                solicitacao.periodo_aquisitivo_origem = _format_periodo_alloc_v29(movimentos)
+        # Solicitação comum aprovada debita saldo por período imediatamente.
+        elif not is_aj and status in {'APROVADO', 'APROVADA'} and dias > 0 and saldo_tipo in {'REGULAR', 'PREMIUM'}:
+            movimentos = _reservar_saldo_periodos(session, colab, saldo_tipo, dias, solicitacao.id, solicitante)
+            solicitacao.periodo_aquisitivo_origem = _format_periodo_alloc_v29(movimentos)
+            _mover_saldo_status_v29(session, colab, solicitacao, 'PENDENTE', 'APROVADO')
         # Solicitação comum pendente reserva saldo por período imediatamente.
         elif not is_aj and status in {'PENDENTE', 'RESERVA', 'RESERVADO'} and dias > 0 and saldo_tipo in {'REGULAR', 'PREMIUM'}:
-            _reservar_saldo_periodos(session, colab, saldo_tipo, dias, solicitacao.id, solicitante)
+            movimentos = _reservar_saldo_periodos(session, colab, saldo_tipo, dias, solicitacao.id, solicitante)
+            if movimentos:
+                solicitacao.periodo_aquisitivo_origem = _format_periodo_alloc_v29(movimentos)
         else:
             _atualizar_complemento_cache(session, colab)
 
@@ -552,27 +743,42 @@ def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]
 
 
 def atualizar_solicitacao(solicitacao_id: int, payload: Dict[str, Any]) -> Tuple[bool, str]:
-    """Atualiza uma solicitação existente."""
+    """Atualiza uma solicitação existente e reflete alteração de status em saldo_periodo."""
     session = get_db_session()
     try:
         solicitacao = session.query(Solicitacao).filter(
             Solicitacao.id == solicitacao_id
         ).first()
-        
+
         if not solicitacao:
             return False, "Solicitação não encontrada"
-        
-        # Atualiza campos
+
+        old_status = _norm_status_for_reserva(solicitacao.status or '')
+        new_status = old_status
+
         if 'status' in payload:
-            solicitacao.status = payload['status'].upper()
+            new_status = _norm_status_for_reserva(payload['status'])
+            solicitacao.status = new_status
         if 'observacoes' in payload:
             solicitacao.observacoes = payload['observacoes']
         if 'dias' in payload:
             solicitacao.dias = payload['dias']
-        
+            solicitacao.dias_solicitados = payload['dias']
+        if 'periodo_aquisitivo_origem' in payload:
+            solicitacao.periodo_aquisitivo_origem = payload.get('periodo_aquisitivo_origem')
+
+        colab = None
+        if solicitacao.colaborador_id:
+            colab = session.query(Colaborador).filter(Colaborador.id == solicitacao.colaborador_id).first()
+        if not colab and solicitacao.colaborador_matricula:
+            colab = session.query(Colaborador).filter(Colaborador.matricula == solicitacao.colaborador_matricula).first()
+
+        if colab and new_status != old_status:
+            _mover_saldo_status_v29(session, colab, solicitacao, old_status, new_status)
+
         solicitacao.updated_at = datetime.utcnow()
         session.commit()
-        
+
         return True, "Solicitação atualizada com sucesso"
     except Exception as e:
         log.error(f"Erro ao atualizar solicitação: {e}")

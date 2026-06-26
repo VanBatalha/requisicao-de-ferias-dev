@@ -881,44 +881,30 @@
       <div class="grid-2">
         <div>
           <label class="mini-label">Gestor</label>
-          <input id="busca-gestor" class="form-control" placeholder="🔍 Buscar gestor..." style="margin-bottom:10px;" />
-
-          <div id="lista-gestores" class="box-scroll" style="max-height:220px;"></div>
-
-          <select id="gestor-select" class="form-control"></select>
+          <input id="gestor-input" class="form-control" list="gestores-datalist" placeholder="Digite matrícula ou nome do gestor..." />
+          <datalist id="gestores-datalist"></datalist>
+          <input type="hidden" id="gestor-select" />
+          <div class="muted" style="margin-top:6px;">Qualquer colaborador ativo pode ser selecionado como gestor. A relação será gravada por matrícula.</div>
 
           <div style="height:12px;"></div>
 
-          <label class="mini-label">Buscar colaborador</label>
-          <input id="busca-subordinado" class="form-control" placeholder="🔍 Digite para filtrar..." />
-
-          <div id="lista-subordinados" class="box-scroll" style="margin-top:12px; max-height: 420px;"></div>
-
-          <button type="button" id="btn-salvar-relacao" class="btn" style="margin-top:12px;">Salvar relação</button>
-          <div id="msg-relacao" class="muted" style="margin-top:10px;"></div>
+          <label class="mini-label">Gestores atuais</label>
+          <input id="busca-gestor" class="form-control" placeholder="🔍 Filtrar gestores atuais..." style="margin-bottom:10px;" />
+          <div id="lista-gestores" class="box-scroll" style="max-height:320px;"></div>
         </div>
 
         <div>
-          <div class="card" style="padding:14px;">
-            <h4 style="margin:0 0 8px 0; font-size:14px;">Como funciona</h4>
-            <div class="muted">
-              <strong>1)</strong> Selecione o gestor (qualquer colaborador pode virar gestor).<br>
-              <strong>2)</strong> Marque os subordinados na lista.<br>
-              <strong>3)</strong> Clique em <strong>Salvar relação</strong>.<br><br>
-              Isso libera a tela de <strong>Solicitações</strong> para o gestor solicitar férias (gozo ou venda) para a equipe.
-            </div>
+          <div class="card" style="padding:14px; margin-bottom:12px;">
+            <h4 style="margin:0 0 8px 0; font-size:14px;">Subordinados do gestor selecionado</h4>
+            <div id="gestor-selecionado-resumo" class="muted">Selecione um gestor para visualizar a equipe.</div>
           </div>
 
-          <div style="height:12px;"></div>
+          <label class="mini-label">Buscar subordinado</label>
+          <input id="busca-subordinado" class="form-control" placeholder="🔍 Digite nome ou matrícula..." />
+          <div id="lista-subordinados" class="box-scroll" style="margin-top:12px; max-height: 520px;"></div>
 
-          <div class="card" style="padding:14px;">
-            <h4 style="margin:0 0 8px 0; font-size:14px;">Dicas</h4>
-            <div class="muted">
-              • O gestor não aparece na lista de subordinados (evita auto-relacionamento).<br>
-              • Você pode usar o campo “Buscar colaborador” para filtrar rápido.<br>
-              • Para cenários de multi-gestor ou DP responsável, use a subaba <strong>Gestor Superior</strong>.
-            </div>
-          </div>
+          <button type="button" id="btn-salvar-relacao" class="btn" style="margin-top:12px;">Salvar relação</button>
+          <div id="msg-relacao" class="muted" style="margin-top:10px;"></div>
         </div>
       </div>
     </div>
@@ -928,40 +914,33 @@
       <div class="grid-2">
         <div>
           <label class="mini-label">Colaborador</label>
-          <select id="superior-colaborador" class="form-control"></select>
+          <input id="superior-colaborador-input" class="form-control" list="superior-colaboradores-datalist" placeholder="Digite matrícula ou nome do colaborador..." />
+          <datalist id="superior-colaboradores-datalist"></datalist>
+          <input type="hidden" id="superior-colaborador" />
 
           <div style="height:10px;"></div>
 
           <label class="mini-label">Gestor Superior</label>
-          <select id="superior-valor" class="form-control">
-            <option value="GESTOR">GESTOR (padrão)</option>
-            <option value="DP">DP</option>
-          </select>
+          <input id="superior-valor-input" class="form-control" list="superior-valores-datalist" placeholder="GESTOR, DP ou matrícula/nome do gestor..." />
+          <datalist id="superior-valores-datalist"></datalist>
+          <input type="hidden" id="superior-valor" value="GESTOR" />
 
           <button type="button" id="btn-salvar-superior" class="btn" style="margin-top:12px;">Salvar Gestor Superior</button>
           <div id="msg-superior" class="muted" style="margin-top:10px;"></div>
         </div>
 
         <div>
-          <div class="card" style="padding:14px;">
-            <h4 style="margin:0 0 8px 0; font-size:14px;">Gestor Superior (multi-gestor / DP)</h4>
-            <div class="muted">
-              Use esta regra quando o colaborador não deve responder apenas ao “GESTOR DIRETO”.<br><br>
-
-              <strong>GESTOR</strong>: mantém o fluxo padrão (um único gestor direto).<br>
-              <strong>DP</strong>: DP pode solicitar férias para ele diretamente.<br>
-              <strong>E-mail</strong>: selecione o e-mail de outro gestor quando houver um “gestor acima” ou multi-gestão.
-            </div>
+          <div class="card" style="padding:14px; margin-bottom:12px;">
+            <h4 style="margin:0 0 8px 0; font-size:14px;">Gestores superiores atuais</h4>
+            <div id="lista-gestores-superiores" class="box-scroll" style="max-height:360px;"></div>
           </div>
 
-          <div style="height:12px;"></div>
-
           <div class="card" style="padding:14px;">
-            <h4 style="margin:0 0 8px 0; font-size:14px;">Ordem sugerida</h4>
+            <h4 style="margin:0 0 8px 0; font-size:14px;">Como funciona</h4>
             <div class="muted">
-              <strong>1)</strong> Selecione o colaborador.<br>
-              <strong>2)</strong> Selecione o Gestor Superior (GESTOR/DP/e-mail).<br>
-              <strong>3)</strong> Clique em <strong>Salvar</strong>.
+              <strong>GESTOR</strong>: mantém o fluxo padrão do gestor direto.<br>
+              <strong>DP</strong>: indica que o DP é responsável pelo fluxo.<br>
+              <strong>Matrícula</strong>: relaciona o colaborador a um gestor superior específico.
             </div>
           </div>
         </div>
@@ -1066,14 +1045,42 @@ function criarCalendario(dataInicio, dataFim, mes, ano) {
 }
 
 // ===== GESTORES =====
-let gestoresColaboradoresCache = null;
-let gestorSelecionadoEmail = "";
+let gestoresColaboradoresCache = [];
+let gestoresMapaCache = null;
+let gestorSelecionadoMatricula = "";
 let gestorSubSelecionados = new Set();
 
 function _normEmailJS(s) {
   return (s || "").toString().trim().toLowerCase();
 }
 
+function _normMatJS(s) {
+  return (s || "").toString().trim().toUpperCase();
+}
+
+function _colabLabel(c) {
+  const mat = _normMatJS(c?.matricula || c?.MATRICULA || c?.['MATRÍCULA'] || '');
+  const nome = (c?.nome || c?.['NOME COMPLETO'] || c?.nome_completo || c?.email || '').toString();
+  return mat ? `${mat} | ${nome}` : nome;
+}
+
+function _matchColabFromInput(value) {
+  const raw = (value || '').toString().trim();
+  if (!raw) return null;
+  const matPrefix = raw.split('|')[0].trim().toUpperCase();
+  const foundByMat = gestoresColaboradoresCache.find(c => _normMatJS(c.matricula) === matPrefix);
+  if (foundByMat) return foundByMat;
+  const rawNorm = raw.toLowerCase();
+  return gestoresColaboradoresCache.find(c => _colabLabel(c).toLowerCase() === rawNorm)
+    || gestoresColaboradoresCache.find(c => (c.nome || '').toLowerCase().includes(rawNorm) || _normMatJS(c.matricula).includes(matPrefix));
+}
+
+function _fillDatalist(id, items, extras=[]) {
+  const dl = document.getElementById(id);
+  if (!dl) return;
+  const opts = extras.map(v => `<option value="${escapeHtml(v)}"></option>`).join('');
+  dl.innerHTML = opts + (items || []).map(c => `<option value="${escapeHtml(_colabLabel(c))}"></option>`).join('');
+}
 
 function ativarSubtabGestores(nome) {
   const root = document.getElementById('tab-gestores');
@@ -1096,254 +1103,266 @@ function initGestoresSubtabs() {
 async function carregarTelaGestores() {
   initGestoresSubtabs();
   ativarSubtabGestores('gestor');
-  if (gestoresColaboradoresCache) return; // carrega uma vez
+  if (gestoresMapaCache) return;
 
   const msgRel = document.getElementById('msg-relacao');
   if (msgRel) msgRel.textContent = '';
 
-  // Reaproveita a API de colaboradores e filtra ATIVO no backend
-  const resp = await fetch('/api/dp/colaboradores?status=ATIVO');
+  const resp = await fetch('/api/dp/gestores/mapa');
   const data = await resp.json().catch(() => ({}));
   if (!data.ok) {
-    if (msgRel) msgRel.textContent = data.message || 'Erro ao carregar colaboradores.';
+    if (msgRel) msgRel.textContent = data.message || 'Erro ao carregar gestores.';
     return;
   }
 
-  const colabs = (data.colaboradores || [])
-    .map(c => ({
-      nome: (c['NOME COMPLETO'] || '-').toString(),
-      email: _normEmailJS(c['EMAIL DA EMPRESA'] || c['EMAIL'] || ''),
-      status: (c['STATUS'] || c['Status'] || '').toString().toUpperCase(),
-      gestor_direto: _normEmailJS(c['GESTOR DIRETO'] || c['GESTOR'] || ''),
-      gestor_superior: (c['GESTOR SUPERIOR'] || '').toString().trim()
-    }))
-    .filter(c => c.email);
+  gestoresMapaCache = data;
+  gestoresColaboradoresCache = (data.colaboradores || []).sort((a,b) => _colabLabel(a).localeCompare(_colabLabel(b), 'pt-BR', {sensitivity:'base'}));
 
-  gestoresColaboradoresCache = colabs;
-
-  // ===== lista de gestores atuais (por GESTOR DIRETO) =====
-  function montarMapaGestoresDiretos() {
-    const mapa = new Map();
-    colabs.forEach(c => {
-      const g = _normEmailJS(c.gestor_direto || '');
-      if (!g) return;
-      if (g === 'dp' || g === 'gestor') return;
-      if (!mapa.has(g)) mapa.set(g, []);
-      mapa.get(g).push(c.email);
-    });
-    return mapa;
-  }
-
-  function renderListaGestores() {
-    const box = document.getElementById('lista-gestores');
-    if (!box) return;
-
-    const filtro = _normEmailJS(document.getElementById('busca-gestor')?.value);
-    const mapa = montarMapaGestoresDiretos();
-
-    const items = Array.from(mapa.entries())
-      .map(([email, subs]) => ({ email, subs }))
-      .filter(it => !filtro || it.email.includes(filtro))
-      .sort((a,b) => a.email.localeCompare(b.email));
-
-    if (items.length === 0) {
-      box.innerHTML = '<div class="muted">Nenhum gestor encontrado (pela coluna GESTOR DIRETO).</div>';
-      return;
-    }
-
-    box.innerHTML = items.map(it => {
-      const nome = (colabs.find(x => x.email === it.email)?.nome) || it.email;
-      return `<button type="button" class="btn btn-secondary" data-gestor="${it.email}"
-                style="width:100%; text-align:left; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:12px;">
-                <span><strong>${nome}</strong><div class="muted" style="font-size:11px;">${it.email}</div></span>
-                <span class="badge" style="background: rgba(0,0,0,.04); border-color: var(--border); color:#333;">${it.subs.length}</span>
-              </button>`;
-    }).join('');
-
-    box.querySelectorAll('button[data-gestor]').forEach(b => {
-      b.addEventListener('click', () => {
-        const email = _normEmailJS(b.dataset.gestor);
-        const sel = document.getElementById('gestor-select');
-        if (sel) {
-          sel.value = email;
-          sel.dispatchEvent(new Event('change'));
-        }
-      });
-    });
-  }
-
-  document.getElementById('busca-gestor')?.addEventListener('input', renderListaGestores);
-
-  // ===== select de gestores (qualquer colaborador pode virar gestor) =====
-  const sel = document.getElementById('gestor-select');
-  if (sel) {
-    sel.innerHTML = '<option value="">Selecione...</option>' + colabs
-      .map(c => `<option value="${c.email}">${c.nome} — ${c.email}</option>`)
-      .join('');
-  }
+  _fillDatalist('gestores-datalist', gestoresColaboradoresCache);
+  _fillDatalist('superior-colaboradores-datalist', gestoresColaboradoresCache);
+  _fillDatalist('superior-valores-datalist', gestoresColaboradoresCache, ['GESTOR', 'DP']);
 
   renderListaGestores();
+  renderListaGestoresSuperiores();
 
-  // ===== combos de Gestor Superior =====
-  const selColabSup = document.getElementById('superior-colaborador');
-  if (selColabSup) {
-    selColabSup.innerHTML = '<option value="">Selecione...</option>' + colabs
-      .map(c => `<option value="${c.email}">${c.nome} — ${c.email}</option>`)
-      .join('');
-  }
+  document.getElementById('busca-gestor')?.addEventListener('input', renderListaGestores);
+  document.getElementById('busca-subordinado')?.addEventListener('input', renderListaSubordinados);
 
-  const selValorSup = document.getElementById('superior-valor');
-  if (selValorSup && !selValorSup.dataset._filled) {
-    const emails = Array.from(new Set(colabs.map(c => c.email))).sort();
-    const extras = emails.map(e => `<option value="${e}">${e}</option>`).join('');
-    selValorSup.insertAdjacentHTML('beforeend', extras);
-    selValorSup.dataset._filled = '1';
-  }
+  const gestorInput = document.getElementById('gestor-input');
+  gestorInput?.addEventListener('change', async () => {
+    const c = _matchColabFromInput(gestorInput.value);
+    gestorSelecionadoMatricula = c ? _normMatJS(c.matricula) : '';
+    document.getElementById('gestor-select').value = gestorSelecionadoMatricula;
+    if (c) gestorInput.value = _colabLabel(c);
+    await carregarRelacaoGestor(gestorSelecionadoMatricula);
+    renderListaSubordinados();
+    renderResumoGestorSelecionado(c);
+  });
 
-  // Carrega valor atual ao trocar colaborador
-  selColabSup?.addEventListener('change', async () => {
-    const email = _normEmailJS(selColabSup.value);
+  document.getElementById('btn-salvar-relacao')?.addEventListener('click', salvarRelacaoGestor);
+
+  const superiorColabInput = document.getElementById('superior-colaborador-input');
+  const superiorColabHidden = document.getElementById('superior-colaborador');
+  const superiorValorInput = document.getElementById('superior-valor-input');
+  const superiorValorHidden = document.getElementById('superior-valor');
+
+  superiorColabInput?.addEventListener('change', async () => {
+    const c = _matchColabFromInput(superiorColabInput.value);
+    superiorColabHidden.value = c ? _normMatJS(c.matricula) : '';
+    if (c) superiorColabInput.value = _colabLabel(c);
     const msg = document.getElementById('msg-superior');
     if (msg) msg.textContent = '';
-    if (!email) return;
-
-    const r = await fetch('/api/dp/gestores/superior?colaborador=' + encodeURIComponent(email));
+    if (!c) return;
+    const r = await fetch('/api/dp/gestores/superior?colaborador=' + encodeURIComponent(c.matricula));
     const j = await r.json().catch(() => ({}));
-    if (j.ok && selValorSup) {
-      const v = (j.gestor_superior || 'GESTOR').toString().trim();
-      if (![...selValorSup.options].some(o => o.value === v)) {
-        selValorSup.insertAdjacentHTML('beforeend', `<option value="${v}">${v}</option>`);
-      }
-      selValorSup.value = v;
+    if (j.ok) {
+      const v = (j.gestor_superior || 'GESTOR').toString().trim().toUpperCase();
+      const sup = gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === v);
+      superiorValorHidden.value = v;
+      superiorValorInput.value = sup ? _colabLabel(sup) : v;
     }
   });
 
-  document.getElementById('btn-salvar-superior')?.addEventListener('click', async () => {
-    const msg = document.getElementById('msg-superior');
-    if (msg) msg.textContent = '';
-
-    const btn = document.getElementById('btn-salvar-superior');
-
-    const email = _normEmailJS(selColabSup?.value);
-    const val = (selValorSup?.value || '').toString().trim();
-
-    if (!email) {
-      if (msg) msg.textContent = 'Selecione o colaborador.';
+  superiorValorInput?.addEventListener('change', () => {
+    const raw = (superiorValorInput.value || '').trim();
+    const up = raw.toUpperCase();
+    if (up === 'DP' || up === 'GESTOR') {
+      superiorValorHidden.value = up;
+      superiorValorInput.value = up;
       return;
     }
-    if (!val) {
-      if (msg) msg.textContent = 'Selecione o Gestor Superior.';
-      return;
-    }
-
-    try {
-      if (msg) msg.textContent = 'Salvando Gestor Superior...';
-      if (btn) btn.disabled = true;
-
-      const r = await fetch('/api/dp/gestores/superior', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ colaborador: email, gestor_superior: val })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (msg) msg.textContent = j.message || (r.ok ? 'Gestor Superior salvo.' : 'Erro ao salvar Gestor Superior.');
-    } catch (e) {
-      if (msg) msg.textContent = 'Erro ao salvar Gestor Superior.';
-    } finally {
-      if (btn) btn.disabled = false;
-    }
+    const c = _matchColabFromInput(raw);
+    superiorValorHidden.value = c ? _normMatJS(c.matricula) : '';
+    if (c) superiorValorInput.value = _colabLabel(c);
   });
 
-  sel?.addEventListener('change', async () => {
-    gestorSelecionadoEmail = _normEmailJS(sel.value);
-    await carregarRelacaoGestor(gestorSelecionadoEmail);
-    renderListaSubordinados();
-  });
+  document.getElementById('btn-salvar-superior')?.addEventListener('click', salvarGestorSuperior);
+}
 
-  document.getElementById('busca-subordinado')?.addEventListener('input', () => {
-    renderListaSubordinados();
-  });
+function renderResumoGestorSelecionado(c) {
+  const box = document.getElementById('gestor-selecionado-resumo');
+  if (!box) return;
+  if (!c) {
+    box.textContent = 'Selecione um gestor para visualizar a equipe.';
+    return;
+  }
+  box.innerHTML = `<strong>${escapeHtml(_colabLabel(c))}</strong><br><span class="muted">${escapeHtml(c.email || '')}</span><br><span class="badge" style="margin-top:6px;">${gestorSubSelecionados.size} subordinado(s)</span>`;
+}
 
-  document.getElementById('btn-salvar-relacao')?.addEventListener('click', async () => {
-    const msg = document.getElementById('msg-relacao');
-    if (msg) msg.textContent = '';
+function renderListaGestores() {
+  const box = document.getElementById('lista-gestores');
+  if (!box) return;
+  const filtro = (document.getElementById('busca-gestor')?.value || '').toLowerCase();
+  const items = (gestoresMapaCache?.gestores_diretos || [])
+    .filter(g => !filtro || _colabLabel(g).toLowerCase().includes(filtro) || (g.email || '').toLowerCase().includes(filtro))
+    .sort((a,b) => _colabLabel(a).localeCompare(_colabLabel(b), 'pt-BR', {sensitivity:'base'}));
 
-    const btn = document.getElementById('btn-salvar-relacao');
-
-    if (!gestorSelecionadoEmail) {
-      if (msg) msg.textContent = 'Selecione um gestor.';
-      return;
-    }
-    const subordinados = Array.from(gestorSubSelecionados);
-
-    try {
-      if (msg) msg.textContent = 'Salvando relação...';
-      if (btn) btn.disabled = true;
-
-      const r = await fetch('/api/dp/gestores/relacao', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ gestor: gestorSelecionadoEmail, subordinados })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (msg) msg.textContent = j.message || (r.ok ? 'Relação salva.' : 'Erro ao salvar relação.');
-    } catch (e) {
-      if (msg) msg.textContent = 'Erro ao salvar relação.';
-    } finally {
-      if (btn) btn.disabled = false;
-    }
+  if (!items.length) {
+    box.innerHTML = '<div class="muted">Nenhum gestor atual encontrado.</div>';
+    return;
+  }
+  box.innerHTML = items.map(g => `
+    <button type="button" class="btn btn-secondary" data-matricula="${escapeHtml(g.matricula)}"
+      style="width:100%; text-align:left; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:12px;">
+      <span><strong>${escapeHtml(_colabLabel(g))}</strong><div class="muted" style="font-size:11px;">${escapeHtml(g.email || '')}</div></span>
+      <span class="badge" style="background: rgba(0,0,0,.04); border-color: var(--border); color:#333;">${g.total || 0}</span>
+    </button>`).join('');
+  box.querySelectorAll('button[data-matricula]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const mat = _normMatJS(b.dataset.matricula);
+      const c = gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === mat);
+      gestorSelecionadoMatricula = mat;
+      document.getElementById('gestor-select').value = mat;
+      const inp = document.getElementById('gestor-input');
+      if (inp && c) inp.value = _colabLabel(c);
+      await carregarRelacaoGestor(mat);
+      renderListaSubordinados();
+      renderResumoGestorSelecionado(c);
+    });
   });
 }
 
+function renderListaGestoresSuperiores() {
+  const box = document.getElementById('lista-gestores-superiores');
+  if (!box) return;
+  const items = (gestoresMapaCache?.gestores_superiores || []).sort((a,b) => _colabLabel(a).localeCompare(_colabLabel(b), 'pt-BR', {sensitivity:'base'}));
+  if (!items.length) {
+    box.innerHTML = '<div class="muted">Nenhuma regra de gestor superior encontrada.</div>';
+    return;
+  }
+  box.innerHTML = items.map(g => `
+    <button type="button" class="btn btn-secondary" data-superior="${escapeHtml(g.matricula || '')}"
+      style="width:100%; text-align:left; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:12px;">
+      <span><strong>${escapeHtml(_colabLabel(g))}</strong><div class="muted" style="font-size:11px;">${escapeHtml(g.email || '')}</div></span>
+      <span class="badge" style="background: rgba(0,0,0,.04); border-color: var(--border); color:#333;">${g.total || 0}</span>
+    </button>`).join('');
+}
 
-async function carregarRelacaoGestor(emailGestor) {
+async function carregarRelacaoGestor(gestorMatricula) {
   gestorSubSelecionados = new Set();
-  if (!emailGestor) return;
-  const r = await fetch('/api/dp/gestores/relacao?gestor=' + encodeURIComponent(emailGestor));
+  if (!gestorMatricula) return;
+  const r = await fetch('/api/dp/gestores/relacao?gestor=' + encodeURIComponent(gestorMatricula));
   const j = await r.json().catch(() => ({}));
-  (j.subordinados || []).forEach(e => gestorSubSelecionados.add(_normEmailJS(e)));
+  (j.subordinados || []).forEach(m => gestorSubSelecionados.add(_normMatJS(m)));
 }
 
 function renderListaSubordinados() {
   const container = document.getElementById('lista-subordinados');
   if (!container) return;
-  if (!gestoresColaboradoresCache) {
+  if (!gestoresColaboradoresCache.length) {
     container.innerHTML = '<div class="muted">Carregando...</div>';
     return;
   }
-  if (!gestorSelecionadoEmail) {
+  if (!gestorSelecionadoMatricula) {
     container.innerHTML = '<div class="muted">Selecione um gestor para editar os subordinados.</div>';
     return;
   }
-
-  const filtro = _normEmailJS(document.getElementById('busca-subordinado').value);
+  const filtro = (document.getElementById('busca-subordinado')?.value || '').toLowerCase();
   const itens = gestoresColaboradoresCache
-    .filter(c => c.email !== gestorSelecionadoEmail)
-    .filter(c => !filtro || c.nome.toLowerCase().includes(filtro) || c.email.includes(filtro))
-    .slice(0, 300);
+    .filter(c => _normMatJS(c.matricula) !== gestorSelecionadoMatricula)
+    .filter(c => !filtro || _colabLabel(c).toLowerCase().includes(filtro) || (c.email || '').toLowerCase().includes(filtro))
+    .slice(0, 500);
 
-  if (itens.length === 0) {
+  if (!itens.length) {
     container.innerHTML = '<div class="muted">Nenhum colaborador encontrado.</div>';
     return;
   }
-
   container.innerHTML = itens.map(c => {
-    const checked = gestorSubSelecionados.has(c.email) ? 'checked' : '';
+    const mat = _normMatJS(c.matricula);
+    const checked = gestorSubSelecionados.has(mat) ? 'checked' : '';
     return `
       <label style="display:flex; gap:10px; align-items:center; padding:8px 6px; border-bottom:1px solid rgba(0,0,0,.04);">
-        <input type="checkbox" data-email="${c.email}" ${checked} />
-        <span style="font-weight:700;">${c.nome}</span>
-        <span class="muted" style="margin-left:auto;">${c.email}</span>
+        <input type="checkbox" data-matricula="${escapeHtml(mat)}" ${checked} />
+        <span style="font-weight:700;">${escapeHtml(_colabLabel(c))}</span>
+        <span class="muted" style="margin-left:auto;">${escapeHtml(c.email || '')}</span>
       </label>`;
   }).join('');
 
   container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
     cb.addEventListener('change', () => {
-      const e = _normEmailJS(cb.dataset.email);
-      if (cb.checked) gestorSubSelecionados.add(e);
-      else gestorSubSelecionados.delete(e);
+      const m = _normMatJS(cb.dataset.matricula);
+      if (cb.checked) gestorSubSelecionados.add(m);
+      else gestorSubSelecionados.delete(m);
+      const c = gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === gestorSelecionadoMatricula);
+      renderResumoGestorSelecionado(c);
     });
   });
+}
+
+async function salvarRelacaoGestor() {
+  const msg = document.getElementById('msg-relacao');
+  if (msg) msg.textContent = '';
+  const btn = document.getElementById('btn-salvar-relacao');
+  if (!gestorSelecionadoMatricula) {
+    if (msg) msg.textContent = 'Selecione um gestor.';
+    return;
+  }
+  try {
+    if (msg) msg.textContent = 'Salvando relação por matrícula...';
+    if (btn) btn.disabled = true;
+    const r = await fetch('/api/dp/gestores/relacao', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ gestor: gestorSelecionadoMatricula, subordinados: Array.from(gestorSubSelecionados) })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (msg) msg.textContent = j.message || (r.ok ? 'Relação salva.' : 'Erro ao salvar relação.');
+    gestoresMapaCache = null;
+    await carregarTelaGestores();
+  } catch (e) {
+    if (msg) msg.textContent = 'Erro ao salvar relação.';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function salvarGestorSuperior() {
+  const msg = document.getElementById('msg-superior');
+  if (msg) msg.textContent = '';
+  const btn = document.getElementById('btn-salvar-superior');
+  let colaborador = _normMatJS(document.getElementById('superior-colaborador')?.value);
+  const colabInputNow = document.getElementById('superior-colaborador-input')?.value || '';
+  const colabMatchNow = _matchColabFromInput(colabInputNow);
+  if (colabMatchNow) colaborador = _normMatJS(colabMatchNow.matricula);
+
+  const rawValorNow = (document.getElementById('superior-valor-input')?.value || '').toString().trim();
+  let valor = '';
+  const rawValorUpper = rawValorNow.toUpperCase();
+  if (rawValorUpper === 'DP' || rawValorUpper === 'GESTOR') valor = rawValorUpper;
+  else {
+    const supMatchNow = _matchColabFromInput(rawValorNow);
+    valor = supMatchNow ? _normMatJS(supMatchNow.matricula) : (document.getElementById('superior-valor')?.value || '').toString().trim().toUpperCase();
+  }
+
+  if (!colaborador) {
+    if (msg) msg.textContent = 'Selecione o colaborador.';
+    return;
+  }
+  if (!valor) {
+    const c = _matchColabFromInput(document.getElementById('superior-valor-input')?.value || '');
+    valor = c ? _normMatJS(c.matricula) : (document.getElementById('superior-valor-input')?.value || '').trim().toUpperCase();
+  }
+  if (!valor) {
+    if (msg) msg.textContent = 'Selecione o Gestor Superior.';
+    return;
+  }
+  try {
+    if (msg) msg.textContent = 'Salvando Gestor Superior por matrícula...';
+    if (btn) btn.disabled = true;
+    const r = await fetch('/api/dp/gestores/superior', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ colaborador, gestor_superior: valor })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (msg) msg.textContent = j.message || (r.ok ? 'Gestor Superior salvo.' : 'Erro ao salvar Gestor Superior.');
+    gestoresMapaCache = null;
+    await carregarTelaGestores();
+  } catch (e) {
+    if (msg) msg.textContent = 'Erro ao salvar Gestor Superior.';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 
@@ -1383,13 +1402,14 @@ function renderizarColaboradores() {
         const statusClass = statusText.toUpperCase().trim() === 'ATIVO' ? 'status-ativo' : 'status-inativo';
 
         const email = (colab['EMAIL DA EMPRESA'] || '').toString();
+        const matricula = (colab.MATRICULA || colab['MATRÍCULA'] || colab.matricula || '').toString();
         const nome = (colab['NOME COMPLETO'] || '-').toString();
         const cargo = (colab.CARGO || '-').toString();
         const setor = (colab.SETOR || '-').toString();
 
         html += `
             <div class="colaborador-card" data-idx="${idx}">
-                <div class="colaborador-nome">${escapeHtml(nome)}</div>
+                <div class="colaborador-nome">${escapeHtml(matricula ? `${matricula} | ${nome}` : nome)}</div>
                 <div class="colaborador-info">📧 ${escapeHtml(email)}</div>
                 <div class="colaborador-info">💼 ${escapeHtml(cargo)}</div>
                 <div class="colaborador-info">🏢 ${escapeHtml(setor)}</div>
@@ -1419,6 +1439,7 @@ function mostrarColaboradorPorIndice(idx, cardElement) {
     const colab = colaboradores[idx] || {};
     const status = (colab.STATUS || colab.Status || 'Sem status').toString();
     const email = (colab['EMAIL DA EMPRESA'] || '').toString();
+    const matricula = (colab.MATRICULA || colab['MATRÍCULA'] || colab.matricula || '').toString();
     const nome = (colab['NOME COMPLETO'] || '-').toString();
     const cargo = (colab.CARGO || '-').toString();
     const setor = (colab.SETOR || '-').toString();
@@ -1438,7 +1459,7 @@ function mostrarColaboradorPorIndice(idx, cardElement) {
     
     colaboradorSelecionado = email;
     
-    document.getElementById('det-colab-nome').textContent = nome;
+    document.getElementById('det-colab-nome').textContent = matricula ? `${matricula} | ${nome}` : nome;
     document.getElementById('det-colab-email').textContent = email;
     document.getElementById('det-colab-cargo').textContent = cargo;
     document.getElementById('det-colab-setor').textContent = setor;
@@ -1705,6 +1726,7 @@ let ajustesSubSel = null;
 let ajustesColabsCache = null;
 let ajustesGestorMap = {};      // { gestorEmail: [subEmail,...] }
 let ajustesNomePorEmail = {};   // { email: nome }
+let ajustesMatriculaPorEmail = {};
 let ajustesBound = false;
 
 function aNorm(s){
@@ -1719,16 +1741,21 @@ function aEmail(s){
 
 function aNome(email){
   const e = aEmail(email);
-  return ajustesNomePorEmail[e] || e || "";
+  const nome = ajustesNomePorEmail[e] || e || "";
+  const mat = ajustesMatriculaPorEmail[e] || "";
+  return mat ? `${mat} | ${nome}` : nome;
 }
 
 function aBuildNomeIndex(colabs){
   ajustesNomePorEmail = {};
+  ajustesMatriculaPorEmail = {};
   (colabs || []).forEach(c => {
     const email = aEmail(c["EMAIL DA EMPRESA"] || c["EMAIL"] || c["E-MAIL"] || "");
     if (!email) return;
     const nome = (c["NOME COMPLETO"] || c["NOME"] || "").toString().trim();
+    const mat = (c.MATRICULA || c["MATRÍCULA"] || c.matricula || "").toString().trim().toUpperCase();
     ajustesNomePorEmail[email] = nome || email;
+    ajustesMatriculaPorEmail[email] = mat;
   });
 }
 

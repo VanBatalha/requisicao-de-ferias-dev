@@ -209,117 +209,266 @@ def api_dp_colaborador(email):
 
 
 # ============================================
-# API: dp - GESTORES (relação Gestor -> Subordinados)
+# API: dp - GESTORES (relação por matrícula)
 # ============================================
 
-@bp.route("/api/dp/gestores/relacao", methods=["GET", "POST"])
-def api_dp_gestores_relacao():
-    user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
-        return jsonify({"ok": False, "message": "Acesso negado"}), 403
-
-    if request.method == "GET":
-        try:
-            gestor = _norm_email(request.args.get("gestor") or "")
-            if not gestor:
-                return jsonify({"ok": True, "gestor": "", "subordinados": []})
-            subs = get_subordinados_direto(gestor)
-            return jsonify({"ok": True, "gestor": gestor, "subordinados": subs})
-        except Exception as e:
-            return jsonify({"ok": False, "message": f"Erro ao carregar relação: {e}"}), 500
-
-    payload = request.get_json(silent=True) or {}
-    gestor = _norm_email(payload.get("gestor") or "")
-    subordinados = payload.get("subordinados") or payload.get("subordinates") or []
-    if isinstance(subordinados, str):
-        subordinados = [subordinados]
-
-    if not gestor:
-        return jsonify({"ok": False, "message": "Gestor é obrigatório"}), 400
-
-    try:
-        atualizar_relacao_gestor(gestor, subordinados)
-        return jsonify({"ok": True, "message": "Relação atualizada com sucesso."})
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao salvar relação: {e}"}), 500
+def _gestores_session():
+    from ..services.postgres_service import get_db_session
+    return get_db_session()
 
 
-@bp.route("/api/dp/gestores/superior", methods=["GET", "POST"])
-def api_dp_gestor_superior():
-    """Lê/atualiza a coluna GESTOR SUPERIOR do colaborador (cadastro)."""
-    user = session.get("user")
-    if not user or not _has_dp_access(user.get("email")):
-        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+def _is_active_status(value):
+    return str(value or 'ATIVO').strip().upper() in {'ATIVO', 'ACTIVE'}
 
-    try:
-        client = get_smartsheet_client()
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao criar cliente Smartsheet: {e}"}), 500
 
-    if not client:
-        return jsonify({"ok": False, "message": "Smartsheet não configurado (token ausente)"}), 401
+def _resolve_colaborador_identity(db, value):
+    """Resolve matrícula, e-mail ou local-part para o colaborador ativo preferencial."""
+    from sqlalchemy import func
+    from ..models import Colaborador
+    value = str(value or '').strip()
+    if not value:
+        return None
+    upper = value.upper()
+    q = db.query(Colaborador).filter(func.upper(Colaborador.matricula) == upper)
+    colab = q.first()
+    if colab:
+        return colab
+    lower = value.lower()
+    rows = db.query(Colaborador).filter(func.lower(Colaborador.email) == lower).all()
+    if not rows and '@' in lower:
+        local = lower.split('@', 1)[0]
+        rows = db.query(Colaborador).filter(func.split_part(func.lower(Colaborador.email), '@', 1) == local).all()
+    rows.sort(key=lambda c: (1 if _is_active_status(c.status) else 0, int(c.id or 0)), reverse=True)
+    return rows[0] if rows else None
 
-    sheet = client.Sheets.get_sheet(ID_FOLHA_CADASTRO)
-    # Busca colunas por nome com tolerância a variações (acentos/maiúsculas)
-    col_email = col_id_by_name(sheet, *["EMAIL DA EMPRESA", "EMAIL", "E-MAIL", "EMAIL EMPRESA"])
-    col_sup = col_id_by_name(sheet, *["GESTOR SUPERIOR", "GESTOR SUPERIOR ", "GESTOR_SUPERIOR"])
-    if not col_email or not col_sup:
-        return jsonify({"ok": False, "message": "Colunas de EMAIL e/ou GESTOR SUPERIOR não encontradas no cadastro."}), 500
 
-    if request.method == "GET":
-        colaborador = _norm_email(request.args.get("colaborador") or "")
-        if not colaborador:
-            return jsonify({"ok": True, "colaborador": "", "gestor_superior": ""})
-        for row in sheet.rows:
-            row_email = _norm_email(next((c.value for c in row.cells if c.column_id == col_email), ""))
-            if row_email == colaborador:
-                valor = next((c.value for c in row.cells if c.column_id == col_sup), "") or ""
-                return jsonify({"ok": True, "colaborador": colaborador, "gestor_superior": str(valor).strip()})
-        return jsonify({"ok": False, "message": "Colaborador não encontrado"}), 404
+def _colab_label(c):
+    mat = str(getattr(c, 'matricula', '') or '').strip()
+    nome = str(getattr(c, 'nome_completo', '') or '').strip() or str(getattr(c, 'email', '') or '')
+    return f"{mat} | {nome}" if mat else nome
 
-    payload = request.get_json(silent=True) or {}
-    colaborador = _norm_email(payload.get("colaborador") or "")
-    valor = (payload.get("gestor_superior") or payload.get("valor") or "").strip()
-    if not colaborador:
-        return jsonify({"ok": False, "message": "Colaborador é obrigatório"}), 400
-    if not valor:
-        return jsonify({"ok": False, "message": "Gestor Superior é obrigatório"}), 400
 
-    # normaliza valores especiais
-    if safe_lower(valor) in ("dp",):
-        valor_out = "DP"
-    elif safe_lower(valor) in ("gestor",):
-        valor_out = "GESTOR"
+def _colab_payload(c):
+    comp = getattr(c, 'complemento', None)
+    return {
+        'id': c.id,
+        'matricula': c.matricula or '',
+        'email': (c.email or '').lower(),
+        'nome': c.nome_completo or '',
+        'label': _colab_label(c),
+        'status': c.status or '',
+        'gestor_direto': (getattr(comp, 'gestor_direto', None) if comp else '') or '',
+        'gestor_superior': (getattr(comp, 'gestor_superior', None) if comp else '') or '',
+        'gestor_direto_email': (getattr(comp, 'gestor_direto_email', None) if comp else '') or '',
+        'gestor_superior_email': (getattr(comp, 'gestor_superior_email', None) if comp else '') or '',
+    }
+
+
+def _ensure_complemento(db, colab):
+    from ..models import ColaboradorComplemento
+    comp = getattr(colab, 'complemento', None)
+    if not comp:
+        comp = ColaboradorComplemento(
+            colaborador_id=colab.id,
+            colaborador_matricula=colab.matricula,
+            user_type='USER',
+            ativo_no_app=True,
+        )
+        db.add(comp)
+        db.flush()
+    comp.colaborador_matricula = colab.matricula
+    return comp
+
+
+def _sync_hierarquia_from_complemento(db, colab):
+    from ..models import Colaborador, HierarquiaGestao
+    comp = _ensure_complemento(db, colab)
+    h = db.query(HierarquiaGestao).filter(HierarquiaGestao.colaborador_matricula == colab.matricula).first()
+    if not h:
+        h = HierarquiaGestao(colaborador_id=colab.id, colaborador_matricula=colab.matricula)
+        db.add(h)
+    h.colaborador_id = colab.id
+    h.colaborador_matricula = colab.matricula
+
+    gd_mat = str(getattr(comp, 'gestor_direto', '') or '').strip().upper()
+    gd = db.query(Colaborador).filter(Colaborador.matricula == gd_mat).first() if gd_mat else None
+    h.gestor_direto_id = gd.id if gd else None
+    h.gestor_direto_matricula = gd.matricula if gd else None
+    h.gestor_direto_email = gd.email.lower() if gd and gd.email else (comp.gestor_direto_email or None)
+
+    gs_val = str(getattr(comp, 'gestor_superior', '') or '').strip().upper()
+    if gs_val == 'DP':
+        h.gestor_superior_tipo = 'DP'
+        h.gestor_superior_id = None
+        h.gestor_superior_matricula = None
+        h.gestor_superior_email_custom = None
+    elif gs_val == 'GESTOR' or not gs_val:
+        h.gestor_superior_tipo = 'GESTOR'
+        h.gestor_superior_id = None
+        h.gestor_superior_matricula = None
+        h.gestor_superior_email_custom = None
     else:
-        valor_out = _norm_email(valor)
+        gs = db.query(Colaborador).filter(Colaborador.matricula == gs_val).first()
+        if gs:
+            h.gestor_superior_tipo = 'GESTOR'
+            h.gestor_superior_id = gs.id
+            h.gestor_superior_matricula = gs.matricula
+            h.gestor_superior_email_custom = None
+        else:
+            h.gestor_superior_tipo = 'CUSTOM'
+            h.gestor_superior_id = None
+            h.gestor_superior_matricula = None
+            h.gestor_superior_email_custom = gs_val
 
-    # atualiza a linha
-    target_row_id = None
-    for row in sheet.rows:
-        row_email = _norm_email(next((c.value for c in row.cells if c.column_id == col_email), ""))
-        if row_email == colaborador:
-            target_row_id = row.id
-            break
 
-    if not target_row_id:
-        return jsonify({"ok": False, "message": "Colaborador não encontrado"}), 404
+def _listar_colaboradores_ativos_db(db):
+    from ..models import Colaborador
+    return db.query(Colaborador).filter(Colaborador.status.in_(['ATIVO', 'ACTIVE', 'Ativo'])).order_by(Colaborador.nome_completo).all()
+
+
+@bp.route('/api/dp/gestores/mapa', methods=['GET'])
+def api_dp_gestores_mapa():
+    user = session.get('user')
+    if not user or not _has_dp_access(user.get('email')):
+        return jsonify({'ok': False, 'message': 'Acesso negado'}), 403
+    try:
+        db = _gestores_session()
+        colabs = _listar_colaboradores_ativos_db(db)
+        por_mat = {str(c.matricula or '').upper(): c for c in colabs if c.matricula}
+        gestores_diretos = {}
+        gestores_superiores = {}
+        for c in colabs:
+            comp = getattr(c, 'complemento', None)
+            gd = str(getattr(comp, 'gestor_direto', '') or '').strip().upper() if comp else ''
+            gs = str(getattr(comp, 'gestor_superior', '') or '').strip().upper() if comp else ''
+            if gd and gd in por_mat and gd != str(c.matricula or '').upper():
+                gestores_diretos.setdefault(gd, []).append(_colab_payload(c))
+            if gs:
+                gestores_superiores.setdefault(gs, []).append(_colab_payload(c))
+        return jsonify({
+            'ok': True,
+            'colaboradores': [_colab_payload(c) for c in colabs],
+            'gestores_diretos': [dict(_colab_payload(por_mat[g]), subordinados=subs, total=len(subs)) for g, subs in gestores_diretos.items() if g in por_mat],
+            'gestores_superiores': [
+                dict((_colab_payload(por_mat[g]) if g in por_mat else {'matricula': g, 'nome': g, 'email': '', 'label': g}), subordinados=subs, total=len(subs))
+                for g, subs in gestores_superiores.items()
+            ],
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'message': f'Erro ao carregar mapa de gestores: {e}'}), 500
+
+
+@bp.route('/api/dp/gestores/relacao', methods=['GET', 'POST'])
+def api_dp_gestores_relacao():
+    user = session.get('user')
+    if not user or not _has_dp_access(user.get('email')):
+        return jsonify({'ok': False, 'message': 'Acesso negado'}), 403
+
+    db = _gestores_session()
+
+    if request.method == 'GET':
+        try:
+            gestor_ident = (request.args.get('gestor') or '').strip()
+            gestor = _resolve_colaborador_identity(db, gestor_ident)
+            if not gestor:
+                return jsonify({'ok': True, 'gestor': '', 'gestor_matricula': '', 'subordinados': [], 'subordinados_detalhes': []})
+            subs = []
+            for c in _listar_colaboradores_ativos_db(db):
+                comp = getattr(c, 'complemento', None)
+                gd = str(getattr(comp, 'gestor_direto', '') or '').strip().upper() if comp else ''
+                if gd == str(gestor.matricula or '').upper():
+                    subs.append(c)
+            return jsonify({
+                'ok': True,
+                'gestor': gestor.email or '',
+                'gestor_matricula': gestor.matricula or '',
+                'gestor_label': _colab_label(gestor),
+                'subordinados': [c.matricula for c in subs if c.matricula],
+                'subordinados_detalhes': [_colab_payload(c) for c in subs],
+            })
+        except Exception as e:
+            return jsonify({'ok': False, 'message': f'Erro ao carregar relação: {e}'}), 500
+
+    payload = request.get_json(silent=True) or {}
+    gestor = _resolve_colaborador_identity(db, payload.get('gestor') or '')
+    subordinados_raw = payload.get('subordinados') or payload.get('subordinates') or []
+    if isinstance(subordinados_raw, str):
+        subordinados_raw = [subordinados_raw]
+    if not gestor:
+        return jsonify({'ok': False, 'message': 'Gestor é obrigatório'}), 400
 
     try:
-        row_update = smartsheet.models.Row()
-        row_update.id = target_row_id
-        cell = smartsheet.models.Cell()
-        cell.column_id = col_sup
-        cell.value = valor_out
-        row_update.cells = [cell]
-        client.Sheets.update_rows(ID_FOLHA_CADASTRO, [row_update])
-        try:
-            if hasattr(g, "_cadastro_colaboradores"):
-                delattr(g, "_cadastro_colaboradores")
-        except Exception:
-            pass
-        return jsonify({"ok": True, "message": "Gestor Superior atualizado com sucesso."})
+        gestor_matricula = str(gestor.matricula or '').upper()
+        selecionadas = set()
+        for item in subordinados_raw:
+            c = _resolve_colaborador_identity(db, item)
+            if c and c.matricula and str(c.matricula).upper() != gestor_matricula:
+                selecionadas.add(str(c.matricula).upper())
+
+        for c in _listar_colaboradores_ativos_db(db):
+            comp = _ensure_complemento(db, c)
+            atual = str(getattr(comp, 'gestor_direto', '') or '').strip().upper()
+            cm = str(c.matricula or '').upper()
+            if atual == gestor_matricula and cm not in selecionadas:
+                comp.gestor_direto = None
+                comp.gestor_direto_email = None
+                _sync_hierarquia_from_complemento(db, c)
+            elif cm in selecionadas:
+                comp.gestor_direto = gestor_matricula
+                comp.gestor_direto_email = (gestor.email or '').lower() or None
+                _sync_hierarquia_from_complemento(db, c)
+        db.commit()
+        return jsonify({'ok': True, 'message': 'Relação atualizada com sucesso.', 'gestor_matricula': gestor_matricula, 'subordinados': sorted(selecionadas)})
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao atualizar Gestor Superior: {e}"}), 500
+        db.rollback()
+        return jsonify({'ok': False, 'message': f'Erro ao salvar relação: {e}'}), 500
+
+
+@bp.route('/api/dp/gestores/superior', methods=['GET', 'POST'])
+def api_dp_gestor_superior():
+    user = session.get('user')
+    if not user or not _has_dp_access(user.get('email')):
+        return jsonify({'ok': False, 'message': 'Acesso negado'}), 403
+    db = _gestores_session()
+
+    if request.method == 'GET':
+        colaborador_ident = (request.args.get('colaborador') or '').strip()
+        colab = _resolve_colaborador_identity(db, colaborador_ident)
+        if not colab:
+            return jsonify({'ok': False, 'message': 'Colaborador não encontrado'}), 404
+        comp = _ensure_complemento(db, colab)
+        valor = str(getattr(comp, 'gestor_superior', '') or '').strip() or 'GESTOR'
+        return jsonify({'ok': True, 'colaborador': colab.matricula or '', 'gestor_superior': valor})
+
+    payload = request.get_json(silent=True) or {}
+    colab = _resolve_colaborador_identity(db, payload.get('colaborador') or '')
+    valor_raw = (payload.get('gestor_superior') or payload.get('valor') or '').strip()
+    if not colab:
+        return jsonify({'ok': False, 'message': 'Colaborador é obrigatório'}), 400
+    if not valor_raw:
+        return jsonify({'ok': False, 'message': 'Gestor Superior é obrigatório'}), 400
+
+    try:
+        comp = _ensure_complemento(db, colab)
+        norm = valor_raw.strip().upper()
+        if norm in {'DP', 'RH'}:
+            comp.gestor_superior = 'DP'
+            comp.gestor_superior_email = 'dp'
+        elif norm in {'GESTOR', 'GESTORES', 'GESTOR DIRETO'}:
+            comp.gestor_superior = 'GESTOR'
+            comp.gestor_superior_email = 'gestor'
+        else:
+            sup = _resolve_colaborador_identity(db, valor_raw)
+            if not sup:
+                return jsonify({'ok': False, 'message': 'Gestor Superior não encontrado'}), 404
+            comp.gestor_superior = sup.matricula
+            comp.gestor_superior_email = (sup.email or '').lower() or None
+        _sync_hierarquia_from_complemento(db, colab)
+        db.commit()
+        return jsonify({'ok': True, 'message': 'Gestor Superior atualizado com sucesso.', 'gestor_superior': comp.gestor_superior})
+    except Exception as e:
+        db.rollback()
+        return jsonify({'ok': False, 'message': f'Erro ao atualizar Gestor Superior: {e}'}), 500
 
 # ============================================
 # API: dp - FÉRIAS (Planilha 2890766507528068)
@@ -377,6 +526,14 @@ def api_dp_atualizar_status():
         return jsonify({"ok": False, "message": f"Status nao permitido. Use um de: {', '.join(status_permitidos)}"}), 400
     
     try:
+        from ..services.postgres_compat_service import postgres_enabled
+        if postgres_enabled():
+            from ..services.postgres_service import atualizar_solicitacao
+            ok, msg = atualizar_solicitacao(int(row_id), {"status": _canonical_status(novo_status_upper)})
+            if not ok:
+                return jsonify({"ok": False, "message": msg or "Erro ao atualizar status"}), 500
+            return jsonify({"ok": True, "message": f"Status atualizado para {novo_status_upper}"})
+
         client = get_smartsheet_client()
         sheet_sol = get_sheet_solicitacoes(client)
         cols_sol = get_col_map(sheet_sol)

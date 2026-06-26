@@ -26,16 +26,22 @@ def _truthy(value: str | None) -> bool:
 
 
 def main() -> int:
-    # Por padrão sincroniza somente cadastro/permissões/hierarquia.
-    # Para incluir histórico de solicitações, defina INCLUDE_SOLICITACOES=true.
-    include_solicitacoes = _truthy(os.getenv("INCLUDE_SOLICITACOES"))
+    # V28: por padrão, se ID_FOLHA_SOLICITACOES estiver configurado,
+    # sincroniza também solicitações/ajustes e recalcula saldos/períodos.
+    include_solicitacoes = _truthy(os.getenv("INCLUDE_SOLICITACOES", "true")) and bool(os.getenv("ID_FOLHA_SOLICITACOES"))
+    recalculate = _truthy(os.getenv("RECALCULATE_SALDOS", "true"))
+
+    print("Configuração da sincronização:")
+    print(f"- INCLUDE_SOLICITACOES={include_solicitacoes}")
+    print(f"- RECALCULATE_SALDOS={recalculate}")
+    print(f"- SYNC_REFERENCE_DATE={os.getenv('SYNC_REFERENCE_DATE') or 'data atual do ambiente'}")
 
     app = create_app()
     with app.app_context():
         result = sync_cadastro_from_smartsheet(
             triggered_by="cron",
             actor_email="cron",
-            recalculate=False,
+            recalculate=recalculate,
             include_solicitacoes=include_solicitacoes,
         )
         print("Sincronização concluída.")
