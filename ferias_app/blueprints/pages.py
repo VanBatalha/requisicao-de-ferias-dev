@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import unicodedata
 
 from flask import redirect, render_template, request, session, url_for
+
+
+def _sort_text_pt(value: str) -> str:
+    value = str(value or '')
+    value = unicodedata.normalize('NFD', value)
+    value = ''.join(ch for ch in value if unicodedata.category(ch) != 'Mn')
+    return value.casefold().strip()
 
 from .base import bp
 from .solicitacoes_api import api_solicitar_ferias
@@ -159,7 +167,7 @@ def ferias():
             disponiveis.append(gestor_email)
 
     opcoes = [{"email": e, "nome": (nome_por_email.get(e) or e), "matricula": (matricula_por_email.get(e) or "")} for e in disponiveis]
-    opcoes.sort(key=lambda x: ((x.get("nome") or "").casefold(), (x.get("email") or "").casefold()))
+    opcoes.sort(key=lambda x: (_sort_text_pt(x.get("nome") or ""), str(x.get("matricula") or ""), (x.get("email") or "").casefold()))
 
     selecionado = safe_lower(request.args.get("colaborador") or (opcoes[0]["email"] if opcoes else ""))
     if selecionado not in [o["email"] for o in opcoes]:

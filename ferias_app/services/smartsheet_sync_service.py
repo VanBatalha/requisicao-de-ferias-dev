@@ -931,7 +931,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
                 continue
 
     return {
-        "mode": "sync_by_matricula_chunked_commits_v27",
+        "mode": "sync_by_matricula_saldo_periodo_v31",
         "records": len(records),
         "inserted": inserted,
         "updated": existing_updated,
@@ -1059,7 +1059,7 @@ def _parse_periodo_aquisitivo_origem(value: Any) -> list[dict]:
     text = str(value or "").strip()
     if not text:
         return []
-    found = re.findall(r"P\s*(\d+)\s*[:=\-]\s*(\d+(?:[\.,]\d+)?)", text, flags=re.IGNORECASE)
+    found = re.findall(r"P\s*(\d+)\s*[:=]\s*([+-]?\d+(?:[\.,]\d+)?)", text, flags=re.IGNORECASE)
     out: list[dict] = []
     for numero, dias in found:
         try:
@@ -1070,12 +1070,20 @@ def _parse_periodo_aquisitivo_origem(value: Any) -> list[dict]:
 
 
 def _allocate_from_saldo_periodo(saldos: list[SaldoPeriodoNovo], dias: float, field: str) -> list[dict]:
-    """Consome/reserva saldo do período mais antigo para o mais novo."""
-    restante = float(dias or 0)
+    """Consome/reserva saldo do período mais antigo para o mais novo.
+
+    V31: se a solicitação ultrapassar o saldo disponível, o restante fica no
+    último período elegível, permitindo saldo negativo de forma controlada.
+    """
+    restante = abs(float(dias or 0))
     alloc: list[dict] = []
     if restante <= 0:
         return alloc
-    for saldo in saldos:
+
+    elegiveis = [s for s in saldos if float(s.saldo_inicial or 0) != 0 or bool(s.is_atual)] or list(saldos)
+    ultimo_elegivel = elegiveis[-1] if elegiveis else (saldos[-1] if saldos else None)
+
+    for saldo in elegiveis:
         disponivel = float(saldo.saldo_disponivel or 0)
         if disponivel <= 0:
             continue
@@ -1086,13 +1094,25 @@ def _allocate_from_saldo_periodo(saldos: list[SaldoPeriodoNovo], dias: float, fi
             saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + consumir
         else:
             saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + consumir
-        saldo.saldo_disponivel = max(0, float(saldo.saldo_disponivel or 0) - consumir)
+        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) - consumir
         saldo.ultima_alteracao = dt.datetime.utcnow()
         saldo.updated_at = dt.datetime.utcnow()
         alloc.append({"periodo_numero": int(saldo.periodo_numero or 0), "dias": consumir})
         restante -= consumir
         if restante <= 0.0001:
             break
+
+    if restante > 0.0001 and ultimo_elegivel is not None:
+        saldo = ultimo_elegivel
+        if field == "saldo_reservado":
+            saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + restante
+        else:
+            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + restante
+        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) - restante
+        saldo.ultima_alteracao = dt.datetime.utcnow()
+        saldo.updated_at = dt.datetime.utcnow()
+        alloc.append({"periodo_numero": int(saldo.periodo_numero or 0), "dias": restante})
+
     return alloc
 
 
@@ -1100,7 +1120,7 @@ def _apply_explicit_alloc_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNov
     aplicado: list[dict] = []
     for item in alloc or []:
         numero = int(item.get("periodo_numero") or item.get("numero") or 0)
-        dias = float(item.get("dias") or 0)
+        dias = abs(float(item.get("dias") or 0))
         saldo = saldos_by_num.get(numero)
         if not saldo or dias <= 0:
             continue
@@ -1108,45 +1128,60 @@ def _apply_explicit_alloc_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNov
             saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + dias
         else:
             saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + dias
-        saldo.saldo_disponivel = max(0, float(saldo.saldo_disponivel or 0) - dias)
+        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) - dias
         saldo.ultima_alteracao = dt.datetime.utcnow()
         saldo.updated_at = dt.datetime.utcnow()
         aplicado.append({"periodo_numero": numero, "dias": dias})
     return aplicado
 
 
-def _credit_adjustment_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNovo], periodos: list[PeriodoAquisitivo], data_inicio: Optional[dt.date], dias: float, explicit_alloc: list[dict] | None = None) -> list[dict]:
-    """Aplica ajuste positivo no período indicado. Usa Pn do Smartsheet quando houver."""
+def _apply_adjustment_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNovo], periodos: list[PeriodoAquisitivo], data_inicio: Optional[dt.date], dias: float, explicit_alloc: list[dict] | None = None) -> list[dict]:
+    """Aplica AJUSTE como correção de saldo, positiva ou negativa.
+
+    O sinal vem da própria solicitação: dias positivos creditam saldo;
+    dias negativos debitam saldo. A coluna periodo_aquisitivo_origem guarda
+    apenas a distribuição por período, no padrão P4:10 | P5:10.
+    """
+    delta_total = float(dias or 0)
+    if abs(delta_total) <= 0.0001:
+        return []
+
+    sinal = 1 if delta_total >= 0 else -1
     alloc = explicit_alloc or []
     aplicado: list[dict] = []
+
     if alloc:
         for item in alloc:
             numero = int(item.get("periodo_numero") or item.get("numero") or 0)
-            credito = float(item.get("dias") or 0)
+            magnitude = abs(float(item.get("dias") or 0))
             saldo = saldos_by_num.get(numero)
-            if not saldo or credito <= 0:
+            if not saldo or magnitude <= 0:
                 continue
-            saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + credito
-            saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + credito
+            delta = sinal * magnitude
+            saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + delta
+            saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + delta
             saldo.ultima_alteracao = dt.datetime.utcnow()
             saldo.updated_at = dt.datetime.utcnow()
-            aplicado.append({"periodo_numero": numero, "dias": credito})
+            aplicado.append({"periodo_numero": numero, "dias": magnitude})
         return aplicado
+
     periodo = _find_periodo_for_date(periodos, data_inicio) or (periodos[-1] if periodos else None)
     if not periodo:
         return []
     saldo = saldos_by_num.get(int(periodo.periodo_numero or 0))
     if not saldo:
         return []
-    credito = float(dias or 0)
-    if credito <= 0:
-        return []
-    saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + credito
-    saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + credito
+    magnitude = abs(delta_total)
+    saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + delta_total
+    saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + delta_total
     saldo.ultima_alteracao = dt.datetime.utcnow()
     saldo.updated_at = dt.datetime.utcnow()
-    return [{"periodo_numero": int(periodo.periodo_numero or 0), "dias": credito}]
+    return [{"periodo_numero": int(periodo.periodo_numero or 0), "dias": magnitude}]
 
+
+# Alias mantido por compatibilidade com versões anteriores do serviço.
+def _credit_adjustment_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNovo], periodos: list[PeriodoAquisitivo], data_inicio: Optional[dt.date], dias: float, explicit_alloc: list[dict] | None = None) -> list[dict]:
+    return _apply_adjustment_saldo_periodo(saldos_by_num, periodos, data_inicio, dias, explicit_alloc)
 
 def _ensure_periodos_colaborador(session, colab: Colaborador, ref_date: dt.date) -> list[PeriodoAquisitivo]:
     admissao = colab.data_admissao if isinstance(colab.data_admissao, dt.date) else parse_date(colab.data_admissao)
@@ -1424,8 +1459,8 @@ def _recalculate_complemento(session) -> dict:
 
         total_solicitacoes = 0
         for sol in rows_ordenadas:
-            dias = float(sol.dias or sol.dias_solicitados or 0)
-            if dias <= 0:
+            dias = float(sol.dias if sol.dias is not None else (sol.dias_solicitados or 0))
+            if abs(dias) <= 0.0001:
                 continue
             saldo_tipo = (sol.saldo_tipo or sol.tipo_ferias or "REGULAR").upper()
             status = _canonical_status(sol.status)
@@ -1447,10 +1482,11 @@ def _recalculate_complemento(session) -> dict:
 
             if bool(sol.is_ajuste):
                 if status in {"APROVADA", "APROVADO"}:
-                    alloc = _credit_adjustment_saldo_periodo(saldos_by_num, periodos, data_inicio, dias, explicit_alloc)
+                    alloc = _apply_adjustment_saldo_periodo(saldos_by_num, periodos, data_inicio, dias, explicit_alloc)
                 else:
                     alloc = explicit_alloc
             else:
+                dias = abs(dias)
                 total_solicitacoes += 1
                 if saldo_tipo == "PREMIUM" and premium_ini and premium_fim_excl and data_inicio and not (premium_ini <= data_inicio < premium_fim_excl):
                     # Fora da janela premium: preserva origem se existir, mas não impacta saldo premium.
@@ -1490,11 +1526,11 @@ def _recalculate_complemento(session) -> dict:
         comp.saldo_regular_direito = int(round(regular_direito))
         comp.saldo_regular_usado = int(round(regular_usados))
         comp.saldo_regular_reservado = int(round(regular_reservados))
-        comp.saldo_regular_disponivel = int(round(max(0, regular_disponivel)))
+        comp.saldo_regular_disponivel = int(round(regular_disponivel))
         comp.saldo_premium_direito = int(round(premium_direito))
         comp.saldo_premium_usado = int(round(premium_usados))
         comp.saldo_premium_reservado = int(round(premium_reservados))
-        comp.saldo_premium_disponivel = int(round(max(0, premium_disponivel)))
+        comp.saldo_premium_disponivel = int(round(premium_disponivel))
         comp.total_solicitacoes = int(total_solicitacoes)
         comp.periodo_aquisitivo_atual = periodo_atual or {}
         comp.calculated_at = dt.datetime.utcnow()

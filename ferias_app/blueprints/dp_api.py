@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import unicodedata
 
 import smartsheet
 from flask import jsonify, request, session
@@ -248,6 +249,17 @@ def _colab_label(c):
     return f"{mat} | {nome}" if mat else nome
 
 
+def _sort_text_pt(value):
+    value = str(value or '')
+    value = unicodedata.normalize('NFD', value)
+    value = ''.join(ch for ch in value if unicodedata.category(ch) != 'Mn')
+    return value.casefold().strip()
+
+
+def _sort_key_colab(c):
+    return (_sort_text_pt(getattr(c, 'nome_completo', '') or getattr(c, 'email', '') or ''), str(getattr(c, 'matricula', '') or ''))
+
+
 def _colab_payload(c):
     comp = getattr(c, 'complemento', None)
     return {
@@ -323,7 +335,8 @@ def _sync_hierarquia_from_complemento(db, colab):
 
 def _listar_colaboradores_ativos_db(db):
     from ..models import Colaborador
-    return db.query(Colaborador).filter(Colaborador.status.in_(['ATIVO', 'ACTIVE', 'Ativo'])).order_by(Colaborador.nome_completo).all()
+    rows = db.query(Colaborador).filter(Colaborador.status.in_(['ATIVO', 'ACTIVE', 'Ativo'])).all()
+    return sorted(rows, key=_sort_key_colab)
 
 
 @bp.route('/api/dp/gestores/mapa', methods=['GET'])

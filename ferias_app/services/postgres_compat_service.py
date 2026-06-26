@@ -315,7 +315,7 @@ def _saldos_por_periodo(colab: Colaborador, saldo_tipo: str = 'REGULAR') -> list
         direito = int(round(float(s.saldo_inicial or 0)))
         usados = int(round(float(s.saldo_utilizado or 0)))
         reservados = int(round(float(s.saldo_reservado or 0)))
-        saldo = max(0, int(round(float(s.saldo_disponivel or 0))))
+        saldo = int(round(float(s.saldo_disponivel or 0)))
         out.append({
             'id': s.id,
             'periodo_id': s.id,
@@ -507,7 +507,7 @@ def get_resumo_ferias_postgres(email: str) -> Dict[str, Any]:
         direito = sum(int(p.get('direito') or 0) for p in periodos)
         usados = sum(int(p.get('usados') or 0) for p in periodos)
         reservados = sum(int(p.get('reservados') or 0) for p in periodos)
-        saldo = max(0, direito - usados - reservados)
+        saldo = sum(int(p.get('saldo') or 0) for p in periodos)
         return direito, usados, reservados, saldo
     rd, ru, rr, rs = totals(reg_periodos)
     pd, pu, pr, ps = totals(prem_periodos)
