@@ -52,7 +52,10 @@ def init_db():
     db_url = settings.database_url
     
     if not db_url:
-        raise ValueError("DATABASE_URL não configurada.")
+        raise ValueError(
+            "Banco de dados não configurado. Defina DB_TARGET=oficial com PG_HOST/PG_PORT/PG_DB/PG_USER/PG_PASSWORD, "
+            "ou DB_TARGET=teste_url com TEST_DATABASE_URL, ou DB_TARGET=database_url com DATABASE_URL."
+        )
     
     schema = _db_schema_name()
     schema_sql = _quote_ident(schema)
@@ -285,7 +288,7 @@ def init_db():
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
 
-    log.info("Banco de dados PostgreSQL inicializado no schema %s", schema)
+    log.info("Banco de dados PostgreSQL inicializado no schema %s (DB_TARGET=%s)", schema, getattr(settings, "db_target", "auto"))
 
 
 def get_db_session() -> Session:

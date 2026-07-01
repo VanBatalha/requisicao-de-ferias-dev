@@ -2,20 +2,89 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import quote_plus
+
+
+def _strip_outer_quotes(value: str) -> str:
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1]
+    return text
+
 
 def _env(name: str, default: str = "") -> str:
     v = os.getenv(name)
-    return v if v is not None and v != "" else default
+    if v is None or str(v).strip() == "":
+        return default
+    return _strip_outer_quotes(str(v))
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name, str(default))
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        print(f"Aviso: variavel {name} com valor invalido {raw!r}; usando {default}.")
+        return default
+
+
+def _build_pg_url(prefix: str = "") -> str:
+    """Monta a URL PostgreSQL a partir de PG_* ou TEST_PG_*.
+
+    Prefixo vazio usa PG_HOST/PG_PORT/PG_DB/PG_USER/PG_PASSWORD.
+    Prefixo TEST_ usa TEST_PG_HOST/TEST_PG_PORT/TEST_PG_DB/TEST_PG_USER/TEST_PG_PASSWORD.
+    """
+    host = _env(f"{prefix}PG_HOST", _env("PG_HOST", "75.119.139.205") if not prefix else "")
+    port = _env(f"{prefix}PG_PORT", _env("PG_PORT", "5532") if not prefix else "5432")
+    db = _env(f"{prefix}PG_DB", _env("PG_DB", "db_appsheet") if not prefix else "")
+    user = _env(f"{prefix}PG_USER", _env(f"{prefix}PG_USERNAME", _env("PG_USER", "") if not prefix else ""))
+    password = _env(f"{prefix}PG_PASSWORD", _env("PG_PASSWORD", "") if not prefix else "")
+    sslmode = _env(f"{prefix}PG_SSLMODE", _env("PG_SSLMODE", ""))
+
+    if not all([host, port, db, user, password]):
+        return ""
+
+    url = f"postgresql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{quote_plus(db)}"
+    if sslmode:
+        url += f"?sslmode={quote_plus(sslmode)}"
+    return url
+
+
+def _resolve_database_url() -> str:
+    """Resolve a conexão do banco por perfil.
+
+    DB_TARGET/oficial      -> usa PG_HOST/PG_PORT/PG_DB/PG_USER/PG_PASSWORD.
+    DB_TARGET=teste_url    -> usa TEST_DATABASE_URL, com fallback para DATABASE_URL.
+    DB_TARGET=teste_pg     -> usa TEST_PG_HOST/TEST_PG_PORT/TEST_PG_DB/TEST_PG_USER/TEST_PG_PASSWORD.
+    DB_TARGET=database_url -> usa DATABASE_URL.
+
+    Sem DB_TARGET mantém compatibilidade: usa DATABASE_URL se existir; caso contrário usa PG_*.
+    """
+    target = _env("DB_TARGET", "").strip().lower()
+
+    if target in {"oficial", "official", "prod", "production", "pg", "pg_vars"}:
+        return _build_pg_url("")
+    if target in {"teste_url", "test_url", "render", "render_test", "render_teste"}:
+        return _env("TEST_DATABASE_URL", _env("DATABASE_URL", ""))
+    if target in {"teste_pg", "test_pg", "test_pg_vars", "teste_pg_vars"}:
+        return _build_pg_url("TEST_")
+    if target in {"database_url", "url", "legacy"}:
+        return _env("DATABASE_URL", "")
+    if target in {"teste", "test"}:
+        return _env("TEST_DATABASE_URL", "") or _build_pg_url("TEST_") or _env("DATABASE_URL", "")
+
+    return _env("DATABASE_URL", "") or _build_pg_url("")
 
 @dataclass(frozen=True)
 class Settings:
     # Flask
     secret_key: str = _env("FLASK_SECRET_KEY", "uma_chave_bem_grande_e_fixa_aqui")
 
-    # PostgreSQL (novo - principal)
-    database_url: str = _env("DATABASE_URL", "")
-    # Formato esperado: postgresql://usuario:senha@host:porta/database
-    # Ex: postgresql://user:pass@localhost:5432/ferias_app
+    # PostgreSQL
+    # O DB_TARGET permite alternar com segurança entre banco oficial e bancos de teste.
+    # Veja documentacao/SINCRONIZACAO_BANCOS_OFICIAL_E_TESTE.md.
+    db_target: str = _env("DB_TARGET", "auto")
+    database_url: str = _resolve_database_url()
 
     # Smartsheet (legado - mantido para compatibilidade, mas não usado mais)
     # Método A (recomendado): backend usa um único token (conta de serviço)
@@ -46,8 +115,8 @@ class Settings:
     # Smartsheet sheet IDs (legado - não mais usado com PostgreSQL)
     # Defaults iguais à versão estável (evita "sheet_id=0" quando a env não está setada no Render)
     # Você ainda pode sobrescrever no Render com as variáveis de ambiente.
-    id_folha_cadastro: int = int(_env("ID_FOLHA_CADASTRO", "3609445264215940") or "3609445264215940")
-    id_folha_solicitacoes: int = int(_env("ID_FOLHA_SOLICITACOES", "0") or "0")
+    id_folha_cadastro: int = _env_int("ID_FOLHA_CADASTRO", 3609445264215940)
+    id_folha_solicitacoes: int = _env_int("ID_FOLHA_SOLICITACOES", 0)
 
     # Runtime
     environment: str = _env("ENVIRONMENT", _env("FLASK_ENV", "production"))
