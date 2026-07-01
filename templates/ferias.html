@@ -266,7 +266,7 @@
     <div class="icon">🏖️</div>
     <div>
       <h1 class="ferias-title">Solicitações de Férias</h1>
-      <p class="ferias-sub muted">Você está operando para: <strong>{{ colaborador_nome }}</strong> ({{ colaborador_email }})</p>
+      <p class="ferias-sub muted">Você está operando para: <strong>{{ colaborador_matricula }} | {{ colaborador_nome }}</strong>{% if colaborador_email %} ({{ colaborador_email }}){% endif %}</p>
     </div>
   </div>
 
@@ -412,14 +412,15 @@
       <!-- Linha principal (campos categóricos) -->
       <div class="form-grid-main">
         <div class="form-group span-5">
-          <label for="colaborador_email">Colaborador</label>
+          <label for="colaborador_busca">Colaborador</label>
           <div class="autocomplete-wrap">
             <input type="text" class="form-control" id="colaborador_busca"
-                   value="{% for c in colaboradores_opcoes %}{% if c.email == colaborador_email %}{{ c.matricula }} | {{ c.nome }}{% endif %}{% endfor %}"
+                   value="{% for c in colaboradores_opcoes %}{% if c.matricula == colaborador_matricula %}{{ c.matricula }} | {{ c.nome }}{% endif %}{% endfor %}"
                    placeholder="Digite matrícula ou nome do colaborador..." autocomplete="off" required>
             <div id="colaborador-sugestoes" class="autocomplete-menu" role="listbox"></div>
           </div>
-          <input type="hidden" id="colaborador_email" name="colaborador_email" value="{{ colaborador_email }}">
+          <input type="hidden" id="colaborador_email" value="{{ colaborador_email }}">
+          <input type="hidden" id="colaborador_matricula" name="colaborador_matricula" value="{{ colaborador_matricula }}">
           <script id="colaboradores-opcoes-json" type="application/json">{{ colaboradores_opcoes|tojson }}</script>
           <div class="hint">Digite parte do nome ou matrícula. Ao selecionar, o painel é recarregado automaticamente.</div>
         </div>
@@ -513,9 +514,8 @@
         </div>
       </div>
       <div id="hist-list" class="hist-list">
-        {% for item in solicitacoes %}
-          {% set st = (item.status or '')|lower %}
-          {% set saldo_tipo = (item.saldo_tipo or 'REGULAR')|upper %}
+        {% for row_id, colab_email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs in solicitacoes %}
+          {% set st = (status or '')|lower %}
           {% if 'aprov' in st %}
             {% set badge='badge-aprovada' %}
           {% elif 'reprov' in st or 'cancel' in st or 'rejeit' in st %}
@@ -525,22 +525,20 @@
           {% endif %}
 
           <div class="hist-item"
-               data-status="{{ (item.status or '')|upper }}"
-               data-nome="{{ (item.colaborador_nome or item.colaborador_email or '')|upper }}"
-               data-inicio="{{ item.inicio }}">
+               data-status="{{ (status or '')|upper }}"
+               data-nome="{{ nome_por_email.get(colab_email, colab_email)|upper }}"
+               data-inicio="{{ inicio }}">
             <div class="hist-left">
-              <div class="hist-range">📅 {{ item.inicio }} a {{ item.fim }}</div>
-              <div class="muted" style="font-size:12px; margin-top:-2px;">
-                👤 {% if item.colaborador_matricula %}{{ item.colaborador_matricula }} | {% endif %}{{ item.colaborador_nome or item.colaborador_email }}
-              </div>
+              <div class="hist-range">📅 {{ inicio }} a {{ fim }}</div>
+              <div class="muted" style="font-size:12px; margin-top:-2px;">👤 {{ nome_por_email.get(colab_email, colab_email) }}</div>
               <div class="hist-meta">
-                <span>⏱️ {{ item.dias }} dias</span>
-                <span>🧾 {{ item.solicitacao }}</span>
+                <span>⏱️ {{ dias_item }} dias</span>
+                <span>🧾 {{ solicitacao }}</span>
                 <span class="badge {{ 'badge-premium' if saldo_tipo == 'PREMIUM' else '' }}">{{ 'CERTARIANA' if saldo_tipo == 'PREMIUM' else 'REGULAR' }}</span>
-                {% if item.obs %}<span title="{{ item.obs|e }}">📝 {{ item.obs|truncate(60, True, '…') }}</span>{% endif %}
+                {% if obs %}<span title="{{ obs|e }}">📝 {{ obs|truncate(60, True, '…') }}</span>{% endif %}
               </div>
             </div>
-            <div class="badge {{ badge }}">{{ (item.status or 'Pendente')|upper }}</div>
+            <div class="badge {{ badge }}">{{ (status or 'Pendente')|upper }}</div>
           </div>
         {% endfor %}
       </div>
@@ -592,6 +590,21 @@
 </div><!-- /content-narrow -->
 
 <script>
+// V38: corte definitivo de seleção por e-mail/colaborador legado.
+(function(){
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('colaborador')) {
+      url.searchParams.delete('colaborador');
+      if (!url.searchParams.get('matricula')) {
+        window.location.replace('/ferias');
+      } else {
+        window.location.replace('/ferias?matricula=' + encodeURIComponent(url.searchParams.get('matricula')));
+      }
+    }
+  } catch(e) {}
+})();
+window.__FERIAS_MATRICULA_ONLY_V38 = true;
   (function initSaldoTipoDefault(){
     const saldoReg = parseFloat((document.getElementById('saldo-regular')?.textContent || '0').replace(',', '.')) || 0;
     const saldoPrem = parseFloat((document.getElementById('saldo-premium')?.textContent || '0').replace(',', '.')) || 0;
@@ -686,6 +699,7 @@ _applyTipoFerias();
 
   // Atualiza o painel ao trocar o colaborador (autocomplete por matrícula/nome)
   const hiddenColab = document.getElementById('colaborador_email');
+  const hiddenColabMatricula = document.getElementById('colaborador_matricula');
   const inputColab = document.getElementById('colaborador_busca');
   let opcoesColab = [];
   try {
@@ -718,17 +732,17 @@ _applyTipoFerias();
     const q = normBuscaFerias(value);
     if (!q) return opcoesColab.slice(0, 50);
     return opcoesColab.filter(c => {
-      const texto = normBuscaFerias(`${labelColabFerias(c)} ${c.email || ''}`);
+      const texto = normBuscaFerias(labelColabFerias(c));
       return texto.includes(q);
     }).slice(0, 50);
   }
   function selecionarColabFerias(c){
-    if (!c || !c.email) return;
+    const mat = normMatFerias(c?.matricula || c?.MATRICULA || c?.['MATRÍCULA'] || '');
+    if (!c || !mat) return;
     inputColab.value = labelColabFerias(c);
-    hiddenColab.value = c.email;
-    const url = new URL(window.location.href);
-    url.searchParams.set('colaborador', c.email);
-    window.location.href = url.toString();
+    if (hiddenColab) hiddenColab.value = '';
+    if (hiddenColabMatricula) hiddenColabMatricula.value = mat;
+    window.location.assign('/ferias?matricula=' + encodeURIComponent(mat));
   }
   function setupAutocompleteColabFerias(){
     const menu = document.getElementById('colaborador-sugestoes');
@@ -742,7 +756,7 @@ _applyTipoFerias();
         return;
       }
       activeIndex = -1;
-      menu.innerHTML = itens.map((c, idx) => `<button type="button" class="autocomplete-option" data-idx="${idx}" role="option">${escapeHtml(labelColabFerias(c))}<small>${escapeHtml(c.email || '')}</small></button>`).join('');
+      menu.innerHTML = itens.map((c, idx) => `<button type="button" class="autocomplete-option" data-idx="${idx}" role="option">${escapeHtml(labelColabFerias(c))}</button>`).join('');
       menu.classList.add('show');
       menu.querySelectorAll('[data-idx]').forEach(btn => {
         btn.addEventListener('mousedown', ev => {
@@ -847,7 +861,7 @@ _applyTipoFerias();
   if ((isSimulating || isViewingOwnHolidays) && form) {
     const camposCriacao = form.querySelectorAll('input, select, textarea');
     camposCriacao.forEach(input => {
-      if (input.id === 'colaborador_email' || input.type === 'hidden') return;
+      if (input.id === 'colaborador_email' || input.id === 'colaborador_matricula' || input.type === 'hidden') return;
       input.disabled = true;
       input.style.opacity = '0.6';
     });
@@ -869,7 +883,7 @@ _applyTipoFerias();
 
   function montarResumoConfirmacao(){
     const colaboradorSelect = document.getElementById('colaborador_busca');
-    const colaboradorNome = colaboradorSelect?.value?.trim() || document.getElementById('colaborador_email')?.value || '-';
+    const colaboradorNome = colaboradorSelect?.value?.trim() || document.getElementById('colaborador_matricula')?.value || document.getElementById('colaborador_email')?.value || '-';
     const tipo = document.getElementById('tipo_solicitacao')?.value || '-';
     const saldoTipo = document.getElementById('saldo_tipo')?.value === 'PREMIUM' ? 'Licença Certariana' : 'Férias regulares';
     const inicio = formatDatePtBrFromInput(document.getElementById('data_inicio')?.value || '');

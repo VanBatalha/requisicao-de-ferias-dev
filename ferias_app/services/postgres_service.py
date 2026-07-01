@@ -338,24 +338,29 @@ def get_session():
 # ============================================
 
 def get_colaborador(email: str) -> Optional[Dict[str, Any]]:
-    """Retorna dados do colaborador por email."""
+    """Retorna dados do colaborador por matrícula ou e-mail.
+
+    A matrícula é a chave operacional. O e-mail é aceito por compatibilidade,
+    sempre priorizando cadastro ATIVO quando houver duplicidade.
+    """
     session = get_db_session()
     try:
-        rows = session.query(Colaborador).filter(
-            func.lower(Colaborador.email) == email.lower()
-        ).all()
-        rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
-        colab = rows[0] if rows else None
+        ident = str(email or '').strip()
+        colab = None
+        if ident and '@' not in ident:
+            colab = session.query(Colaborador).filter(func.upper(Colaborador.matricula) == ident.upper()).first()
+        if not colab:
+            rows = session.query(Colaborador).filter(
+                func.lower(Colaborador.email) == ident.lower()
+            ).all()
+            rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
+            colab = rows[0] if rows else None
 
         if not colab:
             return None
-        
         result = colab.to_dict()
-        
-        # Adiciona dados do complemento se existir
         if colab.complemento:
             result.update(colab.complemento.to_dict())
-        
         return result
     except Exception as e:
         log.error(f"Erro ao buscar colaborador {email}: {e}")
@@ -681,10 +686,18 @@ def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]
     session = get_db_session()
     try:
         colaborador_email = (payload.get('colaborador_email') or '').strip().lower()
+        colaborador_matricula = (payload.get('colaborador_matricula') or payload.get('matricula') or '').strip().upper()
         gestor_email = (payload.get('gestor_email') or payload.get('criado_por') or '').strip().lower()
-        colab = _usuario_por_email(session, colaborador_email)
+        colab = None
+        if colaborador_matricula:
+            colab = session.query(Colaborador).filter(func.upper(Colaborador.matricula) == colaborador_matricula).first()
         if not colab:
-            return False, f"Colaborador {colaborador_email} não encontrado", None
+            colab = _usuario_por_email(session, colaborador_email)
+        if not colab:
+            return False, f"Colaborador {colaborador_matricula or colaborador_email} não encontrado", None
+        # O e-mail gravado é apenas informativo; a matrícula é a referência oficial.
+        if not colaborador_email:
+            colaborador_email = (colab.email or '').strip().lower()
         solicitante = _usuario_por_email(session, gestor_email)
         saldo_tipo = (payload.get('saldo_tipo') or 'REGULAR').upper()
         tipo_sol = payload.get('solicitacao', '') or payload.get('tipo_solicitacao', '') or 'GOZO'

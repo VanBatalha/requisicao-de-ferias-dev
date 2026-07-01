@@ -170,6 +170,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     pg_enabled = False
     pg_listar_emails = None
+    pg_listar_colaboradores = None
     pg_get_regime = None
     pg_get_admissao = None
     pg_existe_duplicada = None
@@ -177,12 +178,14 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
         from .postgres_compat_service import (
             postgres_enabled,
             listar_emails_colaboradores_postgres,
+            listar_colaboradores_legacy,
             get_regime_postgres,
             get_admissao_postgres,
             existe_solicitacao_duplicada,
         )
         pg_enabled = postgres_enabled()
         pg_listar_emails = listar_emails_colaboradores_postgres
+        pg_listar_colaboradores = listar_colaboradores_legacy
         pg_get_regime = get_regime_postgres
         pg_get_admissao = get_admissao_postgres
         pg_existe_duplicada = existe_solicitacao_duplicada
@@ -207,7 +210,15 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     if not (is_dp_or_admin or is_gestor(gestor_email)):
         return {"ok": False, "message": "Apenas gestores (ou DP/Admin) podem solicitar férias."}, 403
 
+    colaborador_matricula = str(payload.get("colaborador_matricula") or payload.get("matricula") or "").strip().upper()
     colaborador_email = safe_lower(payload.get("colaborador_email") or payload.get("colaborador") or "")
+    if pg_enabled and colaborador_matricula:
+        try:
+            from .postgres_service import get_colaborador as pg_get_colaborador
+            colab_ref = pg_get_colaborador(colaborador_matricula) or {}
+            colaborador_email = safe_lower(colab_ref.get("email") or colab_ref.get("EMAIL DA EMPRESA") or colaborador_email)
+        except Exception:
+            pass
     tipo_solicitacao = (payload.get("tipo_solicitacao") or payload.get("tipo_solicitacao_out") or "").strip()
     data_inicio_str = payload.get("data_inicio")
     data_fim_str = payload.get("data_fim")
@@ -219,7 +230,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     certariana_segmentos = []
     cert_total_dias = 0
 
-    if not colaborador_email:
+    if not (colaborador_matricula or colaborador_email):
         return {"ok": False, "message": "Selecione o colaborador."}, 400
 
     if not tipo_solicitacao:
@@ -236,13 +247,21 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     is_afastamento = tipo_solicitacao_out in ("LICENÇA MATERNIDADE", "LICENÇA PATERNIDADE")
 
     if is_dp_or_admin:
-        if pg_enabled and pg_listar_emails:
-            permitidos = set(pg_listar_emails(only_ativos=True))
+        if pg_enabled and colaborador_matricula and pg_listar_colaboradores:
+            ativos = pg_listar_colaboradores(only_ativos=True) or []
+            permitidos_matriculas = {str((c or {}).get("matricula") or (c or {}).get("MATRICULA") or (c or {}).get("MATRÍCULA") or "").strip().upper() for c in ativos}
+            if colaborador_matricula not in permitidos_matriculas:
+                return {"ok": False, "message": "Colaborador não encontrado (ou não está Ativo no cadastro)."}, 400
         else:
-            permitidos = set(listar_emails_colaboradores(only_ativos=True))
-        if colaborador_email not in permitidos:
-            return {"ok": False, "message": "Colaborador não encontrado (ou não está Ativo no cadastro)."}, 400
+            if pg_enabled and pg_listar_emails:
+                permitidos = set(pg_listar_emails(only_ativos=True))
+            else:
+                permitidos = set(listar_emails_colaboradores(only_ativos=True))
+            if colaborador_email not in permitidos:
+                return {"ok": False, "message": "Colaborador não encontrado (ou não está Ativo no cadastro)."}, 400
     else:
+        # TODO: migrar escopo de gestor para matrícula quando a relação gestor/subordinado
+        # estiver totalmente matricial. Por enquanto mantém a regra legada de equipe.
         permitidos = set(get_subordinados(gestor_email))
         if colaborador_email not in permitidos:
             return {"ok": False, "message": "Colaborador não pertence à sua equipe (ou não está vinculado ao seu gestor)."}, 403
@@ -269,10 +288,10 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if (not is_dp_or_admin) and (not is_afastamento):
         try:
-            regime = ((pg_get_regime(colaborador_email) if pg_enabled and pg_get_regime else _colaborador_regime(colaborador_email)) or "").strip().upper()
-            adm = (pg_get_admissao(colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
+            regime = ((pg_get_regime(colaborador_matricula or colaborador_email) if pg_enabled and pg_get_regime else _colaborador_regime(colaborador_email)) or "").strip().upper()
+            adm = (pg_get_admissao(colaborador_matricula or colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
             if regime == "CLT" and adm:
-                resumo_tmp = get_resumo_ferias(colaborador_email)
+                resumo_tmp = get_resumo_ferias(colaborador_matricula or colaborador_email)
                 if resumo_tmp.get("total_solicitacoes", 0) <= 0:
                     liberado_em = _add_months(adm, 21)
                     if dt_inicio < liberado_em:
@@ -284,12 +303,12 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             pass
 
     try:
-        resumo = get_resumo_ferias(colaborador_email)
+        resumo = get_resumo_ferias(colaborador_matricula or colaborador_email)
         dias_novos = (dt_fim - dt_inicio).days + 1
         if saldo_tipo_req == "PREMIUM":
             include_statuses = STATUS_APROVADA | STATUS_RESERVA
             try:
-                validate_licenca_certariana(colaborador_email, float(dias_novos), dt_inicio=dt_inicio, dt_fim=dt_fim, include_statuses=include_statuses)
+                validate_licenca_certariana(colaborador_matricula or colaborador_email, float(dias_novos), dt_inicio=dt_inicio, dt_fim=dt_fim, include_statuses=include_statuses)
             except RuleError as ve:
                 return {"ok": False, "message": str(ve)}, 400
             except Exception as e:
@@ -308,7 +327,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             if dias_novos > reg_saldo:
                 return {"ok": False, "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias e informe um período válido conforme a regra: até 3 períodos, mínimo de 10 dias por período; se forem 3, deve ser 3×10."}, 400
             try:
-                periodo_alloc = distribuir_solicitacao_por_periodo(colaborador_email, dias_novos)
+                periodo_alloc = distribuir_solicitacao_por_periodo(colaborador_matricula or colaborador_email, dias_novos)
                 periodo_alloc_txt = serialize_periodo_aquisitivo_alloc(periodo_alloc)
             except Exception as e:
                 return {"ok": False, "message": f"Não foi possível distribuir a solicitação por período aquisitivo: {e}"}, 400
@@ -323,7 +342,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if saldo_tipo_final == "PREMIUM" and not is_dp_or_admin:
         try:
-            adm_c = (pg_get_admissao(colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
+            adm_c = (pg_get_admissao(colaborador_matricula or colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
             if not adm_c and prem_saldo <= 0:
                 return {"ok": False, "message": "Licença Certariana ainda não está disponível para este colaborador."}, 400
             dias_base, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio) if adm_c else (0, None, None)
@@ -396,12 +415,13 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
 
     if pg_enabled:
         try:
-            if pg_existe_duplicada and pg_existe_duplicada(colaborador_email, tipo_solicitacao_out, saldo_tipo_final, dt_inicio, dt_fim, int(dias_novos or 0)):
+            if pg_existe_duplicada and pg_existe_duplicada(colaborador_matricula or colaborador_email, tipo_solicitacao_out, saldo_tipo_final, dt_inicio, dt_fim, int(dias_novos or 0)):
                 return {"ok": False, "message": "Já existe uma solicitação igual para este colaborador nesse período. A duplicidade foi bloqueada."}, 400
 
             from .postgres_service import criar_solicitacao
             ok, msg, solicitacao_id = criar_solicitacao({
                 "colaborador_email": colaborador_email,
+                "colaborador_matricula": colaborador_matricula,
                 "gestor_email": gestor_email,
                 "criado_por": gestor_email,
                 "solicitacao": tipo_solicitacao_out,

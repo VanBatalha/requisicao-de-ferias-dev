@@ -10,8 +10,6 @@ import json
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func, or_
-from sqlalchemy.orm import joinedload
-
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..utils import safe_lower
@@ -232,22 +230,30 @@ def _identidade_gestor_para_matricula(valor: str | None) -> str:
     return valor.upper()
 
 def get_colaborador_model(email: str) -> Optional[Colaborador]:
-    """Localiza colaborador por e-mail priorizando sempre o cadastro ATIVO.
+    """Localiza colaborador por matrícula ou e-mail.
 
-    Isso evita que logins/buscas com e-mail duplicado caiam em um contrato antigo
-    ou matrícula inativa. O registro inativo continua no banco para histórico, mas
-    não deve ser usado como identidade operacional do app.
+    A matrícula é a chave operacional do app. O e-mail continua aceito apenas
+    para compatibilidade com links antigos e login, sempre priorizando cadastro ATIVO.
     """
     session = get_db_session()
-    email = safe_lower(email or "")
-    if not email:
+    ident = str(email or "").strip()
+    if not ident:
         return None
 
-    exact = session.query(Colaborador).filter(func.lower(Colaborador.email) == email).all()
+    # Primeiro tenta matrícula explicitamente. Isso evita misturar vínculos quando
+    # um e-mail foi reutilizado entre um cadastro inativo e uma matrícula ativa.
+    if "@" not in ident:
+        mat = ident.upper()
+        colab = session.query(Colaborador).filter(func.upper(Colaborador.matricula) == mat).first()
+        if colab:
+            return colab
+
+    email_norm = safe_lower(ident)
+    exact = session.query(Colaborador).filter(func.lower(Colaborador.email) == email_norm).all()
     if exact:
         return _choose_preferred_colaborador(exact)
 
-    local = _email_local(email)
+    local = _email_local(email_norm)
     if not local:
         return None
     try:
@@ -303,65 +309,6 @@ def _hierarquia_for_colaborador(colab: Colaborador) -> tuple[str, str]:
     return safe_lower(gd_email), safe_lower(gs_email)
 
 
-def _role_from_prefetch(colab: Colaborador, roles_by_matricula: Dict[str, set[str]] | None = None) -> str:
-    """Resolve role sem consultas por colaborador quando o mapa foi pré-carregado."""
-    mat = str(getattr(colab, "matricula", "") or "").strip().upper()
-    roles = roles_by_matricula.get(mat, set()) if roles_by_matricula else set()
-    if 'ADMIN' in roles or 'ADMINISTRADOR' in roles:
-        return 'ADMIN'
-    if 'DP' in roles or 'RH' in roles:
-        return 'DP'
-    comp = getattr(colab, 'complemento', None)
-    ut = str((getattr(comp, 'user_type', None) if comp else '') or '').strip().upper()
-    if ut in {'ADMIN', 'ADMINISTRADOR'}:
-        return 'ADMIN'
-    if ut in {'DP', 'RH'}:
-        return 'DP'
-    return 'USER'
-
-
-def _email_por_matricula(valor: str | None, email_by_matricula: Dict[str, str] | None = None) -> str:
-    """Converte matrícula/texto especial em e-mail/texto sem consultar o banco."""
-    valor = str(valor or '').strip()
-    if not valor:
-        return ''
-    if valor.lower() in {'dp', 'gestor'}:
-        return valor.lower()
-    if '@' in valor:
-        return safe_lower(valor)
-    mat = valor.upper()
-    if email_by_matricula and mat in email_by_matricula:
-        return safe_lower(email_by_matricula.get(mat) or '')
-    return ''
-
-
-def _hierarquia_from_prefetch(
-    colab: Colaborador,
-    hierarquia_by_matricula: Dict[str, HierarquiaGestao] | None = None,
-    email_by_matricula: Dict[str, str] | None = None,
-) -> tuple[str, str]:
-    """Resolve hierarquia usando mapas pré-carregados para evitar N+1 queries."""
-    mat = str(getattr(colab, 'matricula', '') or '').strip().upper()
-    h = hierarquia_by_matricula.get(mat) if hierarquia_by_matricula else None
-    if h:
-        gd_email = safe_lower(getattr(h, 'gestor_direto_email', '') or '')
-        if not gd_email:
-            gd_email = _email_por_matricula(getattr(h, 'gestor_direto_matricula', '') or '', email_by_matricula)
-        gs = safe_lower(getattr(h, 'gestor_superior_email_custom', '') or '')
-        if not gs:
-            gs = _email_por_matricula(getattr(h, 'gestor_superior_matricula', '') or '', email_by_matricula)
-        if not gs and str(getattr(h, 'gestor_superior_tipo', '') or '').strip().upper() == 'DP':
-            gs = 'dp'
-        return safe_lower(gd_email), safe_lower(gs)
-
-    comp = getattr(colab, 'complemento', None)
-    gd = getattr(comp, 'gestor_direto', '') if comp else ''
-    gs = getattr(comp, 'gestor_superior', '') if comp else ''
-    gd_email = _email_por_matricula(gd, email_by_matricula) or safe_lower(getattr(comp, 'gestor_direto_email', '') if comp else '')
-    gs_email = _email_por_matricula(gs, email_by_matricula) or safe_lower(getattr(comp, 'gestor_superior_email', '') if comp else '')
-    return safe_lower(gd_email), safe_lower(gs_email)
-
-
 def _saldos_por_periodo(colab: Colaborador, saldo_tipo: str = 'REGULAR') -> list[dict]:
     session = get_db_session()
     saldo_tipo = (saldo_tipo or 'REGULAR').upper()
@@ -396,7 +343,7 @@ def _saldos_por_periodo(colab: Colaborador, saldo_tipo: str = 'REGULAR') -> list
     return out
 
 
-def colaborador_to_legacy(colab: Colaborador, _ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def colaborador_to_legacy(colab: Colaborador) -> Dict[str, Any]:
     raw = _as_dict(getattr(colab, "raw_payload", None))
     comp = getattr(colab, "complemento", None)
     out: Dict[str, Any] = dict(raw)
@@ -423,19 +370,10 @@ def colaborador_to_legacy(colab: Colaborador, _ctx: Optional[Dict[str, Any]] = N
         user_type = comp.user_type
         ativo_no_app = comp.ativo_no_app
 
-    _ctx = _ctx or {}
-    if _ctx:
-        h_gd, h_gs = _hierarquia_from_prefetch(
-            colab,
-            _ctx.get('hierarquia_by_matricula') or {},
-            _ctx.get('email_by_matricula') or {},
-        )
-        user_type = _role_from_prefetch(colab, _ctx.get('roles_by_matricula') or {})
-    else:
-        h_gd, h_gs = _hierarquia_for_colaborador(colab)
-        user_type = _role_for_colaborador(colab)
+    h_gd, h_gs = _hierarquia_for_colaborador(colab)
     gestor_direto = safe_lower(h_gd or gestor_direto or raw.get("GESTOR DIRETO") or raw.get("GESTOR") or "")
     gestor_superior = safe_lower(h_gs or gestor_superior or raw.get("GESTOR SUPERIOR") or "")
+    user_type = _role_for_colaborador(colab)
 
     out.update({
         "id": getattr(colab, "id", None),
@@ -476,72 +414,15 @@ def colaborador_to_legacy(colab: Colaborador, _ctx: Optional[Dict[str, Any]] = N
 
 
 def listar_colaboradores_legacy(only_ativos: Optional[bool] = None) -> List[Dict[str, Any]]:
-    """Lista colaboradores em formato legado sem fazer consultas por linha.
-
-    A versão anterior chamava _role_for_colaborador e _hierarquia_for_colaborador
-    para cada colaborador, gerando centenas de consultas no banco oficial remoto.
-    No Render isso fazia a rota /ferias estourar o timeout. Aqui carregamos
-    permissões, hierarquia e e-mails de gestores em lote e só depois convertemos
-    os registros.
-    """
     session = get_db_session()
-    query = session.query(Colaborador).options(joinedload(Colaborador.complemento))
+    query = (
+        session.query(Colaborador)
+        .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
+    )
     if only_ativos is True:
         query = _active_query_filter(query)
-    rows = query.order_by(Colaborador.nome_completo.asc(), Colaborador.matricula.asc()).all()
-
-    matriculas = sorted({str(getattr(c, 'matricula', '') or '').strip().upper() for c in rows if getattr(c, 'matricula', None)})
-    roles_by_matricula: Dict[str, set[str]] = {m: set() for m in matriculas}
-    hierarquia_by_matricula: Dict[str, HierarquiaGestao] = {}
-    email_by_matricula: Dict[str, str] = {
-        str(getattr(c, 'matricula', '') or '').strip().upper(): safe_lower(getattr(c, 'email', '') or '')
-        for c in rows
-        if getattr(c, 'matricula', None)
-    }
-
-    if matriculas:
-        try:
-            for p in session.query(PermissaoUsuario).filter(PermissaoUsuario.colaborador_matricula.in_(matriculas)).all():
-                mat = str(p.colaborador_matricula or '').strip().upper()
-                if mat:
-                    roles_by_matricula.setdefault(mat, set()).add(str(p.role or '').strip().upper())
-        except Exception:
-            log.exception('Falha ao pré-carregar permissões dos colaboradores')
-
-        manager_mats: set[str] = set()
-        try:
-            for h in session.query(HierarquiaGestao).filter(HierarquiaGestao.colaborador_matricula.in_(matriculas)).all():
-                mat = str(h.colaborador_matricula or '').strip().upper()
-                if mat:
-                    hierarquia_by_matricula[mat] = h
-                for val in (getattr(h, 'gestor_direto_matricula', None), getattr(h, 'gestor_superior_matricula', None)):
-                    m = str(val or '').strip().upper()
-                    if m and m not in {'DP', 'GESTOR'} and '@' not in m:
-                        manager_mats.add(m)
-        except Exception:
-            log.exception('Falha ao pré-carregar hierarquia dos colaboradores')
-
-        for c in rows:
-            comp = getattr(c, 'complemento', None)
-            for val in (getattr(comp, 'gestor_direto', '') if comp else '', getattr(comp, 'gestor_superior', '') if comp else ''):
-                m = str(val or '').strip().upper()
-                if m and m not in {'DP', 'GESTOR'} and '@' not in m and m not in email_by_matricula:
-                    manager_mats.add(m)
-
-        missing_manager_mats = sorted(manager_mats - set(email_by_matricula.keys()))
-        if missing_manager_mats:
-            try:
-                for mat, email in session.query(Colaborador.matricula, Colaborador.email).filter(Colaborador.matricula.in_(missing_manager_mats)).all():
-                    email_by_matricula[str(mat or '').strip().upper()] = safe_lower(email or '')
-            except Exception:
-                log.exception('Falha ao pré-carregar e-mails dos gestores por matrícula')
-
-    ctx = {
-        'roles_by_matricula': roles_by_matricula,
-        'hierarquia_by_matricula': hierarquia_by_matricula,
-        'email_by_matricula': email_by_matricula,
-    }
-    out = [colaborador_to_legacy(c, ctx) for c in rows]
+    rows = query.order_by(Colaborador.nome_completo).all()
+    out = [colaborador_to_legacy(c) for c in rows]
     if only_ativos is True:
         out = [c for c in out if is_colaborador_ativo_legacy(c)]
     return out

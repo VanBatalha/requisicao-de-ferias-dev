@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import unicodedata
 
 from flask import redirect, render_template, request, session, url_for
+
+log = logging.getLogger(__name__)
 
 
 def _sort_text_pt(value: str) -> str:
@@ -21,6 +24,7 @@ from ..core import (
     get_user_role,
     is_colaborador_ativo,
     is_gestor,
+    listar_colaboradores,
     listar_colaboradores_cached,
     listar_solicitacoes_equipes,
     listar_solicitacoes_todas,
@@ -28,78 +32,6 @@ from ..core import (
     tem_grupo,
 )
 from ..services.simulation_service import get_simulated_gestor, is_in_simulation
-
-from ..logging_config import get_logger
-
-log = get_logger(__name__)
-
-
-def _empty_resumo_ferias_pages():
-    return {
-        "regular": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "periodos": [], "periodo_atual": None},
-        "premium": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "periodos": []},
-        "total_solicitacoes": 0,
-    }
-
-
-def _normalize_solicitacoes_para_template(rows, nome_por_email=None, matricula_por_email=None):
-    """Normaliza históricos para evitar quebra de template por tuplas em formatos diferentes.
-
-    O legado pode devolver tuplas de 8 posições para histórico individual e 9 posições
-    para histórico de equipe/DP. A tela nova espera sempre um dicionário estável.
-    """
-    nome_por_email = nome_por_email or {}
-    matricula_por_email = matricula_por_email or {}
-    out = []
-    for row in rows or []:
-        try:
-            if isinstance(row, dict):
-                email = safe_lower(row.get("colaborador_email") or row.get("email") or "")
-                item = {
-                    "id": row.get("id") or row.get("row_id"),
-                    "colaborador_email": email,
-                    "colaborador_nome": row.get("colaborador_nome") or nome_por_email.get(email, email),
-                    "colaborador_matricula": row.get("colaborador_matricula") or matricula_por_email.get(email, ""),
-                    "inicio": row.get("inicio") or row.get("data_inicio") or "",
-                    "fim": row.get("fim") or row.get("data_fim") or "",
-                    "dias": row.get("dias") or row.get("dias_item") or 0,
-                    "status": row.get("status") or "PENDENTE",
-                    "solicitacao": row.get("solicitacao") or row.get("tipo_solicitacao") or "",
-                    "saldo_tipo": (row.get("saldo_tipo") or row.get("tipo_ferias") or "REGULAR"),
-                    "obs": row.get("obs") or row.get("observacoes") or "",
-                }
-            else:
-                seq = list(row)
-                # Formato equipe/DP: id, email, inicio, fim, dias, status, solicitacao, saldo_tipo, obs
-                if len(seq) >= 9:
-                    row_id, email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs = seq[:9]
-                # Formato individual legado: id, inicio, fim, dias, status, solicitacao, saldo_tipo, obs
-                elif len(seq) == 8:
-                    row_id, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs = seq
-                    email = ""
-                else:
-                    log.warning("Histórico de solicitação ignorado por formato inesperado: %r", row)
-                    continue
-                email = safe_lower(email or "")
-                item = {
-                    "id": row_id,
-                    "colaborador_email": email,
-                    "colaborador_nome": nome_por_email.get(email, email),
-                    "colaborador_matricula": matricula_por_email.get(email, ""),
-                    "inicio": inicio or "",
-                    "fim": fim or "",
-                    "dias": dias_item or 0,
-                    "status": status or "PENDENTE",
-                    "solicitacao": solicitacao or "",
-                    "saldo_tipo": saldo_tipo or "REGULAR",
-                    "obs": obs or "",
-                }
-            item["saldo_tipo"] = str(item.get("saldo_tipo") or "REGULAR").upper()
-            out.append(item)
-        except Exception as exc:
-            log.exception("Falha ao normalizar item do histórico de férias: %r | erro=%s", row, exc)
-    return out
-
 @bp.route("/", endpoint="home")
 @bp.route("/")
 def index():
@@ -128,9 +60,7 @@ def index():
 def ferias():
     # Aceita POST como fallback caso o JS do formulário não execute (evita 405 Method Not Allowed)
     if request.method == "POST":
-        # Reutiliza a API principal de solicitação
         resp = api_solicitar_ferias()
-        # Se o navegador estiver esperando HTML, redireciona de volta ao painel com uma mensagem.
         try:
             wants_html = "text/html" in request.headers.get("Accept", "")
         except Exception:
@@ -141,10 +71,9 @@ def ferias():
                 session["_flash_msg"] = payload.get("message") or "Solicitação processada."
             except Exception:
                 session["_flash_msg"] = "Solicitação processada."
-            # Mantém o colaborador selecionado na URL, se existir
-            colab = (request.form.get("colaborador_email") or "").strip()
-            if colab:
-                return redirect(url_for("ferias.ferias", colaborador=colab))
+            matricula = (request.form.get("colaborador_matricula") or "").strip().upper()
+            if matricula:
+                return redirect(url_for("ferias.ferias", matricula=matricula))
             return redirect(url_for("ferias.ferias"))
         return resp
 
@@ -159,20 +88,15 @@ def ferias():
     role = get_user_role(gestor_email)
     is_dp_or_admin = role in ("DP", "admin")
 
-    # Verifica se está em modo de simulação
     simulated_gestor = get_simulated_gestor()
     is_simulating = simulated_gestor is not None and is_dp_or_admin
-    
     if is_simulating:
-        # Em modo de simulação, o admin vê como se fosse o gestor simulado
         gestor_email = simulated_gestor
-        is_dp_or_admin = False  # Força a comportamento de gestor
-        # Marca para desabilitar botões de ação na interface
+        is_dp_or_admin = False
         render_mode = "simulation"
     else:
         render_mode = "normal"
 
-    # Gestores podem solicitar para sua equipe; DP/Admin podem solicitar para todos (tela de Solicitações)
     if not (is_dp_or_admin or is_gestor(gestor_email)):
         return render_template(
             "sem_permissao.html",
@@ -181,46 +105,72 @@ def ferias():
             gestor_email=gestor_email,
         ), 403
 
+    # V38: a tela de solicitações deve operar exclusivamente por matrícula.
+    # O parâmetro legado ?colaborador=email não deve selecionar ninguém, pois
+    # e-mails podem estar duplicados ou preenchidos incorretamente.
+    if request.args.get("colaborador"):
+        mat_param = str(request.args.get("matricula") or request.args.get("colaborador_matricula") or "").strip().upper()
+        log.warning("FERIAS_V38 parametro legado ignorado: colaborador=%s matricula=%s", request.args.get("colaborador"), mat_param)
+        if mat_param:
+            return redirect(url_for("ferias.ferias", matricula=mat_param))
+        return redirect(url_for("ferias.ferias"))
+
     try:
-        colaboradores_all = listar_colaboradores_cached() or []
-    except Exception as exc:
-        log.exception("FERIAS_500 passo=listar_colaboradores_cached usuario=%s erro=%s", gestor_email, exc)
-        colaboradores_all = []
+        colaboradores_all = listar_colaboradores(only_ativos=True)
+    except Exception:
+        colaboradores_all = listar_colaboradores_cached()
 
-    # carrega nomes e matrículas (para exibição e desambiguação)
-    nome_por_email = {}
-    matricula_por_email = {}
-    for c in colaboradores_all:
-        try:
-            if not isinstance(c, dict):
-                continue
-            em = safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
-            if not em:
-                continue
-            nome_por_email[em] = c.get("NOME COMPLETO") or c.get("nome") or em
-            matricula_por_email[em] = c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or ""
-        except Exception:
+    def _matricula_colab(c: dict) -> str:
+        return str(c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or "").strip().upper()
+
+    def _email_colab(c: dict) -> str:
+        return safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
+
+    def _nome_colab(c: dict) -> str:
+        return str(c.get("NOME COMPLETO") or c.get("nome") or _email_colab(c) or _matricula_colab(c) or "").strip()
+
+    ativos_por_matricula: dict[str, dict] = {}
+    ativos_por_email: dict[str, dict] = {}
+    def _mat_num(mat: str) -> int:
+        import re
+        m = re.search(r"(\d+)", str(mat or ""))
+        return int(m.group(1)) if m else 0
+
+    def _prefer_colab_atual(novo: dict, atual: dict | None) -> dict:
+        if not atual:
+            return novo
+        # Se o mesmo e-mail aparece em mais de uma matrícula ATIVA, preferimos a
+        # matrícula mais alta/recente. Isso corrige e-mails reaproveitados ou
+        # preenchidos indevidamente sem voltar a usar e-mail como chave.
+        n_mat = _matricula_colab(novo)
+        a_mat = _matricula_colab(atual)
+        return novo if _mat_num(n_mat) >= _mat_num(a_mat) else atual
+
+    for c in colaboradores_all or []:
+        if not isinstance(c, dict) or not is_colaborador_ativo(c):
             continue
+        mat = _matricula_colab(c)
+        if not mat:
+            continue
+        ativos_por_matricula[mat] = c
+        em = _email_colab(c)
+        if em:
+            ativos_por_email[em] = _prefer_colab_atual(c, ativos_por_email.get(em))
 
-    # lista de colaboradores disponíveis:
-    # - Gestor: somente subordinados
-    # - DP/Admin: todos ativos
-    disponiveis: list[str] = []
+    nome_por_email: dict[str, str] = {}
+    matricula_por_email: dict[str, str] = {}
+    for c in ativos_por_matricula.values():
+        em = _email_colab(c)
+        if not em:
+            continue
+        nome_por_email[em] = _nome_colab(c)
+        matricula_por_email[em] = _matricula_colab(c)
+
+    disponiveis: list[dict] = []
     subs: list[str] = []
 
     if is_dp_or_admin:
-        seen = set()
-        for c in colaboradores_all:
-            if not isinstance(c, dict):
-                continue
-            if not is_colaborador_ativo(c):
-                continue
-            em = safe_lower(c.get("EMAIL DA EMPRESA") or "")
-            if not em or em in seen:
-                continue
-            seen.add(em)
-            disponiveis.append(em)
-        disponiveis.sort()
+        disponiveis = list(ativos_por_matricula.values())
     else:
         subs = get_subordinados(gestor_email)
         if not subs:
@@ -231,72 +181,73 @@ def ferias():
                 gestor_email=gestor_email,
                 message=(
                     "Nenhum subordinado vinculado ao seu usuário. "
-                    "Peça ao DP para preencher a coluna 'GESTOR DIRETO' (ou 'GESTOR') na planilha de cadastro."
+                    "Peça ao DP para preencher a coluna 'GESTOR DIRETO' (ou 'GESTOR') no cadastro."
                 ),
             ), 403
-
-        seen = set()
+        seen_mats: set[str] = set()
         for e in subs:
-            e = safe_lower(e)
-            if e and e not in seen:
-                seen.add(e)
-                disponiveis.append(e)
-        
-        # Adiciona o próprio gestor à lista (para que possa ver suas férias)
-        if gestor_email not in seen:
-            seen.add(gestor_email)
-            disponiveis.append(gestor_email)
+            c = ativos_por_email.get(safe_lower(e))
+            if not c:
+                continue
+            mat = _matricula_colab(c)
+            if mat and mat not in seen_mats:
+                seen_mats.add(mat)
+                disponiveis.append(c)
+        own = ativos_por_email.get(gestor_email)
+        if own:
+            mat = _matricula_colab(own)
+            if mat and mat not in seen_mats:
+                disponiveis.append(own)
 
-    opcoes = [{"email": e, "nome": (nome_por_email.get(e) or e), "matricula": (matricula_por_email.get(e) or "")} for e in disponiveis]
-    opcoes.sort(key=lambda x: (_sort_text_pt(x.get("nome") or ""), str(x.get("matricula") or ""), (x.get("email") or "").casefold()))
+    opcoes = [
+        {"matricula": _matricula_colab(c), "email": _email_colab(c), "nome": _nome_colab(c)}
+        for c in disponiveis
+        if _matricula_colab(c)
+    ]
+    opcoes.sort(key=lambda x: (_sort_text_pt(x.get("nome") or ""), str(x.get("matricula") or "")))
 
-    selecionado = safe_lower(request.args.get("colaborador") or (opcoes[0]["email"] if opcoes else ""))
-    if selecionado not in [o["email"] for o in opcoes]:
-        selecionado = opcoes[0]["email"] if opcoes else ""
+    raw_matricula = str(request.args.get("matricula") or request.args.get("colaborador_matricula") or "").strip().upper()
 
-    try:
-        resumo = get_resumo_ferias(selecionado) or _empty_resumo_ferias_pages()
-    except Exception as exc:
-        log.exception("FERIAS_500 passo=get_resumo_ferias selecionado=%s erro=%s", selecionado, exc)
-        resumo = _empty_resumo_ferias_pages()
-    regular_resumo = resumo.get("regular") or {}
-    premium_resumo = resumo.get("premium") or {}
-    dias_direito = regular_resumo.get("direito") or 0
-    dias_usados = regular_resumo.get("usados") or 0
-    dias_reservados = regular_resumo.get("reservados") or 0
-    saldo = regular_resumo.get("saldo") or 0
-    regular_periodos = regular_resumo.get("periodos") or []
-    periodo_aquisitivo_atual = regular_resumo.get("periodo_atual")
-    
-    premium_direito = premium_resumo.get("direito") or 0
-    premium_usados = premium_resumo.get("usados") or 0
-    premium_reservados = premium_resumo.get("reservados") or 0
-    premium_saldo = premium_resumo.get("saldo") or 0
-    
-    # Histórico:
-    # - Gestor: solicitações do gestor e de seus subordinados
-    # - DP/Admin: todas as solicitações
-    try:
-        if is_dp_or_admin:
-            solicitacoes_raw = listar_solicitacoes_todas()
-        else:
-            solicitacoes_raw = listar_solicitacoes_equipes([gestor_email] + subs)
-    except Exception as exc:
-        log.exception("FERIAS_500 passo=listar_solicitacoes usuario=%s erro=%s", gestor_email, exc)
-        solicitacoes_raw = []
-    solicitacoes = _normalize_solicitacoes_para_template(solicitacoes_raw, nome_por_email, matricula_por_email)
+    # V38: nenhuma seleção operacional por e-mail. A seleção só é válida quando
+    # vier uma matrícula existente na lista ativa/autorizada.
+    selecionado_matricula = raw_matricula
 
-    colaborador_nome = next((o["nome"] for o in opcoes if o["email"] == selecionado), selecionado)
+    opcoes_por_matricula = {o["matricula"]: o for o in opcoes}
+    if selecionado_matricula not in opcoes_por_matricula:
+        selecionado_matricula = opcoes[0]["matricula"] if opcoes else ""
 
-    # Verifica se o gestor está visualizando suas próprias férias
-    is_viewing_own_holidays = selecionado == gestor_email and not is_dp_or_admin
+    selecionado_opcao = opcoes_por_matricula.get(selecionado_matricula) or {}
+    selecionado_email = safe_lower(selecionado_opcao.get("email") or "")
+
+    # A fonte operacional é a matrícula. O e-mail é apenas informativo.
+    resumo = get_resumo_ferias(selecionado_matricula)
+    dias_direito = resumo["regular"]["direito"]
+    dias_usados = resumo["regular"]["usados"]
+    dias_reservados = resumo["regular"]["reservados"]
+    saldo = resumo["regular"]["saldo"]
+    regular_periodos = resumo["regular"].get("periodos") or []
+    periodo_aquisitivo_atual = resumo["regular"].get("periodo_atual")
+
+    premium_direito = resumo["premium"]["direito"]
+    premium_usados = resumo["premium"]["usados"]
+    premium_reservados = resumo["premium"]["reservados"]
+    premium_saldo = resumo["premium"]["saldo"]
+
+    if is_dp_or_admin:
+        solicitacoes = listar_solicitacoes_todas()
+    else:
+        solicitacoes = listar_solicitacoes_equipes([gestor_email] + subs)
+
+    colaborador_nome = selecionado_opcao.get("nome") or selecionado_matricula or selecionado_email
+    is_viewing_own_holidays = selecionado_email == gestor_email and not is_dp_or_admin
 
     return render_template(
         "ferias.html",
         active_page="ferias",
         user=user,
         gestor_email=gestor_email,
-        colaborador_email=selecionado,
+        colaborador_email=selecionado_email,
+        colaborador_matricula=selecionado_matricula,
         colaborador_nome=colaborador_nome,
         colaboradores_opcoes=opcoes,
         nome_por_email=nome_por_email,
