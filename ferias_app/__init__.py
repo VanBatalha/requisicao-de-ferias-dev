@@ -55,26 +55,37 @@ def create_app() -> Flask:
 
     @app.errorhandler(Exception)
     def _handle_exception(e):  # noqa: ANN001
-        # Loga traceback completo no Render
+        # Loga traceback completo no Render. Em produção, o Flask pode entregar
+        # InternalServerError como HTTPException; neste caso o erro real fica em
+        # original_exception. Sem isso o log mostra só a página 500 genérica.
+        from werkzeug.exceptions import HTTPException, InternalServerError  # noqa: E402
+        original = getattr(e, "original_exception", None)
+        erro_real = original or e
         try:
-            log.exception("Unhandled exception: %s", e)
+            log.exception(
+                "Unhandled exception path=%s method=%s erro=%s",
+                getattr(request, "path", ""),
+                getattr(request, "method", ""),
+                erro_real,
+                exc_info=erro_real,
+            )
         except Exception:
             pass
 
-        # Se for HTTPException (ex.: 404/403), deixa o Flask responder normalmente
-        from werkzeug.exceptions import HTTPException  # noqa: E402
-        if isinstance(e, HTTPException):
+        # Se for HTTPException que não seja 500, deixa o Flask responder normalmente.
+        if isinstance(e, HTTPException) and not isinstance(e, InternalServerError):
             return e
 
-        # Para erros 500, retorna uma página simples (evita loops)
-                # Para rotas de API, devolve JSON para facilitar debug no front-end
         try:
             if request.path.startswith("/api/"):
-                return jsonify({"ok": False, "message": "Internal Server Error", "detail": str(e)}), 500
+                return jsonify({"ok": False, "message": "Internal Server Error", "detail": str(erro_real)}), 500
         except Exception:
             pass
 
-        # Para erros 500 em páginas HTML, retorna texto simples (evita loops)
-        return ("Internal Server Error", 500)
+        return (
+            "Internal Server Error - veja o traceback completo nos logs do Render. "
+            f"Rota: {getattr(request, 'path', '')}. Erro: {erro_real}",
+            500,
+        )
 
     return app

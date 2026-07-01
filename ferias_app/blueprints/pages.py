@@ -28,6 +28,78 @@ from ..core import (
     tem_grupo,
 )
 from ..services.simulation_service import get_simulated_gestor, is_in_simulation
+
+from ..logging_config import get_logger
+
+log = get_logger(__name__)
+
+
+def _empty_resumo_ferias_pages():
+    return {
+        "regular": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "periodos": [], "periodo_atual": None},
+        "premium": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "periodos": []},
+        "total_solicitacoes": 0,
+    }
+
+
+def _normalize_solicitacoes_para_template(rows, nome_por_email=None, matricula_por_email=None):
+    """Normaliza históricos para evitar quebra de template por tuplas em formatos diferentes.
+
+    O legado pode devolver tuplas de 8 posições para histórico individual e 9 posições
+    para histórico de equipe/DP. A tela nova espera sempre um dicionário estável.
+    """
+    nome_por_email = nome_por_email or {}
+    matricula_por_email = matricula_por_email or {}
+    out = []
+    for row in rows or []:
+        try:
+            if isinstance(row, dict):
+                email = safe_lower(row.get("colaborador_email") or row.get("email") or "")
+                item = {
+                    "id": row.get("id") or row.get("row_id"),
+                    "colaborador_email": email,
+                    "colaborador_nome": row.get("colaborador_nome") or nome_por_email.get(email, email),
+                    "colaborador_matricula": row.get("colaborador_matricula") or matricula_por_email.get(email, ""),
+                    "inicio": row.get("inicio") or row.get("data_inicio") or "",
+                    "fim": row.get("fim") or row.get("data_fim") or "",
+                    "dias": row.get("dias") or row.get("dias_item") or 0,
+                    "status": row.get("status") or "PENDENTE",
+                    "solicitacao": row.get("solicitacao") or row.get("tipo_solicitacao") or "",
+                    "saldo_tipo": (row.get("saldo_tipo") or row.get("tipo_ferias") or "REGULAR"),
+                    "obs": row.get("obs") or row.get("observacoes") or "",
+                }
+            else:
+                seq = list(row)
+                # Formato equipe/DP: id, email, inicio, fim, dias, status, solicitacao, saldo_tipo, obs
+                if len(seq) >= 9:
+                    row_id, email, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs = seq[:9]
+                # Formato individual legado: id, inicio, fim, dias, status, solicitacao, saldo_tipo, obs
+                elif len(seq) == 8:
+                    row_id, inicio, fim, dias_item, status, solicitacao, saldo_tipo, obs = seq
+                    email = ""
+                else:
+                    log.warning("Histórico de solicitação ignorado por formato inesperado: %r", row)
+                    continue
+                email = safe_lower(email or "")
+                item = {
+                    "id": row_id,
+                    "colaborador_email": email,
+                    "colaborador_nome": nome_por_email.get(email, email),
+                    "colaborador_matricula": matricula_por_email.get(email, ""),
+                    "inicio": inicio or "",
+                    "fim": fim or "",
+                    "dias": dias_item or 0,
+                    "status": status or "PENDENTE",
+                    "solicitacao": solicitacao or "",
+                    "saldo_tipo": saldo_tipo or "REGULAR",
+                    "obs": obs or "",
+                }
+            item["saldo_tipo"] = str(item.get("saldo_tipo") or "REGULAR").upper()
+            out.append(item)
+        except Exception as exc:
+            log.exception("Falha ao normalizar item do histórico de férias: %r | erro=%s", row, exc)
+    return out
+
 @bp.route("/", endpoint="home")
 @bp.route("/")
 def index():
@@ -109,17 +181,26 @@ def ferias():
             gestor_email=gestor_email,
         ), 403
 
-    colaboradores_all = listar_colaboradores_cached()
+    try:
+        colaboradores_all = listar_colaboradores_cached() or []
+    except Exception as exc:
+        log.exception("FERIAS_500 passo=listar_colaboradores_cached usuario=%s erro=%s", gestor_email, exc)
+        colaboradores_all = []
 
     # carrega nomes e matrículas (para exibição e desambiguação)
     nome_por_email = {}
     matricula_por_email = {}
     for c in colaboradores_all:
-        em = safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
-        if not em:
+        try:
+            if not isinstance(c, dict):
+                continue
+            em = safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
+            if not em:
+                continue
+            nome_por_email[em] = c.get("NOME COMPLETO") or c.get("nome") or em
+            matricula_por_email[em] = c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or ""
+        except Exception:
             continue
-        nome_por_email[em] = c.get("NOME COMPLETO") or c.get("nome") or em
-        matricula_por_email[em] = c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or ""
 
     # lista de colaboradores disponíveis:
     # - Gestor: somente subordinados
@@ -173,26 +254,37 @@ def ferias():
     if selecionado not in [o["email"] for o in opcoes]:
         selecionado = opcoes[0]["email"] if opcoes else ""
 
-    resumo = get_resumo_ferias(selecionado)
-    dias_direito = resumo["regular"]["direito"]
-    dias_usados = resumo["regular"]["usados"]
-    dias_reservados = resumo["regular"]["reservados"]
-    saldo = resumo["regular"]["saldo"]
-    regular_periodos = resumo["regular"].get("periodos") or []
-    periodo_aquisitivo_atual = resumo["regular"].get("periodo_atual")
+    try:
+        resumo = get_resumo_ferias(selecionado) or _empty_resumo_ferias_pages()
+    except Exception as exc:
+        log.exception("FERIAS_500 passo=get_resumo_ferias selecionado=%s erro=%s", selecionado, exc)
+        resumo = _empty_resumo_ferias_pages()
+    regular_resumo = resumo.get("regular") or {}
+    premium_resumo = resumo.get("premium") or {}
+    dias_direito = regular_resumo.get("direito") or 0
+    dias_usados = regular_resumo.get("usados") or 0
+    dias_reservados = regular_resumo.get("reservados") or 0
+    saldo = regular_resumo.get("saldo") or 0
+    regular_periodos = regular_resumo.get("periodos") or []
+    periodo_aquisitivo_atual = regular_resumo.get("periodo_atual")
     
-    premium_direito = resumo["premium"]["direito"]
-    premium_usados = resumo["premium"]["usados"]
-    premium_reservados = resumo["premium"]["reservados"]
-    premium_saldo = resumo["premium"]["saldo"]
+    premium_direito = premium_resumo.get("direito") or 0
+    premium_usados = premium_resumo.get("usados") or 0
+    premium_reservados = premium_resumo.get("reservados") or 0
+    premium_saldo = premium_resumo.get("saldo") or 0
     
     # Histórico:
     # - Gestor: solicitações do gestor e de seus subordinados
     # - DP/Admin: todas as solicitações
-    if is_dp_or_admin:
-        solicitacoes = listar_solicitacoes_todas()
-    else:
-        solicitacoes = listar_solicitacoes_equipes([gestor_email] + subs)
+    try:
+        if is_dp_or_admin:
+            solicitacoes_raw = listar_solicitacoes_todas()
+        else:
+            solicitacoes_raw = listar_solicitacoes_equipes([gestor_email] + subs)
+    except Exception as exc:
+        log.exception("FERIAS_500 passo=listar_solicitacoes usuario=%s erro=%s", gestor_email, exc)
+        solicitacoes_raw = []
+    solicitacoes = _normalize_solicitacoes_para_template(solicitacoes_raw, nome_por_email, matricula_por_email)
 
     colaborador_nome = next((o["nome"] for o in opcoes if o["email"] == selecionado), selecionado)
 
