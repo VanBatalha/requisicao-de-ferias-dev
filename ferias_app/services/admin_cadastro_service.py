@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, or_
@@ -90,6 +91,32 @@ def _active_colaborador_by_email(session, email: str):
     return None
 
 
+def _normalizar_ref_matricula(value: Any, allow_dp: bool = True, allow_gestor: bool = True) -> str:
+    raw = str(value or "").strip()
+    if not raw or "@" in raw:
+        return ""
+    norm = raw.upper().strip()
+    if allow_dp and norm in {"DP", "RH", "DEPARTAMENTO PESSOAL"}:
+        return "DP"
+    if allow_gestor and norm in {"GESTOR", "GESTORES", "GESTOR DIRETO"}:
+        return "GESTOR"
+    if re.fullmatch(r"MAT\d+", norm):
+        return norm
+    if re.fullmatch(r"\d+", norm):
+        return f"MAT{int(norm):05d}"
+    return ""
+
+
+def _colaborador_ativo_por_matricula(session, matricula: str):
+    mat = _normalizar_ref_matricula(matricula, allow_dp=False, allow_gestor=False)
+    if not mat:
+        return None
+    return session.query(Colaborador).filter(
+        func.upper(Colaborador.matricula) == mat,
+        func.upper(func.coalesce(Colaborador.status, "ATIVO")).in_(["ATIVO", "ACTIVE"])
+    ).first()
+
+
 def _serialize_date(value: Any) -> Optional[str]:
     if isinstance(value, dt.datetime):
         return value.date().isoformat()
@@ -112,33 +139,21 @@ def _sincronizar_comp_com_tabelas_novas(session, colab: Colaborador, comp: Colab
     session.query(PermissaoUsuario).filter(PermissaoUsuario.colaborador_matricula == colab.matricula).delete(synchronize_session=False)
     session.add(PermissaoUsuario(colaborador_id=colab.id, colaborador_matricula=colab.matricula, role=ut_role))
 
-    # Hierarquia simples por e-mail. Quando encontrar matrícula do gestor, também grava.
-    gd_email = safe_lower(comp.gestor_direto_email or '') or None
-    gs_email = safe_lower(comp.gestor_superior_email or '') or None
-    gd = _active_colaborador_by_email(session, gd_email) if gd_email else None
-    gs = _active_colaborador_by_email(session, gs_email) if gs_email and gs_email != 'dp' else None
+    # Hierarquia por matricula/marcador. E-mail nao cria vinculo operacional.
+    gd_ref = _normalizar_ref_matricula(comp.gestor_direto, allow_dp=False, allow_gestor=False)
+    gs_ref = _normalizar_ref_matricula(comp.gestor_superior, allow_dp=True, allow_gestor=True)
+    gd = _colaborador_ativo_por_matricula(session, gd_ref) if gd_ref else None
+    gs = _colaborador_ativo_por_matricula(session, gs_ref) if gs_ref and gs_ref not in {'DP', 'GESTOR'} else None
     h = session.query(HierarquiaGestao).filter(HierarquiaGestao.colaborador_matricula == colab.matricula).first()
     if not h:
         h = HierarquiaGestao(colaborador_id=colab.id, colaborador_matricula=colab.matricula)
         session.add(h)
     h.gestor_direto_id = gd.id if gd else None
     h.gestor_direto_matricula = gd.matricula if gd else None
-    h.gestor_direto_email = gd_email
-    if gs_email == 'dp':
-        h.gestor_superior_tipo = 'DP'
-        h.gestor_superior_id = None
-        h.gestor_superior_matricula = None
-        h.gestor_superior_email_custom = None
-    elif gs:
-        h.gestor_superior_tipo = 'GESTOR'
-        h.gestor_superior_id = gs.id
-        h.gestor_superior_matricula = gs.matricula
-        h.gestor_superior_email_custom = None
-    else:
-        h.gestor_superior_tipo = 'EMAIL_CUSTOM' if gs_email else 'GESTOR'
-        h.gestor_superior_id = None
-        h.gestor_superior_matricula = None
-        h.gestor_superior_email_custom = gs_email
+    h.gestor_direto_email = safe_lower(gd.email) if gd and gd.email else None
+    h.gestor_superior_id = gs.id if gs else None
+    h.gestor_superior_matricula = gs.matricula if gs else (gs_ref or None)
+    h.gestor_superior_email = safe_lower(gs.email) if gs and gs.email else None
 
 
 def _saldos_periodo_json(session, colab: Colaborador):

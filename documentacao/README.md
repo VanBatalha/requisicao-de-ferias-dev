@@ -1,77 +1,21 @@
-# Documentação do app Gestão de Férias
+# Gestao de Ferias - indice tecnico
+
+Versao atual: V44.
 
 ## Documentos principais
 
-```text
-CONFIGURACAO_AMBIENTES.md
-  Explica variáveis para banco oficial, banco de teste e Render.
+- `CONFIGURACAO_AMBIENTES.md`: variaveis de ambiente para Render/local e perfis de banco.
+- `ROTAS_PERFORMANCE.md`: fluxo da rota `/ferias`, logs `FERIAS_PERF` e consultas leves.
+- `SALDOS_MATRICULA.md`: regra oficial de saldos usando `saldo_periodo`.
+- `SINCRONIZACAO_MIGRACAO.md`: sincronizacao Smartsheet -> PostgreSQL, importacao local e scripts SQL.
+- `HIERARQUIA_MATRICULA.md`: regra oficial de hierarquia por matricula/marcadores DP/GESTOR.
 
-ROTAS_PERFORMANCE.md
-  Explica as rotas críticas, especialmente /ferias, e os logs de performance.
+## Arquivos de codigo relacionados
 
-SALDOS_MATRICULA.md
-  Explica a modelagem atual de saldos usando matrícula e saldo_periodo.
-
-SINCRONIZACAO_MIGRACAO.md
-  Explica sincronização manual, migração, recálculo de saldos e scripts relacionados.
-```
-
-## Pastas principais
-
-```text
-ferias_app/
-  Código Python da aplicação Flask.
-
-templates/
-  Telas HTML/Jinja.
-
-migracao/
-  Scripts e SQLs usados para carga inicial, ajustes, limpeza e recálculo.
-```
-
-## Arquivos mais relevantes
-
-```text
-app.py
-  Entrada do Render/Gunicorn.
-
-sync_cadastro_smartsheet.py
-  Script periódico/manual para sincronizar cadastro e solicitações.
-
-ferias_app/blueprints/pages.py
-  Rotas de páginas, incluindo /ferias.
-
-ferias_app/blueprints/solicitacoes_api.py
-  API de criação de solicitações.
-
-ferias_app/services/postgres_compat_service.py
-  Camada PostgreSQL usada pelas telas legadas e pela rota /ferias.
-
-ferias_app/services/postgres_service.py
-  Serviço principal de banco e movimentações de saldo/solicitações.
-
-ferias_app/services/smartsheet_sync_service.py
-  Rotina de sincronização com Smartsheet.
-
-ferias_app/models.py
-  Modelos SQLAlchemy.
-
-templates/ferias.html
-  Tela de solicitações de férias.
-
-templates/painel_admin.html
-  Painel Admin, edição de cadastro, permissões e sincronização.
-
-templates/painel_dp.html
-  Painel DP, gestores e ajustes.
-```
-
-## Scripts SQL importantes
-
-```text
-migracao/sql/v43_drop_saldos_colaborador_complemento.sql
-  Remove colunas obsoletas de saldo da tabela colaborador_complemento.
-
-migracao/sql/validacao_v43_colaborador_complemento_sem_saldos.sql
-  Valida se as colunas foram removidas e se saldo_periodo segue populada.
-```
+- `ferias_app/blueprints/pages.py`: telas principais, incluindo `/ferias`.
+- `ferias_app/services/postgres_compat_service.py`: consultas leves da tela de ferias e filtros por hierarquia.
+- `ferias_app/services/smartsheet_sync_service.py`: sincronizacao do Smartsheet, ignorando status `#NO MATCH`.
+- `ferias_app/services/auto_sync_service.py`: sincronizacao diaria em background.
+- `ferias_app/services/admin_cadastro_service.py`: edicao administrativa de cadastro e hierarquia.
+- `ferias_app/blueprints/dp_api.py`: APIs de gestores/ajustes usadas pelo painel DP/Admin.
+- `migracao/sql/v44_hierarquia_matricula_sem_email_custom.sql`: ajuste da tabela `hierarquia_gestao`.

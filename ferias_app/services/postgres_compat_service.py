@@ -292,11 +292,12 @@ def _hierarquia_for_colaborador(colab: Colaborador) -> tuple[str, str]:
             if not gd_email and h.gestor_direto_matricula:
                 gd = session.query(Colaborador).filter(Colaborador.matricula == h.gestor_direto_matricula).first()
                 gd_email = gd.email if gd else ''
-            gs = h.gestor_superior_email_custom or ''
-            if not gs and h.gestor_superior_matricula:
-                sup = session.query(Colaborador).filter(Colaborador.matricula == h.gestor_superior_matricula).first()
+            gs_ref = str(getattr(h, 'gestor_superior_matricula', '') or '').strip().upper()
+            gs = getattr(h, 'gestor_superior_email', '') or ''
+            if not gs and gs_ref and gs_ref not in {'DP', 'GESTOR'}:
+                sup = session.query(Colaborador).filter(func.upper(Colaborador.matricula) == gs_ref).first()
                 gs = sup.email if sup else ''
-            if not gs and str(h.gestor_superior_tipo or '').strip().upper() == 'DP':
+            if not gs and gs_ref == 'DP':
                 gs = 'dp'
             return safe_lower(gd_email), safe_lower(gs)
     except Exception:
@@ -468,22 +469,14 @@ def subordinados_do_gestor_postgres(gestor_email: str, only_ativos: bool = True)
         colab_matricula = str(c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or "").strip().upper()
         if not colab_email or emails_equivalentes(colab_email, gestor_email) or colab_email in seen:
             continue
-        gestor_direto_email = c.get("GESTOR DIRETO") or c.get("GESTOR") or c.get("gestor_direto_email")
-        gestor_superior_email = c.get("GESTOR SUPERIOR") or c.get("gestor_superior_email")
         gestor_direto_matricula = str(c.get("GESTOR_DIRETO_MATRICULA") or c.get("gestor_direto") or "").strip().upper()
         gestor_superior_matricula = str(c.get("GESTOR_SUPERIOR_MATRICULA") or c.get("gestor_superior") or "").strip().upper()
         match = False
-        if is_dp_user and safe_lower(gestor_superior_email or "") == "dp":
-            match = True
-        elif is_dp_user and gestor_superior_matricula == "DP":
+        if is_dp_user and gestor_superior_matricula == "DP":
             match = True
         elif gestor_matricula and gestor_superior_matricula == gestor_matricula:
             match = True
-        elif gestor_superior_email and emails_equivalentes(gestor_superior_email, gestor_email):
-            match = True
         elif gestor_matricula and gestor_direto_matricula == gestor_matricula:
-            match = True
-        elif gestor_direto_email and emails_equivalentes(gestor_direto_email, gestor_email):
             match = True
         if match:
             seen.add(colab_email)

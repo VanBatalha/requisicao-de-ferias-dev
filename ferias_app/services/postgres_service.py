@@ -205,6 +205,7 @@ def init_db(run_migrations: bool = False):
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_direto_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_direto_email VARCHAR(255)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_superior_matricula VARCHAR(50)"))
+        conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_superior_email VARCHAR(255)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.auditoria_saldos ADD COLUMN IF NOT EXISTS usuario_alterou_matricula VARCHAR(50)"))
 
         # Hotfix V16: bancos criados manualmente/por dumps parciais podem ter as tabelas

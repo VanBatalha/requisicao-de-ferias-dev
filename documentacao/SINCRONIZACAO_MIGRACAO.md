@@ -1,50 +1,30 @@
-# Sincronização e migração
+# Sincronizacao e migracao
 
-## Scripts principais
+## Sincronizacao Smartsheet -> PostgreSQL
 
-```text
-sync_cadastro_smartsheet.py
-  Sincroniza cadastro, permissões, hierarquia e, quando habilitado, solicitações.
+Fonte principal: `ferias_app/services/smartsheet_sync_service.py`.
 
-migracao/scripts/recalcular_saldo_periodo.py
-  Recria/recalcula saldos na tabela saldo_periodo usando o banco atual.
+Regras da V44:
 
-migracao/scripts/import_data.py
-  Script auxiliar de importação histórica.
+- Matricula e a chave oficial.
+- E-mail nao cria vinculo de hierarquia.
+- Linhas do Smartsheet com `STATUS = #NO MATCH` sao ignoradas e nao entram no banco.
+- Saldos nao ficam em `colaborador_complemento`; a fonte oficial e `saldo_periodo`.
 
-migracao/scripts/repair_colaborador_complemento.py
-  Script auxiliar para reparos pontuais em complemento.
+## Formas de executar
+
+1. Painel ADMIN: botao `Sincronizar cadastro, permissoes e hierarquia`.
+2. Local/manual:
+
+```powershell
+python sync_cadastro_smartsheet.py
 ```
 
-## Variáveis usadas na sincronização manual
+3. Automatico: `ferias_app/services/auto_sync_service.py`.
 
-```env
-INCLUDE_SOLICITACOES=true
-RECALCULATE_SALDOS=true
-SYNC_REFERENCE_DATE=2026-07-01
-```
+A sincronizacao automatica verifica o fuso `APP_TIMEZONE`, padrao `America/Fortaleza`. Depois de 12h, se ainda nao houve sincronizacao com sucesso no dia, ela dispara em background. Se o dia anterior foi perdido, o primeiro acesso ao app tambem dispara em background.
 
-Essas variáveis são recomendadas para execução manual/local, não para o Web Service do Render.
+## SQL da V44
 
-## Web Service do Render
-
-No Render, mantenha apenas variáveis de conexão e funcionamento do app:
-
-```env
-DB_TARGET=oficial
-PG_HOST=75.119.139.205
-PG_PORT=5532
-PG_DB=db_appsheet
-PG_USER=...
-PG_PASSWORD=...
-PG_SSLMODE=prefer
-DB_SCHEMA=app_ferias
-APP_TIMEZONE=America/Fortaleza
-SMARTSHEET_ACCESS_TOKEN=...
-ID_FOLHA_CADASTRO=3609445264215940
-ID_FOLHA_SOLICITACOES=2890766507528068
-```
-
-## Observação
-
-O app web não deve rodar migrações pesadas no startup. Migrações e recálculos devem ser feitos por scripts manuais ou rotinas controladas.
+- `migracao/sql/v44_hierarquia_matricula_sem_email_custom.sql`
+- `migracao/sql/validacao_v44_hierarquia_matricula.sql`

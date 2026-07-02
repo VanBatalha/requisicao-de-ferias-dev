@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 import unicodedata
 
 import smartsheet
@@ -292,6 +293,34 @@ def _ensure_complemento(db, colab):
     return comp
 
 
+def _normalizar_ref_matricula(value, allow_dp=True, allow_gestor=True):
+    raw = str(value or '').strip()
+    if not raw or '@' in raw:
+        return ''
+    norm = raw.upper().strip()
+    if allow_dp and norm in {'DP', 'RH', 'DEPARTAMENTO PESSOAL'}:
+        return 'DP'
+    if allow_gestor and norm in {'GESTOR', 'GESTORES', 'GESTOR DIRETO'}:
+        return 'GESTOR'
+    if re.fullmatch(r'MAT\d+', norm):
+        return norm
+    if re.fullmatch(r'\d+', norm):
+        return f'MAT{int(norm):05d}'
+    return ''
+
+
+def _colaborador_ativo_por_matricula(db, matricula):
+    from sqlalchemy import func
+    from ..models import Colaborador
+    mat = _normalizar_ref_matricula(matricula, allow_dp=False, allow_gestor=False)
+    if not mat:
+        return None
+    return db.query(Colaborador).filter(
+        func.upper(Colaborador.matricula) == mat,
+        func.upper(func.coalesce(Colaborador.status, 'ATIVO')).in_(['ATIVO', 'ACTIVE'])
+    ).first()
+
+
 def _sync_hierarquia_from_complemento(db, colab):
     from ..models import Colaborador, HierarquiaGestao
     comp = _ensure_complemento(db, colab)
@@ -302,35 +331,17 @@ def _sync_hierarquia_from_complemento(db, colab):
     h.colaborador_id = colab.id
     h.colaborador_matricula = colab.matricula
 
-    gd_mat = str(getattr(comp, 'gestor_direto', '') or '').strip().upper()
-    gd = db.query(Colaborador).filter(Colaborador.matricula == gd_mat).first() if gd_mat else None
+    gd_mat = _normalizar_ref_matricula(getattr(comp, 'gestor_direto', ''), allow_dp=False, allow_gestor=False)
+    gd = _colaborador_ativo_por_matricula(db, gd_mat) if gd_mat else None
     h.gestor_direto_id = gd.id if gd else None
     h.gestor_direto_matricula = gd.matricula if gd else None
-    h.gestor_direto_email = gd.email.lower() if gd and gd.email else (comp.gestor_direto_email or None)
+    h.gestor_direto_email = gd.email.lower() if gd and gd.email else None
 
-    gs_val = str(getattr(comp, 'gestor_superior', '') or '').strip().upper()
-    if gs_val == 'DP':
-        h.gestor_superior_tipo = 'DP'
-        h.gestor_superior_id = None
-        h.gestor_superior_matricula = None
-        h.gestor_superior_email_custom = None
-    elif gs_val == 'GESTOR' or not gs_val:
-        h.gestor_superior_tipo = 'GESTOR'
-        h.gestor_superior_id = None
-        h.gestor_superior_matricula = None
-        h.gestor_superior_email_custom = None
-    else:
-        gs = db.query(Colaborador).filter(Colaborador.matricula == gs_val).first()
-        if gs:
-            h.gestor_superior_tipo = 'GESTOR'
-            h.gestor_superior_id = gs.id
-            h.gestor_superior_matricula = gs.matricula
-            h.gestor_superior_email_custom = None
-        else:
-            h.gestor_superior_tipo = 'CUSTOM'
-            h.gestor_superior_id = None
-            h.gestor_superior_matricula = None
-            h.gestor_superior_email_custom = gs_val
+    gs_val = _normalizar_ref_matricula(getattr(comp, 'gestor_superior', ''), allow_dp=True, allow_gestor=True)
+    gs = _colaborador_ativo_por_matricula(db, gs_val) if gs_val and gs_val not in {'DP', 'GESTOR'} else None
+    h.gestor_superior_id = gs.id if gs else None
+    h.gestor_superior_matricula = gs.matricula if gs else (gs_val or None)
+    h.gestor_superior_email = gs.email.lower() if gs and gs.email else None
 
 
 def _listar_colaboradores_ativos_db(db):

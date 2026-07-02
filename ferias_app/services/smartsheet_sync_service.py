@@ -44,6 +44,7 @@ def _log_progress(stage: str, current: int | None = None, total: int | None = No
 
 STATUS_ATIVO_SET = {"ATIVO", "ACTIVE"}
 STATUS_INATIVO_SET = {"INATIVO", "INACTIVE", "DESLIGADO", "DEMITIDO", "RESCINDIDO", "AFASTADO"}
+STATUS_INVALIDO_SYNC_SET = {"#NO MATCH", "NO MATCH", "#N/A", "N/A"}
 
 
 @dataclass
@@ -112,11 +113,36 @@ def normalize_user_type_value(value: Any) -> str:
 
 
 def normalize_matricula(value: Any) -> str:
-    """Normaliza a matrícula como código externo do cadastro.
-
-    Não converte para número porque valores como MAT00061 perderiam zeros/prefixo.
-    """
+    """Normaliza a matricula como codigo externo do cadastro."""
     return str(value or "").strip().upper()
+
+
+def normalize_ref_matricula_ou_marcador(value: Any, allow_dp: bool = True, allow_gestor: bool = True) -> str:
+    """Normaliza uma referencia de gestor sem usar e-mail como chave.
+
+    Aceita:
+    - MAT00000;
+    - numero final da matricula, convertido para MAT com 5 digitos;
+    - marcadores DP/GESTOR quando permitidos.
+
+    Qualquer e-mail retorna vazio para impedir relacionamento por e-mail.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    norm = normalize_text(raw)
+    if "@" in raw:
+        return ""
+    if allow_dp and norm in {"DP", "RH", "DEPARTAMENTO PESSOAL"}:
+        return "DP"
+    if allow_gestor and norm in {"GESTOR", "GESTORES", "GESTOR DIRETO"}:
+        return "GESTOR"
+    mat = normalize_matricula(raw)
+    if re.fullmatch(r"MAT\d+", mat):
+        return mat
+    if re.fullmatch(r"\d+", mat):
+        return f"MAT{int(mat):05d}"
+    return ""
 
 
 def extract_id_from_matricula(matricula: Any) -> Optional[int]:
@@ -324,7 +350,10 @@ def build_colaborador_record(row: Any, cadastro: SheetMaps) -> Optional[Colabora
         return None
 
     status = cell_value(row, c_status)
-    ativo_no_app = normalize_text(status) not in STATUS_INATIVO_SET
+    status_norm = normalize_text(status)
+    if status_norm in STATUS_INVALIDO_SYNC_SET:
+        return None
+    ativo_no_app = status_norm not in STATUS_INATIVO_SET
     payload = row_as_dict(row, cadastro.columns)
     user_type = normalize_user_type_value(cell_value(row, c_user_type))
 
@@ -581,27 +610,16 @@ def _upsert_complemento_acesso(session, colab: Colaborador, record: ColaboradorR
     comp.colaborador_matricula = colab.matricula
     comp.user_type = record.user_type or "USER"
 
-    # Campos legados por e-mail permanecem preenchidos para compatibilidade,
-    # mas a relação operacional nova usa matrícula/texto especial.
-    gestor_direto_email = safe_lower(record.gestor_direto)
-    gestor_direto = _resolve_colaborador_by_email(session, gestor_direto_email, only_active=True) if gestor_direto_email else None
-    superior_raw = str(record.gestor_superior or "").strip()
-    superior_norm = normalize_text(superior_raw)
+    # Relacoes de gestor sao salvas por matricula/marcador. E-mail nao cria vinculo.
+    gd_ref = normalize_ref_matricula_ou_marcador(record.gestor_direto, allow_dp=False, allow_gestor=False)
+    gs_ref = normalize_ref_matricula_ou_marcador(record.gestor_superior, allow_dp=True, allow_gestor=True)
+    gestor_direto = _get_colaborador_by_matricula(session, gd_ref) if gd_ref else None
+    gestor_superior = _get_colaborador_by_matricula(session, gs_ref) if gs_ref and gs_ref not in {"DP", "GESTOR"} else None
 
-    comp.gestor_direto_email = clean_optional(record.gestor_direto)
     comp.gestor_direto = gestor_direto.matricula if gestor_direto else None
-    comp.gestor_superior_email = clean_optional(record.gestor_superior)
-
-    if superior_norm in {"DP", "RH", "DEPARTAMENTO PESSOAL"}:
-        comp.gestor_superior = "DP"
-    elif superior_norm in {"GESTOR", "GESTORES", "GESTOR DIRETO"}:
-        comp.gestor_superior = "GESTOR"
-    elif superior_raw:
-        sup_email = safe_lower(superior_raw)
-        sup = _resolve_colaborador_by_email(session, sup_email, only_active=True) if "@" in sup_email else None
-        comp.gestor_superior = sup.matricula if sup else superior_raw
-    else:
-        comp.gestor_superior = None
+    comp.gestor_direto_email = safe_lower(gestor_direto.email) if gestor_direto and gestor_direto.email else None
+    comp.gestor_superior = gs_ref or None
+    comp.gestor_superior_email = safe_lower(gestor_superior.email) if gestor_superior and gestor_superior.email else None
 
     comp.ativo_no_app = bool(record.ativo_no_app)
     comp.origem_sheet_id = sheet_id_str
@@ -645,37 +663,19 @@ def _sync_hierarquia_gestao(session, colab: Colaborador, record: ColaboradorReco
         session.add(h)
         created = True
 
-    gestor_direto_email = safe_lower(record.gestor_direto)
-    gestor_direto = _resolve_colaborador_by_email(session, gestor_direto_email, only_active=True) if gestor_direto_email else None
-
-    superior_raw = str(record.gestor_superior or "").strip()
-    superior_norm = normalize_text(superior_raw)
-    gestor_superior_tipo = "GESTOR"
-    gestor_superior_email_custom = None
-    gestor_superior = None
-
-    if superior_norm in {"DP", "RH", "DEPARTAMENTO PESSOAL"}:
-        gestor_superior_tipo = "DP"
-    elif "@" in superior_raw:
-        gestor_superior_tipo = "EMAIL_CUSTOM"
-        gestor_superior_email_custom = safe_lower(superior_raw)
-        gestor_superior = _resolve_colaborador_by_email(session, gestor_superior_email_custom, only_active=True)
-    elif superior_norm in {"GESTOR", "GESTORES", "GESTOR DIRETO"}:
-        gestor_superior_tipo = "GESTOR"
-    elif superior_raw:
-        # Valor não reconhecido: preserva como texto customizado para auditoria.
-        gestor_superior_tipo = "CUSTOM"
-        gestor_superior_email_custom = superior_raw
+    gd_ref = normalize_ref_matricula_ou_marcador(record.gestor_direto, allow_dp=False, allow_gestor=False)
+    gs_ref = normalize_ref_matricula_ou_marcador(record.gestor_superior, allow_dp=True, allow_gestor=True)
+    gestor_direto = _get_colaborador_by_matricula(session, gd_ref) if gd_ref else None
+    gestor_superior = _get_colaborador_by_matricula(session, gs_ref) if gs_ref and gs_ref not in {"DP", "GESTOR"} else None
 
     h.colaborador_id = colab.id
     h.colaborador_matricula = colab.matricula
     h.gestor_direto_id = gestor_direto.id if gestor_direto else None
     h.gestor_direto_matricula = gestor_direto.matricula if gestor_direto else None
-    h.gestor_direto_email = gestor_direto_email or None
-    h.gestor_superior_tipo = gestor_superior_tipo
+    h.gestor_direto_email = safe_lower(gestor_direto.email) if gestor_direto and gestor_direto.email else None
     h.gestor_superior_id = gestor_superior.id if gestor_superior else None
-    h.gestor_superior_matricula = gestor_superior.matricula if gestor_superior else None
-    h.gestor_superior_email_custom = gestor_superior_email_custom
+    h.gestor_superior_matricula = (gestor_superior.matricula if gestor_superior else (gs_ref or None))
+    h.gestor_superior_email = safe_lower(gestor_superior.email) if gestor_superior and gestor_superior.email else None
     return created
 
 
@@ -931,7 +931,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
                 continue
 
     return {
-        "mode": "sync_by_matricula_saldo_periodo_v31",
+        "mode": "sync_by_matricula_saldo_periodo_v44_no_email_hierarchy",
         "records": len(records),
         "inserted": inserted,
         "updated": existing_updated,

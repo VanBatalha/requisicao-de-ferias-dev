@@ -113,12 +113,14 @@ class HierarquiaGestao(Base):
     colaborador_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=True, unique=True)
     colaborador_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=True, unique=True, index=True)
     gestor_direto_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=True)
-    gestor_direto_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=True, index=True)
+    # A matricula e a chave operacional. Nao usamos FK aqui porque
+    # gestor_superior_matricula tambem pode guardar os marcadores DP/GESTOR.
+    gestor_direto_matricula = Column(String(50), nullable=True, index=True)
     gestor_direto_email = Column(String(255), nullable=True)
-    gestor_superior_tipo = Column(String(20), default="GESTOR")
     gestor_superior_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=True)
-    gestor_superior_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=True, index=True)
-    gestor_superior_email_custom = Column(String(255), nullable=True)
+    # Pode ser uma matricula real (ex.: MAT00801) ou marcador operacional DP/GESTOR.
+    gestor_superior_matricula = Column(String(50), nullable=True, index=True)
+    gestor_superior_email = Column(String(255), nullable=True)
 
 
 class PeriodoAquisitivo(Base):
