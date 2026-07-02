@@ -1,23 +1,34 @@
-# Gestao de Ferias - indice tecnico
-
-Versao atual: V45.
+# Gestão de Férias - Documentação
 
 ## Documentos principais
 
-- `CONFIGURACAO_AMBIENTES.md`: variaveis de ambiente para Render/local e perfis de banco.
-- `ROTAS_PERFORMANCE.md`: fluxo da rota `/ferias`, logs `FERIAS_PERF` e consultas leves.
-- `SALDOS_MATRICULA.md`: regra oficial de saldos usando `saldo_periodo`.
-- `SINCRONIZACAO_MIGRACAO.md`: sincronizacao Smartsheet -> PostgreSQL, importacao local e scripts SQL.
-- `HIERARQUIA_MATRICULA.md`: regra oficial de hierarquia por matricula/marcadores DP/GESTOR.
+- `CONFIGURACAO_AMBIENTES.md` - variáveis de ambiente, banco oficial/teste e Render.
+- `SINCRONIZACAO_CADASTRO_SMARTSHEET.md` - origem atual do cadastro, regras de matrícula, permissões e status inválido.
+- `HIERARQUIA_MATRICULA.md` - regra de visibilidade por gestor direto, gestor superior, DP e ADMIN.
+- `SALDOS_MATRICULA.md` - fonte oficial dos saldos em `saldo_periodo`.
+- `ROTAS_PERFORMANCE.md` - rotas principais e pontos de performance.
+- `SINCRONIZACAO_MIGRACAO.md` - rotinas manuais e automáticas de sincronização.
 
-## Arquivos de codigo relacionados
+## Fonte de cadastro atual
 
-- `ferias_app/blueprints/pages.py`: telas principais, incluindo `/ferias`.
-- `ferias_app/services/postgres_compat_service.py`: consultas leves da tela de ferias e filtros por hierarquia.
-- `ferias_app/services/smartsheet_sync_service.py`: sincronizacao do Smartsheet, ignorando status `#NO MATCH` e com bloqueio contra execucoes simultaneas.
-- `ferias_app/services/auto_sync_service.py`: sincronizacao diaria em background.
-- `ferias_app/blueprints/admin_api.py`: endpoint `/api/admin/sync-cadastro` inicia sync em background para nao estourar timeout HTTP.
-- `templates/painel_admin.html`: botao de sync inicia a rotina e acompanha pelo status.
-- `ferias_app/services/admin_cadastro_service.py`: edicao administrativa de cadastro e hierarquia.
-- `ferias_app/blueprints/dp_api.py`: APIs de gestores/ajustes usadas pelo painel DP/Admin.
-- `migracao/sql/v44_hierarquia_matricula_sem_email_custom.sql`: ajuste da tabela `hierarquia_gestao`.
+A sincronização cadastral usa a planilha **CADASTRO DE COLABORADORES** (`1745799836133252`). A antiga **CONTROLE_DP** (`3609445264215940`) não é mais fonte para permissões, saldos ou cadastro principal.
+
+## Fonte operacional no PostgreSQL
+
+- colaboradores: `app_ferias.colaboradores`
+- permissões: `app_ferias.permissoes_usuario`
+- hierarquia: `app_ferias.hierarquia_gestao` e cache em `app_ferias.colaborador_complemento`
+- saldo vivo: `app_ferias.saldo_periodo`
+- histórico/eventos: `app_ferias.solicitacoes_ferias`
+
+## Arquivos principais do app
+
+- `app.py` e `wsgi.py` - entrada do app.
+- `ferias_app/models.py` - modelos SQLAlchemy.
+- `ferias_app/services/postgres_service.py` - conexão e estrutura PostgreSQL.
+- `ferias_app/services/smartsheet_sync_service.py` - sincronização Smartsheet -> PostgreSQL.
+- `ferias_app/services/auto_sync_service.py` - sincronização automática diária.
+- `ferias_app/services/postgres_compat_service.py` - consultas operacionais por matrícula.
+- `ferias_app/blueprints/admin_api.py` - APIs do painel admin.
+- `templates/painel_admin.html` - tela administrativa.
+- `templates/ferias.html` - tela de solicitação de férias.

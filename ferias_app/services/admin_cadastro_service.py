@@ -377,10 +377,9 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
         "SETOR": colab.setor,
         "CARGO": colab.cargo,
         "REGIME": colab.regime,
-        "DIAS DE DIREITO": colab.dias_direito,
         "USER TYPE": comp.user_type,
-        "GESTOR DIRETO": comp.gestor_direto_email,
-        "GESTOR SUPERIOR": comp.gestor_superior_email,
+        "GESTOR DIRETO": getattr(comp, "gestor_direto", None),
+        "GESTOR SUPERIOR": getattr(comp, "gestor_superior", None),
         "GESTOR_DIRETO_MATRICULA": getattr(comp, "gestor_direto", None),
         "GESTOR_SUPERIOR_MATRICULA": getattr(comp, "gestor_superior", None),
     })

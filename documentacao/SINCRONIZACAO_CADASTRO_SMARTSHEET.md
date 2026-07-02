@@ -1,56 +1,67 @@
-# Sincronização de Cadastro Smartsheet -> PostgreSQL
+# Sincronização do cadastro Smartsheet
 
-A versão V6 permite atualizar a base de cadastro do PostgreSQL a partir da planilha Smartsheet `3609445264215940`.
+## Fonte atual
 
-## Variáveis necessárias no Render
+A fonte oficial de cadastro passou a ser a planilha **CADASTRO DE COLABORADORES**:
 
-```text
-DATABASE_URL=<url do postgres>
-DB_SCHEMA=ferias_app
-SMARTSHEET_ACCESS_TOKEN=<token do Smartsheet>
-ID_FOLHA_CADASTRO=3609445264215940
-```
+- Smartsheet ID: `1745799836133252`
+- Variável opcional: `ID_FOLHA_CADASTRO_PRINCIPAL=1745799836133252`
 
-## Pelo Painel Admin
+A planilha antiga **CONTROLE_DP** (`3609445264215940`) deixou de ser fonte operacional para cadastro, permissões e saldos.
 
-Acesse **Painel Admin > Sincronização com Smartsheet** e clique em **Sincronizar cadastro agora**.
+## Colunas lidas da planilha principal
 
-O botão atualiza:
+A rotina de sincronização usa principalmente estas colunas:
 
-- `ferias_app.colaboradores`
-- `ferias_app.colaborador_complemento`
-- `ferias_app.sync_state`
+- `MATRÍCULA`
+- `NOME COMPLETO`
+- `CARGO`
+- `SETOR`
+- `REGIME DE CONTRATAÇÃO`
+- `UNIDADE`
+- `EMPRESA`
+- `TELEFONE`
+- `STATUS`
+- `DATA DE ADMISSÃO`
+- `E-MAIL EMPRESA`
+- `GESTOR SUPERIOR`
+- `GESTOR DIRETO`
 
-Também recalcula os saldos com base nas solicitações já existentes no PostgreSQL.
+## Colunas que não são mais fonte do Smartsheet
 
-## Por Render Cron Job
+Estas informações passaram a ser controladas pelo PostgreSQL:
 
-Crie um Cron Job no Render apontando para o mesmo repositório e use o comando:
+- `USER TYPE` -> tabela `app_ferias.permissoes_usuario`
+- saldos/dias de férias -> tabela `app_ferias.saldo_periodo`
+- solicitações/histórico -> tabela `app_ferias.solicitacoes_ferias`
 
-```bash
-python sync_cadastro_smartsheet.py
-```
+Novo colaborador encontrado na sincronização recebe permissão `USER` somente se ainda não existir nenhuma role em `permissoes_usuario`.
+Permissões existentes (`ADMIN`, `DP`, `USER`) não são sobrescritas pela planilha.
 
-Sugestão de periodicidade: a cada 1 hora ou 1 vez ao dia, dependendo da frequência de alterações na planilha.
+## Matrícula como chave oficial
 
-## Observação importante
+A matrícula é a chave de negócio para colaborador, gestor direto e gestor superior.
 
-Edições manuais feitas diretamente no Painel Admin podem ser sobrescritas pela próxima sincronização se o mesmo campo vier diferente na planilha Smartsheet.
+Quando as colunas de gestor vierem como contato/e-mail no Smartsheet, a sincronização converte esse contato para a matrícula ativa correspondente da própria planilha. O vínculo gravado no banco continua sendo matrícula, nunca e-mail.
 
-## Observações da V8
+Se o mesmo e-mail apontar para mais de uma matrícula ativa, o vínculo é considerado ambíguo e não é usado para hierarquia.
 
-- A sincronização agora localiza colaboradores nesta ordem: origem do Smartsheet (`origem_sheet_id` + `origem_row_id`), matrícula e, por último, e-mail.
-- Isso evita duplicidade quando um e-mail é alterado no Smartsheet, pois a linha de origem continua sendo a mesma.
-- A coluna `matricula` em `colaboradores` é usada como ID externo/código de cadastro vindo da coluna `MATRÍCULA` da planilha. O campo `id` continua sendo a chave técnica interna do PostgreSQL, usada por relacionamentos e solicitações.
-- Em caso de conflito entre origem/matrícula/e-mail, a sincronização preserva os dados existentes para evitar violar restrições únicas e registra o conflito no resumo da sincronização.
+## Status inválido
 
+Linhas com `STATUS` igual a `#NO MATCH`, `NO MATCH`, `#N/A` ou `N/A` são ignoradas e não entram no banco.
 
-## Modo V9: inclusão segura por matrícula
+## Formas de execução
 
-A sincronização de cadastro passou a operar em modo **insert-only** usando a coluna `MATRÍCULA` do Smartsheet como ID externo oficial.
+Todas usam a mesma rotina central:
 
-- Se a matrícula já existir em `ferias_app.colaboradores.matricula`, a linha é considerada já importada e nenhum dado cadastral/complementar é sobrescrito.
-- Se a matrícula não existir no PostgreSQL, um novo colaborador é criado com os dados iniciais vindos do Smartsheet.
-- Se existir um cadastro legado pelo mesmo e-mail ou pela mesma origem, mas sem matrícula, a sincronização pode preencher somente a matrícula para criar o vínculo, preservando os demais campos.
-- Linhas sem matrícula são ignoradas para evitar cadastros sem ID externo.
-- O recálculo de saldos não é executado por padrão durante a sincronização de cadastro.
+- botão do Painel ADMIN: `POST /api/admin/sync-cadastro`
+- execução local: `python sync_cadastro_smartsheet.py`
+- sincronização automática diária em background
+
+Arquivos relacionados:
+
+- `ferias_app/services/smartsheet_sync_service.py`
+- `ferias_app/services/auto_sync_service.py`
+- `ferias_app/blueprints/admin_api.py`
+- `sync_cadastro_smartsheet.py`
+- `templates/painel_admin.html`

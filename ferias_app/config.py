@@ -115,7 +115,13 @@ class Settings:
     # Smartsheet sheet IDs (legado - não mais usado com PostgreSQL)
     # Defaults iguais à versão estável (evita "sheet_id=0" quando a env não está setada no Render)
     # Você ainda pode sobrescrever no Render com as variáveis de ambiente.
-    id_folha_cadastro: int = _env_int("ID_FOLHA_CADASTRO", 3609445264215940)
+    # Planilha principal de cadastro de colaboradores.
+    # A sincronização atual usa a folha CADASTRO DE COLABORADORES (1745799836133252).
+    # A folha CONTROLE_DP (3609445264215940) deixou de ser fonte cadastral;
+    # permissões ficam no PostgreSQL em permissoes_usuario e saldos ficam em saldo_periodo.
+    id_folha_cadastro_principal: int = _env_int("ID_FOLHA_CADASTRO_PRINCIPAL", 1745799836133252)
+    # Mantido apenas por compatibilidade com trechos legados/fallbacks.
+    id_folha_cadastro: int = _env_int("ID_FOLHA_CADASTRO", 1745799836133252)
     id_folha_solicitacoes: int = _env_int("ID_FOLHA_SOLICITACOES", 0)
 
     # Runtime

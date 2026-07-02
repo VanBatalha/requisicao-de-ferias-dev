@@ -1,4 +1,4 @@
-"""Sincronização do cadastro Smartsheet -> PostgreSQL.
+"""Sincronização do cadastro principal Smartsheet -> PostgreSQL.
 
 Baseado no script de migração/sincronização usado pelo projeto, mas adaptado
 para rodar dentro do app Flask/Render e ser acionado pelo Painel Admin ou por
@@ -64,6 +64,9 @@ class ColaboradorRecord:
     setor: Any
     cargo: Any
     regime: Any
+    unidade: Any
+    empresa: Any
+    telefone: Any
     dias_direito: int
     user_type: str
     gestor_direto: str
@@ -144,6 +147,41 @@ def normalize_ref_matricula_ou_marcador(value: Any, allow_dp: bool = True, allow
     if re.fullmatch(r"\d+", mat):
         return f"MAT{int(mat):05d}"
     return ""
+
+
+def _active_email_to_matricula_map(records: list[ColaboradorRecord]) -> tuple[dict[str, str], set[str]]:
+    """Mapa auxiliar para converter contatos do Smartsheet em matrícula.
+
+    Algumas colunas GESTOR DIRETO/SUPERIOR da planilha vêm como contato/e-mail.
+    A aplicação não guarda e-mail como vínculo operacional; na sincronização,
+    quando o e-mail identifica de forma inequívoca uma matrícula ATIVA da própria
+    planilha, ele é convertido para matrícula. E-mails ambíguos são ignorados.
+    """
+    by_email: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for record in records:
+        email = safe_lower(record.email)
+        if not email or normalize_text(record.status) not in STATUS_ATIVO_SET:
+            continue
+        mat = normalize_matricula(record.matricula)
+        if not mat:
+            continue
+        if email in by_email and by_email[email] != mat:
+            ambiguous.add(email)
+        else:
+            by_email[email] = mat
+    for email in ambiguous:
+        by_email.pop(email, None)
+    return by_email, ambiguous
+
+
+def _resolve_gestor_ref(value: Any, email_to_matricula: dict[str, str] | None = None, allow_dp: bool = True, allow_gestor: bool = True) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "@" in raw:
+        return (email_to_matricula or {}).get(safe_lower(raw), "")
+    return normalize_ref_matricula_ou_marcador(raw, allow_dp=allow_dp, allow_gestor=allow_gestor)
 
 
 def extract_id_from_matricula(matricula: Any) -> Optional[int]:
@@ -333,21 +371,29 @@ def get_sheet(client: smartsheet.Smartsheet, sheet_id: int) -> SheetMaps:
 
 
 def build_colaborador_record(row: Any, cadastro: SheetMaps) -> Optional[ColaboradorRecord]:
-    c_email = col_id(cadastro.columns, "EMAIL DA EMPRESA", "EMAIL", "E-MAIL")
-    c_nome = col_id(cadastro.columns, "NOME COMPLETO", "NOME", "COLABORADOR", "NOME DO COLABORADOR", "FUNCIONARIO", "FUNCIONÁRIO")
+    """Monta o registro a partir da planilha CADASTRO DE COLABORADORES.
+
+    A fonte oficial atual é a folha 1745799836133252. Permissões (USER TYPE)
+    e saldos não são mais lidos do Smartsheet: ficam em permissoes_usuario e
+    saldo_periodo, respectivamente. Novo colaborador recebe USER apenas se não
+    existir permissão gravada no PostgreSQL.
+    """
+    c_email = col_id(cadastro.columns, "E-MAIL EMPRESA", "EMAIL EMPRESA", "EMAIL DA EMPRESA", "E-MAIL DA EMPRESA", "EMAIL", "E-MAIL")
+    c_nome = col_id(cadastro.columns, "NOME COMPLETO", "NOME SE ATIVO", "NOME", "COLABORADOR", "NOME DO COLABORADOR", "FUNCIONARIO", "FUNCIONÁRIO")
     c_status = col_id(cadastro.columns, "STATUS", "SITUACAO", "SITUAÇÃO")
     c_adm = col_id(cadastro.columns, "ADMISSAO", "ADMISSÃO", "DATA DE ADMISSAO", "DATA DE ADMISSÃO", "DATA ADMISSAO", "DATA ADMISSÃO")
     c_setor = col_id(cadastro.columns, "SETOR", "AREA", "ÁREA", "DEPARTAMENTO", "CENTRO DE CUSTO")
     c_cargo = col_id(cadastro.columns, "CARGO", "FUNCAO", "FUNÇÃO", "FUNCAO/CARGO", "FUNÇÃO/CARGO")
     c_regime = col_id(cadastro.columns, "REGIME", "REGIME DE CONTRATACAO", "REGIME DE CONTRATAÇÃO")
-    c_dias_direito = col_id(cadastro.columns, "DIAS DE DIREITO", "DIAS DIREITO", "DIREITO", "SALDO DIREITO")
-    c_user_type = col_id(cadastro.columns, "USER TYPE", "USER_TYPE", "USERTYPE", "TIPO USUARIO", "TIPO DE USUARIO")
+    c_unidade = col_id(cadastro.columns, "UNIDADE")
+    c_empresa = col_id(cadastro.columns, "EMPRESA")
+    c_telefone = col_id(cadastro.columns, "TELEFONE", "CELULAR")
     c_gestor_direto = col_id(cadastro.columns, "GESTOR DIRETO", "GESTOR")
     c_gestor_superior = col_id(cadastro.columns, "GESTOR SUPERIOR")
     c_matricula = col_id(cadastro.columns, "MATRICULA", "MATRÍCULA", "MATRICULA DO COLABORADOR")
 
-    email = safe_lower(cell_value(row, c_email))
-    if not email:
+    matricula = normalize_matricula(cell_value(row, c_matricula))
+    if not matricula:
         return None
 
     status = cell_value(row, c_status)
@@ -356,23 +402,27 @@ def build_colaborador_record(row: Any, cadastro: SheetMaps) -> Optional[Colabora
         return None
     ativo_no_app = status_norm not in STATUS_INATIVO_SET
     payload = row_as_dict(row, cadastro.columns)
-    user_type = normalize_user_type_value(cell_value(row, c_user_type))
+    payload["__fonte_cadastro__"] = "CADASTRO_DE_COLABORADORES"
+    payload["__fonte_cadastro_sheet_id__"] = "1745799836133252"
 
     return ColaboradorRecord(
         row_id=row.id,
-        email=email,
+        email=safe_lower(cell_value(row, c_email)),
         nome=cell_value(row, c_nome),
         status=status,
         admissao=parse_date(cell_value(row, c_adm)),
         setor=cell_value(row, c_setor),
         cargo=cell_value(row, c_cargo),
         regime=cell_value(row, c_regime),
-        dias_direito=parse_int(cell_value(row, c_dias_direito), 0),
-        user_type=user_type,
-        gestor_direto=safe_lower(cell_value(row, c_gestor_direto)),
-        gestor_superior=safe_lower(cell_value(row, c_gestor_superior)),
+        unidade=cell_value(row, c_unidade),
+        empresa=cell_value(row, c_empresa),
+        telefone=cell_value(row, c_telefone),
+        dias_direito=0,
+        user_type="USER",
+        gestor_direto=str(cell_value(row, c_gestor_direto) or "").strip(),
+        gestor_superior=str(cell_value(row, c_gestor_superior) or "").strip(),
         ativo_no_app=ativo_no_app,
-        matricula=normalize_matricula(cell_value(row, c_matricula)),
+        matricula=matricula,
         payload=payload,
     )
 
@@ -394,15 +444,15 @@ def filled_score(record: ColaboradorRecord) -> int:
         record.setor,
         record.cargo,
         record.regime,
-        record.user_type,
+        record.unidade,
+        record.empresa,
+        record.telefone,
         record.gestor_direto,
         record.gestor_superior,
         record.matricula,
     )
     score = sum(1 for v in fields if v not in (None, "", [], {}, 0))
     score += status_rank(record.status)
-    if record.dias_direito > 0:
-        score += 2
     return score
 
 
@@ -416,12 +466,10 @@ def choose_better_record(current: ColaboradorRecord, candidate: ColaboradorRecor
         winner = current
         loser = candidate
 
-    for attr in ("nome", "status", "admissao", "setor", "cargo", "regime", "user_type", "gestor_direto", "gestor_superior", "matricula"):
+    for attr in ("nome", "status", "admissao", "setor", "cargo", "regime", "unidade", "empresa", "telefone", "gestor_direto", "gestor_superior", "matricula"):
         if getattr(winner, attr) in (None, "") and getattr(loser, attr) not in (None, ""):
             setattr(winner, attr, getattr(loser, attr))
 
-    if winner.dias_direito <= 0 and loser.dias_direito > 0:
-        winner.dias_direito = loser.dias_direito
 
     duplicate_rows = winner.payload.get("__duplicate_row_ids__", [])
     if loser.row_id not in duplicate_rows:
@@ -575,13 +623,16 @@ def _update_colaborador_from_record(colab: Colaborador, record: ColaboradorRecor
         "setor": clean_optional(record.setor),
         "cargo": clean_optional(record.cargo),
         "regime": clean_optional(record.regime),
-        "dias_direito": int(record.dias_direito or 0),
+        "unidade": clean_optional(record.unidade),
+        "empresa": clean_optional(record.empresa),
+        "telefone": clean_optional(record.telefone),
         "origem_sheet_id": sheet_id_str,
         "origem_row_id": row_id_str,
     }
     for attr, value in updates.items():
-        # Evita apagar informação boa do banco com célula vazia, exceto status/dias.
-        if attr not in {"status", "dias_direito", "origem_sheet_id", "origem_row_id"} and value in (None, ""):
+        # Evita apagar informação boa do banco com célula vazia, exceto status/origem.
+        # Saldos/dias de direito não vêm mais do Smartsheet.
+        if attr not in {"status", "origem_sheet_id", "origem_row_id"} and value in (None, ""):
             continue
         current = getattr(colab, attr, None)
         if not _values_equal(current, value):
@@ -599,7 +650,7 @@ def _update_colaborador_from_record(colab: Colaborador, record: ColaboradorRecor
     return changed
 
 
-def _upsert_complemento_acesso(session, colab: Colaborador, record: ColaboradorRecord, sheet_id_str: str, row_id_str: str) -> bool:
+def _upsert_complemento_acesso(session, colab: Colaborador, record: ColaboradorRecord, sheet_id_str: str, row_id_str: str, email_to_matricula: Optional[dict[str, str]] = None) -> bool:
     """Atualiza o cache de acesso/hierarquia sem mexer em saldos."""
     comp = session.query(ColaboradorComplemento).filter(ColaboradorComplemento.colaborador_id == colab.id).first()
     created = False
@@ -609,11 +660,15 @@ def _upsert_complemento_acesso(session, colab: Colaborador, record: ColaboradorR
         created = True
 
     comp.colaborador_matricula = colab.matricula
-    comp.user_type = record.user_type or "USER"
+    existing_role = _get_existing_permission_role(session, colab)
+    if created:
+        comp.user_type = existing_role or "USER"
+    elif existing_role:
+        comp.user_type = existing_role
 
-    # Relacoes de gestor sao salvas por matricula/marcador. E-mail nao cria vinculo.
-    gd_ref = normalize_ref_matricula_ou_marcador(record.gestor_direto, allow_dp=False, allow_gestor=False)
-    gs_ref = normalize_ref_matricula_ou_marcador(record.gestor_superior, allow_dp=True, allow_gestor=True)
+    # Relacoes de gestor sao gravadas por matricula/marcador. Se o Smartsheet trouxer contato/e-mail, ele e convertido para matricula ativa antes de salvar.
+    gd_ref = _resolve_gestor_ref(record.gestor_direto, email_to_matricula, allow_dp=False, allow_gestor=False)
+    gs_ref = _resolve_gestor_ref(record.gestor_superior, email_to_matricula, allow_dp=True, allow_gestor=True)
     gestor_direto = _get_colaborador_by_matricula(session, gd_ref) if gd_ref else None
     gestor_superior = _get_colaborador_by_matricula(session, gs_ref) if gs_ref and gs_ref not in {"DP", "GESTOR"} else None
 
@@ -629,31 +684,39 @@ def _upsert_complemento_acesso(session, colab: Colaborador, record: ColaboradorR
     return created
 
 
-def _sync_permissoes_usuario(session, colab: Colaborador, user_type: str) -> str:
-    """Sincroniza a tabela app_ferias.permissoes_usuario pela matrícula.
-
-    Mantemos um registro de role para todos os colaboradores processados, inclusive
-    USER, para facilitar auditoria no pgAdmin. ADMIN/DP continuam sendo as únicas
-    roles elevadas usadas pelo app.
-    """
-    role = normalize_user_type_value(user_type) or "USER"
-    if role == "ADMINISTRADOR":
-        role = "ADMIN"
-
-    # Remove roles antigas daquele colaborador para refletir o USER TYPE atual do Smartsheet.
-    session.query(PermissaoUsuario).filter(
+def _get_existing_permission_role(session, colab: Colaborador) -> str:
+    rows = session.query(PermissaoUsuario).filter(
         (PermissaoUsuario.colaborador_matricula == colab.matricula) | (PermissaoUsuario.colaborador_id == colab.id)
-    ).delete(synchronize_session=False)
+    ).all()
+    roles = {str(r.role or "").strip().upper() for r in rows}
+    if "ADMINISTRADOR" in roles or "ADMIN" in roles:
+        return "ADMIN"
+    if "DP" in roles or "RH" in roles:
+        return "DP"
+    if "USER" in roles:
+        return "USER"
+    return ""
 
+
+def _ensure_permissao_usuario_default(session, colab: Colaborador) -> str:
+    """Garante permissão mínima sem sobrescrever permissões existentes.
+
+    A coluna USER TYPE deixou de ser sincronizada do Smartsheet. A tabela
+    permissoes_usuario é a fonte operacional. Novos colaboradores recebem USER
+    apenas quando ainda não possuem nenhuma permissão cadastrada no PostgreSQL.
+    """
+    existing = _get_existing_permission_role(session, colab)
+    if existing:
+        return existing
     session.add(PermissaoUsuario(
         colaborador_id=colab.id,
         colaborador_matricula=colab.matricula,
-        role=role,
+        role="USER",
     ))
-    return role
+    return "USER"
 
 
-def _sync_hierarquia_gestao(session, colab: Colaborador, record: ColaboradorRecord) -> bool:
+def _sync_hierarquia_gestao(session, colab: Colaborador, record: ColaboradorRecord, email_to_matricula: Optional[dict[str, str]] = None) -> bool:
     """Sincroniza app_ferias.hierarquia_gestao a partir da planilha de cadastro."""
     h = session.query(HierarquiaGestao).filter(
         (HierarquiaGestao.colaborador_matricula == colab.matricula) | (HierarquiaGestao.colaborador_id == colab.id)
@@ -664,8 +727,8 @@ def _sync_hierarquia_gestao(session, colab: Colaborador, record: ColaboradorReco
         session.add(h)
         created = True
 
-    gd_ref = normalize_ref_matricula_ou_marcador(record.gestor_direto, allow_dp=False, allow_gestor=False)
-    gs_ref = normalize_ref_matricula_ou_marcador(record.gestor_superior, allow_dp=True, allow_gestor=True)
+    gd_ref = _resolve_gestor_ref(record.gestor_direto, email_to_matricula, allow_dp=False, allow_gestor=False)
+    gs_ref = _resolve_gestor_ref(record.gestor_superior, email_to_matricula, allow_dp=True, allow_gestor=True)
     gestor_direto = _get_colaborador_by_matricula(session, gd_ref) if gd_ref else None
     gestor_superior = _get_colaborador_by_matricula(session, gs_ref) if gs_ref and gs_ref not in {"DP", "GESTOR"} else None
 
@@ -687,9 +750,9 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
     - Matrícula é a chave principal de negócio.
     - Dados cadastrais principais já existentes no PostgreSQL são preservados.
     - Matrículas novas são incluídas com os dados iniciais do Smartsheet.
-    - Permissões, hierarquia e cache de acesso são sincronizados a cada execução,
-      pois essas tabelas estavam vazias na nova base e são essenciais para menus,
-      admins, gestores e DP.
+    - Hierarquia e cache de acesso são sincronizados a cada execução.
+    - Permissões existentes no PostgreSQL são preservadas; matrícula nova sem
+      permissão recebe USER.
     """
     # V22: em execuções locais usando a External Database URL do Render, a
     # deduplicação da planilha pode levar tempo. Se ela ocorrer depois que
@@ -700,6 +763,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
         records, duplicates = precomputed
     else:
         records, duplicates = deduplicate_colaboradores(cadastro)
+    email_to_matricula, gestor_email_ambiguo = _active_email_to_matricula_map(records)
     inserted = linked = existing_skipped = existing_updated = skipped = conflicts = sem_matricula = 0
     new_above_last_matricula = existing_changed = existing_unchanged = 0
     max_matricula_pg_inicio = _max_matricula_numero_pg(session)
@@ -835,7 +899,10 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
             setor=clean_optional(record.setor),
             cargo=clean_optional(record.cargo),
             regime=clean_optional(record.regime),
-            dias_direito=int(record.dias_direito or 0),
+            unidade=clean_optional(record.unidade),
+            empresa=clean_optional(record.empresa),
+            telefone=clean_optional(record.telefone),
+            dias_direito=0,
             origem_sheet_id=sheet_id_str,
             origem_row_id=row_id_str,
             raw_payload=payload,
@@ -886,14 +953,14 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
                 continue
 
             with session.begin_nested():
-                created_comp = _upsert_complemento_acesso(session, fresh_colab, record, sheet_id_str, row_id_str)
+                created_comp = _upsert_complemento_acesso(session, fresh_colab, record, sheet_id_str, row_id_str, email_to_matricula=email_to_matricula)
                 if created_comp:
                     complemento_inserted += 1
                 else:
                     complemento_updated += 1
-                _sync_permissoes_usuario(session, fresh_colab, record.user_type or "USER")
+                _ensure_permissao_usuario_default(session, fresh_colab)
                 permissoes_synced += 1
-                created_h = _sync_hierarquia_gestao(session, fresh_colab, record)
+                created_h = _sync_hierarquia_gestao(session, fresh_colab, record, email_to_matricula=email_to_matricula)
                 hierarquia_synced += 1
                 if created_h:
                     hierarquia_inserted += 1
@@ -932,7 +999,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
                 continue
 
     return {
-        "mode": "sync_by_matricula_saldo_periodo_v44_no_email_hierarchy",
+        "mode": "sync_by_matricula_cadastro_colaboradores_v46",
         "records": len(records),
         "inserted": inserted,
         "updated": existing_updated,
@@ -944,7 +1011,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
         "new_above_last_matricula": new_above_last_matricula,
         "complemento_inserted": complemento_inserted,
         "complemento_updated": complemento_updated,
-        "permissoes_synced": permissoes_synced,
+        "permissoes_default_checked": permissoes_synced,
         "hierarquia_synced": hierarquia_synced,
         "hierarquia_inserted": hierarquia_inserted,
         "skipped": skipped,
@@ -953,6 +1020,8 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
         "matched_by": matched_by,
         "conflict_details": conflict_details[:50],
         "duplicates": {key: sorted(set(rows)) for key, rows in duplicates.items()},
+        "gestor_emails_ambiguos_ignorados": sorted(gestor_email_ambiguo),
+        "gestor_email_refs_mapeadas": len(email_to_matricula),
     }
 
 
@@ -1545,7 +1614,10 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
     settings = get_settings()
     if not settings.access_token:
         raise ValueError("SMARTSHEET_ACCESS_TOKEN não configurado no Render.")
-    sheet_id = int(settings.id_folha_cadastro or 3609445264215940)
+    # Fonte oficial de dados cadastrais: CADASTRO DE COLABORADORES
+    # (Smartsheet 1745799836133252). A antiga CONTROLE_DP deixou de ser
+    # origem de cadastro/permissões/saldos.
+    sheet_id = int(getattr(settings, "id_folha_cadastro_principal", 0) or 1745799836133252)
 
     client = smartsheet.Smartsheet(settings.access_token)
     client.errors_as_exceptions(True)

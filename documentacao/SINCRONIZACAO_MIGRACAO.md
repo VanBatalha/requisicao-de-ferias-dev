@@ -1,45 +1,45 @@
-# Sincronizacao e migracao
+# Sincronização e migração
 
-## Sincronizacao Smartsheet -> PostgreSQL
+## Cadastro
 
-Fonte principal: `ferias_app/services/smartsheet_sync_service.py`.
+A sincronização de cadastro busca a planilha `1745799836133252` e atualiza o PostgreSQL por matrícula.
 
-Regras da V45:
+Executar localmente:
 
-- Matricula e a chave oficial.
-- E-mail nao cria vinculo de hierarquia.
-- Linhas do Smartsheet com `STATUS = #NO MATCH` sao ignoradas e nao entram no banco.
-- Saldos nao ficam em `colaborador_complemento`; a fonte oficial e `saldo_periodo`.
-
-## Formas de executar
-
-1. Painel ADMIN: botao `Sincronizar cadastro, permissoes e hierarquia`.
-2. Local/manual:
-
-```powershell
+```bash
 python sync_cadastro_smartsheet.py
 ```
 
-3. Automatico: `ferias_app/services/auto_sync_service.py`.
+Variáveis principais:
 
-A sincronizacao automatica verifica o fuso `APP_TIMEZONE`, padrao `America/Fortaleza`. Depois de 12h, se ainda nao houve sincronizacao com sucesso no dia, ela dispara em background. Se o dia anterior foi perdido, o primeiro acesso ao app tambem dispara em background.
+```env
+SMARTSHEET_ACCESS_TOKEN=...
+ID_FOLHA_CADASTRO_PRINCIPAL=1745799836133252
+DB_TARGET=oficial
+DB_SCHEMA=app_ferias
+APP_TIMEZONE=America/Fortaleza
+```
 
-## SQL da V44
+## Painel ADMIN
 
-- `migracao/sql/v44_hierarquia_matricula_sem_email_custom.sql`
-- `migracao/sql/validacao_v44_hierarquia_matricula.sql`
+O botão de sincronização do Painel ADMIN dispara a rotina em background e acompanha o status em `app_ferias.sync_state`.
 
+A rotina do botão não recalcula saldos por padrão e não importa solicitações, salvo se isso for pedido explicitamente por payload interno.
 
-## V45 - Botao do Painel ADMIN
+## Sincronização automática
 
-O endpoint `POST /api/admin/sync-cadastro` nao executa mais a sincronizacao de forma bloqueante.
-Ele dispara a rotina em background e retorna HTTP 202, evitando timeout do Gunicorn/Render.
+O serviço `auto_sync_service.py` verifica diariamente no fuso `America/Fortaleza`:
 
-Por padrao, o botao sincroniza apenas cadastro, permissoes e hierarquia.
-Solicitacoes e recalculo de saldos somente entram quando `include_solicitacoes=true` ou `recalculate=true` forem enviados explicitamente.
+- após 12h, se ainda não houve sucesso no dia, dispara sincronização em background;
+- se o dia anterior ficou sem sync, o primeiro acesso ao app dispara sincronização em background;
+- a navegação do usuário não fica bloqueada.
 
-Arquivos relacionados:
-- `ferias_app/blueprints/admin_api.py`
-- `ferias_app/services/smartsheet_sync_service.py`
-- `templates/painel_admin.html`
-- `ferias_app/services/auto_sync_service.py`
+## Saldos
+
+Saldos não são atualizados a partir da planilha de cadastro. A fonte oficial é `app_ferias.saldo_periodo`.
+
+Para recalcular saldos a partir das solicitações existentes:
+
+```bash
+python migracao/scripts/recalcular_saldo_periodo.py
+```

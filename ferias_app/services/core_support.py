@@ -27,7 +27,7 @@ TOKEN_URL = "https://api.smartsheet.com/2.0/token"
 CURRENT_USER_URL = "https://api.smartsheet.com/2.0/users/me"
 
 # IDs das folhas no Smartsheet
-ID_FOLHA_CADASTRO = int(os.getenv("ID_FOLHA_CADASTRO", "3609445264215940"))  # cadastro colaboradores
+ID_FOLHA_CADASTRO = int(os.getenv("ID_FOLHA_CADASTRO_PRINCIPAL", os.getenv("ID_FOLHA_CADASTRO", "1745799836133252")))  # CADASTRO DE COLABORADORES
 ID_FOLHA_SOLICITACOES = int(os.getenv("ID_FOLHA_SOLICITACOES", "2890766507528068"))  # solicitações de férias
 
 """Observação importante (Gestores/Subordinados)
@@ -51,7 +51,7 @@ sem dependência de arquivo local.
 # PERMISSÕES (USER TYPE) - VIA PLANILHA CADASTRO
 # ============================================
 #
-# A planilha de cadastro (ID_FOLHA_CADASTRO = 3609445264215940) possui a coluna:
+# A planilha de cadastro (ID_FOLHA_CADASTRO = 1745799836133252) possui a coluna:
 #   - USER TYPE
 #
 # Valores esperados (case-insensitive):
@@ -1542,7 +1542,7 @@ def inject_user_context():
     )
 
 def listar_colaboradores():
-    """Lista todos os colaboradores da folha de CADASTRO (3609445264215940)"""
+    """Lista todos os colaboradores da folha de CADASTRO (1745799836133252)"""
     # Cache por request (evita múltiplos get_sheet no mesmo request)
     try:
         cached = getattr(g, "_colaboradores_list_cache", None)

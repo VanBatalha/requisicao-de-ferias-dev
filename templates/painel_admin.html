@@ -179,8 +179,8 @@
         <input id="cadRegime" class="input" />
       </div>
       <div>
-        <label class="muted">Dias de direito</label>
-        <input id="cadDiasDireito" class="input" type="number" min="0" />
+        <label class="muted">Saldos</label>
+        <div class="muted" style="padding:10px 0;">Calculados pela tabela saldo_periodo.</div>
       </div>
     </div>
 
@@ -198,11 +198,11 @@
         <label class="chk" style="margin-top:24px;"><input type="checkbox" id="cadAtivoNoApp" /> Ativo no app</label>
       </div>
       <div>
-        <label class="muted">Gestor direto e-mail</label>
-        <input id="cadGestorDireto" class="input" type="email" />
+        <label class="muted">Gestor direto (matrícula)</label>
+        <input id="cadGestorDireto" class="input" placeholder="Ex.: MAT00061" />
       </div>
       <div>
-        <label class="muted">Gestor superior e-mail</label>
+        <label class="muted">Gestor superior (matrícula, DP ou GESTOR)</label>
         <input id="cadGestorSuperior" class="input" />
       </div>
     </div>
@@ -227,10 +227,10 @@
 <div class="card" style="margin-top:16px;">
   <h2>Sincronização com Smartsheet</h2>
   <p class="muted">
-    Lê a planilha de cadastro <strong>3609445264215940</strong>. A coluna <strong>MATRÍCULA</strong> é usada como ID externo. Cadastros já existentes preservam os dados principais editados no app, mas a sincronização atualiza <strong>permissões</strong>, <strong>hierarquia de gestão</strong> e o cache de acesso.
+    Lê a planilha principal <strong>CADASTRO DE COLABORADORES</strong> (<strong>1745799836133252</strong>). A coluna <strong>MATRÍCULA</strong> é usada como ID oficial. A sincronização atualiza dados cadastrais e hierarquia; <strong>permissões</strong> permanecem no PostgreSQL e matrícula nova recebe USER por padrão.
   </p>
   <div class="actions" style="margin-top:14px;">
-    <button class="btn" id="syncBtnCadastro">Sincronizar cadastro, permissões e hierarquia</button>
+    <button class="btn" id="syncBtnCadastro">Sincronizar cadastro e hierarquia</button>
     <button class="btn btn-secondary" id="syncBtnStatus">Atualizar status</button>
   </div>
   <div id="syncMsg" class="muted" style="margin-top:10px;"></div>
@@ -455,11 +455,10 @@
     cad$("cadSetor").value = c.setor || "";
     cad$("cadCargo").value = c.cargo || "";
     cad$("cadRegime").value = c.regime || "";
-    cad$("cadDiasDireito").value = c.dias_direito || 0;
     cad$("cadUserType").value = c.user_type || "USER";
     cad$("cadAtivoNoApp").checked = !!c.ativo_no_app;
-    cad$("cadGestorDireto").value = c.gestor_direto_email || "";
-    cad$("cadGestorSuperior").value = c.gestor_superior_email || "";
+    cad$("cadGestorDireto").value = c.gestor_direto || "";
+    cad$("cadGestorSuperior").value = c.gestor_superior || "";
     renderSaldosPeriodo(c.saldos_periodo || []);
     cad$("cadEditor").style.display = "block";
   }
@@ -474,11 +473,10 @@
       setor: cadNorm(cad$("cadSetor").value),
       cargo: cadNorm(cad$("cadCargo").value),
       regime: cadNorm(cad$("cadRegime").value),
-      dias_direito: parseInt(cad$("cadDiasDireito").value || "0", 10),
       user_type: cad$("cadUserType").value || "USER",
       ativo_no_app: cad$("cadAtivoNoApp").checked,
-      gestor_direto_email: cadNorm(cad$("cadGestorDireto").value).toLowerCase(),
-      gestor_superior_email: cadNorm(cad$("cadGestorSuperior").value).toLowerCase(),
+      gestor_direto: cadNorm(cad$("cadGestorDireto").value).toUpperCase(),
+      gestor_superior: cadNorm(cad$("cadGestorSuperior").value).toUpperCase(),
     };
   }
 
@@ -540,7 +538,7 @@
     if (extra.inserted !== undefined) partes.push(`${extra.inserted} novo(s)`);
     if (extra.updated !== undefined && extra.updated > 0) partes.push(`${extra.updated} atualizado(s)`);
     if (extra.existing_skipped !== undefined) partes.push(`${extra.existing_skipped} cadastro(s) já existente(s) preservado(s)`);
-    if (extra.permissoes_synced !== undefined) partes.push(`${extra.permissoes_synced} permissões sincronizada(s)`);
+    if (extra.permissoes_default_checked !== undefined) partes.push(`${extra.permissoes_default_checked} permissão(ões) verificada(s)`);
     if (extra.hierarquia_synced !== undefined) partes.push(`${extra.hierarquia_synced} hierarquia(s) sincronizada(s)`);
     if (extra.linked !== undefined && extra.linked > 0) partes.push(`${extra.linked} vínculo(s) de matrícula criado(s)`);
     if (extra.sem_matricula !== undefined && extra.sem_matricula > 0) partes.push(`${extra.sem_matricula} sem matrícula ignorado(s)`);
@@ -576,7 +574,7 @@
   }
 
   async function sincronizarCadastro() {
-    if (!confirm("Sincronizar agora o cadastro do Smartsheet com o PostgreSQL?\n\nOs dados principais dos colaboradores já existentes serão preservados, mas permissões e hierarquia serão atualizadas com base no Smartsheet.")) return;
+    if (!confirm("Sincronizar agora o CADASTRO DE COLABORADORES do Smartsheet com o PostgreSQL?\n\nA matrícula é a chave oficial. Dados cadastrais e hierarquia serão atualizados; permissões continuam sendo controladas no PostgreSQL.")) return;
     syncSetMsg("Sincronização iniciada em background. Você pode acompanhar pelo status.", "muted");
     setSyncButtonRunning(true);
     try {

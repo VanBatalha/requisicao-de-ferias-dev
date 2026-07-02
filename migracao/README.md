@@ -1,15 +1,20 @@
-# Migracao
+# Migração
 
-## Scripts SQL atuais
+Esta pasta reúne scripts manuais e SQLs de apoio.
 
-- `sql/v43_drop_saldos_colaborador_complemento.sql`: remove saldos antigos de `colaborador_complemento`.
-- `sql/validacao_v43_colaborador_complemento_sem_saldos.sql`: valida a remocao dos saldos antigos.
-- `sql/v44_pre_add_gestor_superior_email.sql`: pre-deploy seguro para adicionar a coluna nova antes de subir a V44.
-- `sql/v44_hierarquia_matricula_sem_email_custom.sql`: remove `gestor_superior_tipo`/`gestor_superior_email_custom` e padroniza hierarquia por matricula/marcadores.
-- `sql/validacao_v44_hierarquia_matricula.sql`: valida a estrutura V44.
+## Scripts
 
-## Scripts Python
+- `scripts/recalcular_saldo_periodo.py` - recalcula `saldo_periodo` a partir das solicitações existentes.
+- `scripts/import_data.py` - importação legada; usar apenas para cenários de migração controlada.
+- `scripts/repair_colaborador_complemento.py` - reparos pontuais de complemento/hierarquia.
 
-- `scripts/import_data.py`: importacao a partir de exportacao XLSX.
-- `scripts/recalcular_saldo_periodo.py`: recalculo manual de `saldo_periodo`.
-- `scripts/repair_colaborador_complemento.py`: reparo legado, manter apenas para historico operacional.
+## SQLs principais
+
+- `sql/v43_drop_saldos_colaborador_complemento.sql` - remove colunas antigas de saldo em `colaborador_complemento`.
+- `sql/v44_hierarquia_matricula_sem_email_custom.sql` - remove estrutura antiga `EMAIL_CUSTOM` e padroniza hierarquia por matrícula.
+- `sql/validacao_v44_hierarquia_matricula.sql` - valida estrutura de hierarquia atual.
+
+## Regra atual
+
+Cadastro vem da planilha `1745799836133252` e é gravado por matrícula.
+Permissões ficam em `permissoes_usuario` e saldos ficam em `saldo_periodo`.
