@@ -10,11 +10,21 @@ from .logging_config import setup_logging
 from .services.auth_service import inject_user_context
 
 
-def create_app() -> Flask:
-    """Cria e configura a aplicação Flask (app factory)."""
+def create_app(run_db_migrations: bool = False) -> Flask:
+    """Cria e configura a aplicação Flask (app factory).
+
+    No Web Service, run_db_migrations deve ficar False.
+    Scripts manuais podem chamar create_app(run_db_migrations=True).
+    """
 
     setup_logging()
     settings = get_settings()
+
+    try:
+        from .logging_config import get_logger as _get_logger
+        _get_logger(__name__).info("Gestao Ferias build V40 carregado")
+    except Exception:
+        pass
 
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -27,7 +37,7 @@ def create_app() -> Flask:
 
     # Inicializa o banco de dados PostgreSQL
     from .services.postgres_service import init_db
-    init_db()
+    init_db(run_migrations=run_db_migrations)
 
     # Rotas (Blueprint)
     app.register_blueprint(bp)

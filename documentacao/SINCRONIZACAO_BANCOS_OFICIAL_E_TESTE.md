@@ -228,3 +228,44 @@ Remove-Item Env:DB_TARGET -ErrorAction SilentlyContinue
 ```
 
 Depois mantenha a configuração desejada apenas no arquivo `.env`.
+
+
+## V39 - Inicialização rápida do Web Service no Render
+
+A partir da V39, o Web Service **não executa migrações/DDL automaticamente ao iniciar**. Isso evita que comandos como `ALTER TABLE`, `CREATE INDEX` e `Base.metadata.create_all()` travem o deploy ou disputem lock com a sincronização no banco oficial.
+
+No Render Web Service, deixe `DB_RUN_MIGRATIONS_ON_START` vazio ou `false`:
+
+```env
+DB_RUN_MIGRATIONS_ON_START=false
+```
+
+Para sincronização manual, os scripts já definem internamente:
+
+```env
+DB_RUN_MIGRATIONS_ON_START=true
+```
+
+Assim, a regra fica:
+
+- Web Service: apenas conecta e atende o app, sem mexer na estrutura do banco na inicialização.
+- Scripts de migração/sincronização: podem criar colunas/tabelas defensivas quando forem executados manualmente.
+
+Se uma nova versão exigir alteração estrutural no banco oficial, rode primeiro os SQLs da pasta `migracao/sql` pelo pgAdmin ou execute o script de sincronização/recalculo manualmente. Depois faça o deploy do Web Service.
+
+
+## Observação V40 - migrações e Render Web Service
+
+O Web Service do Render não deve executar migrações/DDL ao iniciar.
+Na V40 isso é controlado no código: `create_app()` inicia sem migrações por padrão.
+
+Não é necessário criar variável `DB_RUN_MIGRATIONS_ON_START` no Render.
+
+As migrações defensivas continuam sendo aplicadas somente quando você roda scripts manuais, por exemplo:
+
+```powershell
+python sync_cadastro_smartsheet.py
+python migracao/scripts/recalcular_saldo_periodo.py
+```
+
+Esses scripts chamam `create_app(run_db_migrations=True)` explicitamente.

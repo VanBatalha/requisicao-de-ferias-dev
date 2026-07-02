@@ -44,8 +44,12 @@ _ENGINE = None
 _SessionLocal = None
 
 
-def init_db():
-    """Inicializa a conexão com o banco de dados."""
+def init_db(run_migrations: bool = False):
+    """Inicializa a conexão com o banco de dados.
+
+    Por padrão, o Web Service NÃO executa DDL/migrações no startup.
+    Scripts manuais de sincronização/recalculo chamam init_db(run_migrations=True).
+    """
     global _ENGINE, _SessionLocal
     
     settings = get_settings()
@@ -91,8 +95,21 @@ def init_db():
         finally:
             cursor.close()
 
+    _SessionLocal = sessionmaker(bind=_ENGINE, expire_on_commit=False)
+
+    # V40: o Web Service nunca deve executar DDL/migrações no startup.
+    # Isso evita travar o deploy antes de abrir a porta do Render.
+    # Apenas scripts manuais devem chamar init_db(run_migrations=True).
+    if not run_migrations:
+        log.info(
+            "Banco de dados PostgreSQL inicializado no schema %s (DB_TARGET=%s, DDL inicial desativado no Web Service)",
+            schema,
+            getattr(settings, "db_target", "auto"),
+        )
+        return
+
     # Garante o schema antes do create_all. A aplicação usa modelos sem schema fixo,
-    # então o search_path precisa apontar para ferias_app; caso contrário o SQLAlchemy
+    # então o search_path precisa apontar para app_ferias; caso contrário o SQLAlchemy
     # pode procurar/criar tabelas no public e não enxergar os dados importados.
     with _ENGINE.begin() as conn:
         conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}"))
@@ -100,8 +117,6 @@ def init_db():
         safe_tz = str(getattr(settings, "app_timezone", "America/Fortaleza") or "America/Fortaleza").replace("'", "''")
         conn.execute(text(f"SET TIME ZONE '{safe_tz}'"))
 
-    _SessionLocal = sessionmaker(bind=_ENGINE, expire_on_commit=False)
-    
     # Cria as tabelas se não existirem dentro do schema configurado
     Base.metadata.create_all(_ENGINE)
 
@@ -295,7 +310,7 @@ def get_db_session() -> Session:
     """Obtém a sessão do banco para o request atual."""
     if not hasattr(g, '_db_session') or g._db_session is None:
         if _SessionLocal is None:
-            init_db()
+            init_db(run_migrations=False)
         g._db_session = _SessionLocal()
     return g._db_session
 
@@ -321,7 +336,7 @@ def dispose_engine():
 def get_session():
     """Context manager para criar e fechar uma sessão."""
     if _SessionLocal is None:
-        init_db()
+        init_db(run_migrations=False)
     session = _SessionLocal()
     try:
         yield session

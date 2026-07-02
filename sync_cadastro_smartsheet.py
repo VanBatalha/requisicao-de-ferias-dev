@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env", override=True)
-
 from ferias_app import create_app
 from ferias_app.services.smartsheet_sync_service import sync_cadastro_from_smartsheet
 
@@ -40,7 +39,7 @@ def main() -> int:
     print(f"- RECALCULATE_SALDOS={recalculate}")
     print(f"- SYNC_REFERENCE_DATE={os.getenv('SYNC_REFERENCE_DATE') or 'data atual do ambiente'}")
 
-    app = create_app()
+    app = create_app(run_db_migrations=True)
     with app.app_context():
         result = sync_cadastro_from_smartsheet(
             triggered_by="cron",
