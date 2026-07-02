@@ -669,3 +669,248 @@ def existe_solicitacao_duplicada(colaborador_email: str, tipo_solicitacao: str, 
             if canonical_status(row.status or "").upper() in statuses_bloqueio:
                 return True
     return False
+
+# ---------------------------------------------------------------------------
+# V41 - consultas leves para a tela de Solicitações (/ferias)
+# ---------------------------------------------------------------------------
+
+def _num_int(value: Any) -> int:
+    try:
+        return int(round(float(value or 0)))
+    except Exception:
+        return 0
+
+
+def listar_colaboradores_opcoes_ativas_postgres() -> List[Dict[str, Any]]:
+    """Lista leve de colaboradores ativos para autocomplete.
+
+    Esta função evita ``colaborador_to_legacy`` porque a tela de solicitação só
+    precisa de matrícula, nome e e-mail informativo. A conversão legada calcula
+    hierarquia/permissões por colaborador e fica cara no banco oficial remoto.
+    """
+    session = get_db_session()
+    query = (
+        session.query(
+            Colaborador.id,
+            Colaborador.matricula,
+            Colaborador.email,
+            Colaborador.nome_completo,
+            Colaborador.status,
+            ColaboradorComplemento.ativo_no_app,
+        )
+        .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
+    )
+    query = _active_query_filter(query)
+    try:
+        query = query.filter(or_(ColaboradorComplemento.ativo_no_app.is_(None), ColaboradorComplemento.ativo_no_app.is_(True)))
+    except Exception:
+        pass
+    rows = query.order_by(func.lower(Colaborador.nome_completo).asc(), Colaborador.matricula.asc()).all()
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        mat = str(row.matricula or '').strip().upper()
+        if not mat or mat in seen:
+            continue
+        seen.add(mat)
+        nome = str(row.nome_completo or row.email or mat).strip()
+        out.append({
+            'id': row.id,
+            'matricula': mat,
+            'MATRICULA': mat,
+            'MATRÍCULA': mat,
+            'email': safe_lower(row.email or ''),
+            'EMAIL DA EMPRESA': safe_lower(row.email or ''),
+            'nome': nome,
+            'NOME COMPLETO': nome,
+            'status': row.status or 'ATIVO',
+            'STATUS': row.status or 'ATIVO',
+            'ativo_no_app': bool(row.ativo_no_app) if row.ativo_no_app is not None else True,
+        })
+    return out
+
+
+def listar_colaboradores_opcoes_ferias_postgres(usuario_email: str, role: str | None = None) -> List[Dict[str, Any]]:
+    """Lista leve de colaboradores ATIVOS dentro do escopo da tela /ferias.
+
+    Regra operacional atual:
+    - ADMIN vê todos os colaboradores ativos;
+    - DP vê colaboradores marcados com gestor_direto/gestor_superior = DP e
+      também vínculos diretos à sua matrícula, quando existirem;
+    - Gestor vê colaboradores cuja matrícula aparece em gestor_direto ou
+      gestor_superior. Quando gestor_superior = GESTOR, o responsável é o
+      gestor_direto.
+
+    A função é deliberadamente baseada em matrícula e colunas leves, sem
+    conversão legada e sem consultas por colaborador.
+    """
+    session = get_db_session()
+    usuario_email = safe_lower(usuario_email or '')
+    role_norm = str(role or '').strip().upper()
+
+    usuario_colab = get_colaborador_model(usuario_email) if usuario_email else None
+    usuario_matricula = str(getattr(usuario_colab, 'matricula', '') or '').strip().upper()
+
+    gd = func.upper(func.trim(func.coalesce(ColaboradorComplemento.gestor_direto, '')))
+    gs = func.upper(func.trim(func.coalesce(ColaboradorComplemento.gestor_superior, '')))
+
+    query = (
+        session.query(
+            Colaborador.id,
+            Colaborador.matricula,
+            Colaborador.email,
+            Colaborador.nome_completo,
+            Colaborador.status,
+            ColaboradorComplemento.ativo_no_app,
+            ColaboradorComplemento.gestor_direto,
+            ColaboradorComplemento.gestor_superior,
+        )
+        .outerjoin(ColaboradorComplemento, ColaboradorComplemento.colaborador_id == Colaborador.id)
+    )
+    query = _active_query_filter(query)
+    query = query.filter(or_(ColaboradorComplemento.ativo_no_app.is_(None), ColaboradorComplemento.ativo_no_app.is_(True)))
+
+    if role_norm in {'ADMIN', 'ADMINISTRADOR'}:
+        pass
+    elif role_norm in {'DP', 'RH'}:
+        filtros = [gd == 'DP', gs == 'DP']
+        if usuario_matricula:
+            filtros.extend([gd == usuario_matricula, gs == usuario_matricula])
+        query = query.filter(or_(*filtros))
+    else:
+        if not usuario_matricula:
+            return []
+        query = query.filter(or_(gd == usuario_matricula, gs == usuario_matricula))
+
+    rows = query.order_by(func.lower(Colaborador.nome_completo).asc(), Colaborador.matricula.asc()).all()
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        mat = str(row.matricula or '').strip().upper()
+        if not mat or mat in seen:
+            continue
+        seen.add(mat)
+        nome = str(row.nome_completo or row.email or mat).strip()
+        out.append({
+            'id': row.id,
+            'matricula': mat,
+            'MATRICULA': mat,
+            'MATRÍCULA': mat,
+            'email': safe_lower(row.email or ''),
+            'EMAIL DA EMPRESA': safe_lower(row.email or ''),
+            'nome': nome,
+            'NOME COMPLETO': nome,
+            'status': row.status or 'ATIVO',
+            'STATUS': row.status or 'ATIVO',
+            'ativo_no_app': bool(row.ativo_no_app) if row.ativo_no_app is not None else True,
+            'gestor_direto': str(row.gestor_direto or '').strip().upper(),
+            'gestor_superior': str(row.gestor_superior or '').strip().upper(),
+        })
+    return out
+
+
+def get_resumo_ferias_por_matricula_postgres(matricula: str) -> Dict[str, Any]:
+    """Resumo de férias direto da tabela oficial saldo_periodo.
+
+    A matrícula é a chave operacional. Não resolve colaborador por e-mail.
+    """
+    session = get_db_session()
+    matricula = str(matricula or '').strip().upper()
+    empty = {
+        'regular': {'direito': 0, 'usados': 0, 'reservados': 0, 'saldo': 0, 'ajustes': 0, 'periodos': [], 'periodo_atual': None},
+        'premium': {'direito': 0, 'usados': 0, 'reservados': 0, 'saldo': 0, 'ajustes': 0, 'periodos': [], 'periodo_atual': None},
+        'total_solicitacoes': 0,
+    }
+    if not matricula:
+        return empty
+
+    rows = (
+        session.query(SaldoPeriodoNovo)
+        .filter(func.upper(SaldoPeriodoNovo.colaborador_matricula) == matricula)
+        .order_by(SaldoPeriodoNovo.tipo_saldo.asc(), SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+        .all()
+    )
+    grupos: Dict[str, List[Dict[str, Any]]] = {'REGULAR': [], 'PREMIUM': []}
+    for s in rows:
+        tipo = str(s.tipo_saldo or 'REGULAR').upper()
+        if tipo not in grupos:
+            grupos[tipo] = []
+        grupos[tipo].append({
+            'id': s.id,
+            'periodo_id': s.id,
+            'numero': int(s.periodo_numero or 0),
+            'inicio': s.data_inicio,
+            'fim': s.data_fim,
+            'inicio_fmt': _formatar_data_br(s.data_inicio),
+            'fim_fmt': _formatar_data_br(s.data_fim),
+            'direito': _num_int(s.saldo_inicial),
+            'usados': _num_int(s.saldo_utilizado),
+            'reservados': _num_int(s.saldo_reservado),
+            'saldo': _num_int(s.saldo_disponivel),
+            'label': _periodo_label(int(s.periodo_numero or 0), s.data_inicio, s.data_fim),
+            'atual': bool(s.is_atual),
+            'tipo_saldo': tipo,
+        })
+
+    def totals(periodos: List[Dict[str, Any]]):
+        return {
+            'direito': sum(_num_int(p.get('direito')) for p in periodos),
+            'usados': sum(_num_int(p.get('usados')) for p in periodos),
+            'reservados': sum(_num_int(p.get('reservados')) for p in periodos),
+            'saldo': sum(_num_int(p.get('saldo')) for p in periodos),
+            'ajustes': 0,
+            'periodos': periodos,
+            'periodo_atual': next((p for p in periodos if p.get('atual')), None),
+        }
+
+    try:
+        total = session.query(Solicitacao.id).filter(
+            func.upper(Solicitacao.colaborador_matricula) == matricula,
+            Solicitacao.is_ajuste.is_(False),
+        ).count()
+    except Exception:
+        total = 0
+
+    return {
+        'regular': totals(grupos.get('REGULAR', [])),
+        'premium': totals(grupos.get('PREMIUM', [])),
+        'total_solicitacoes': int(total),
+    }
+
+
+def _solicitacao_tuple_matricula(sol: Solicitacao):
+    status = canonical_status(sol.status or 'PENDENTE')
+    saldo_tipo = (sol.saldo_tipo or sol.tipo_ferias or infer_saldo_tipo(sol.observacoes or '', '')).upper() or 'REGULAR'
+    ident = str(sol.colaborador_matricula or '').strip().upper()
+    if not ident:
+        ident = safe_lower(sol.colaborador_email or '')
+    dias_val = sol.dias if sol.dias is not None else sol.dias_solicitados
+    return (
+        sol.id,
+        ident,
+        _formatar_data_br(sol.data_inicio),
+        _formatar_data_br(sol.data_fim),
+        _num_int(dias_val),
+        status,
+        sol.solicitacao or sol.tipo_solicitacao or '',
+        saldo_tipo,
+        sol.observacoes or '',
+    )
+
+
+def listar_solicitacoes_matricula_postgres(matricula: str, limit: int = 250):
+    """Histórico da tela /ferias para uma matrícula específica.
+
+    Evita carregar todas as solicitações do banco a cada troca de colaborador.
+    """
+    session = get_db_session()
+    matricula = str(matricula or '').strip().upper()
+    if not matricula:
+        return []
+    query = session.query(Solicitacao).filter(
+        func.upper(Solicitacao.colaborador_matricula) == matricula,
+        Solicitacao.is_ajuste.is_(False),
+    ).order_by(Solicitacao.data_inicio.desc(), Solicitacao.id.desc())
+    if limit and limit > 0:
+        query = query.limit(int(limit))
+    return [_solicitacao_tuple_matricula(row) for row in query.all()]

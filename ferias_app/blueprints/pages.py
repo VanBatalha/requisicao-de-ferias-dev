@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 import unicodedata
 
 from flask import redirect, render_template, request, session, url_for
@@ -32,6 +33,13 @@ from ..core import (
     tem_grupo,
 )
 from ..services.simulation_service import get_simulated_gestor, is_in_simulation
+from ..services.postgres_compat_service import (
+    postgres_enabled,
+    listar_colaboradores_opcoes_ativas_postgres,
+    listar_colaboradores_opcoes_ferias_postgres,
+    get_resumo_ferias_por_matricula_postgres,
+    listar_solicitacoes_matricula_postgres,
+)
 @bp.route("/", endpoint="home")
 @bp.route("/")
 def index():
@@ -58,6 +66,16 @@ def index():
 
 @bp.route("/ferias", methods=["GET", "POST"])
 def ferias():
+    """Tela de solicitação de férias.
+
+    V42: a seleção operacional é por matrícula e a rota foi otimizada para
+    carregar apenas os dados necessários do colaborador selecionado:
+    - lista leve de colaboradores ativos;
+    - resumo direto da tabela saldo_periodo;
+    - histórico somente da matrícula selecionada.
+    """
+    t0 = time.perf_counter()
+
     # Aceita POST como fallback caso o JS do formulário não execute (evita 405 Method Not Allowed)
     if request.method == "POST":
         resp = api_solicitar_ferias()
@@ -97,7 +115,10 @@ def ferias():
     else:
         render_mode = "normal"
 
-    if not (is_dp_or_admin or is_gestor(gestor_email)):
+    # Em PostgreSQL a checagem de escopo é feita por matrícula no próprio
+    # carregamento leve da lista. No legado Smartsheet preservamos a checagem
+    # antiga por e-mail/grupo.
+    if not postgres_enabled() and not (is_dp_or_admin or is_gestor(gestor_email)):
         return render_template(
             "sem_permissao.html",
             active_page="ferias",
@@ -105,20 +126,11 @@ def ferias():
             gestor_email=gestor_email,
         ), 403
 
-    # V38: a tela de solicitações deve operar exclusivamente por matrícula.
-    # O parâmetro legado ?colaborador=email não deve selecionar ninguém, pois
-    # e-mails podem estar duplicados ou preenchidos incorretamente.
-    if request.args.get("colaborador"):
-        mat_param = str(request.args.get("matricula") or request.args.get("colaborador_matricula") or "").strip().upper()
-        log.warning("FERIAS_V38 parametro legado ignorado: colaborador=%s matricula=%s", request.args.get("colaborador"), mat_param)
-        if mat_param:
-            return redirect(url_for("ferias.ferias", matricula=mat_param))
+    # V41: corta definitivamente seleção por e-mail. Se alguém acessar uma URL
+    # antiga com ?colaborador=email, ela não é usada para identificar pessoa.
+    if request.args.get("colaborador") and not (request.args.get("matricula") or request.args.get("colaborador_matricula")):
+        log.warning("FERIAS_V41 parametro legado ignorado: colaborador=%s", request.args.get("colaborador"))
         return redirect(url_for("ferias.ferias"))
-
-    try:
-        colaboradores_all = listar_colaboradores(only_ativos=True)
-    except Exception:
-        colaboradores_all = listar_colaboradores_cached()
 
     def _matricula_colab(c: dict) -> str:
         return str(c.get("MATRICULA") or c.get("MATRÍCULA") or c.get("matricula") or "").strip().upper()
@@ -127,119 +139,130 @@ def ferias():
         return safe_lower(c.get("EMAIL DA EMPRESA") or c.get("email") or "")
 
     def _nome_colab(c: dict) -> str:
-        return str(c.get("NOME COMPLETO") or c.get("nome") or _email_colab(c) or _matricula_colab(c) or "").strip()
+        return str(c.get("NOME COMPLETO") or c.get("nome") or _matricula_colab(c) or "").strip()
 
-    ativos_por_matricula: dict[str, dict] = {}
-    ativos_por_email: dict[str, dict] = {}
-    def _mat_num(mat: str) -> int:
-        import re
-        m = re.search(r"(\d+)", str(mat or ""))
-        return int(m.group(1)) if m else 0
-
-    def _prefer_colab_atual(novo: dict, atual: dict | None) -> dict:
-        if not atual:
-            return novo
-        # Se o mesmo e-mail aparece em mais de uma matrícula ATIVA, preferimos a
-        # matrícula mais alta/recente. Isso corrige e-mails reaproveitados ou
-        # preenchidos indevidamente sem voltar a usar e-mail como chave.
-        n_mat = _matricula_colab(novo)
-        a_mat = _matricula_colab(atual)
-        return novo if _mat_num(n_mat) >= _mat_num(a_mat) else atual
-
-    for c in colaboradores_all or []:
-        if not isinstance(c, dict) or not is_colaborador_ativo(c):
-            continue
-        mat = _matricula_colab(c)
-        if not mat:
-            continue
-        ativos_por_matricula[mat] = c
-        em = _email_colab(c)
-        if em:
-            ativos_por_email[em] = _prefer_colab_atual(c, ativos_por_email.get(em))
-
-    nome_por_email: dict[str, str] = {}
-    matricula_por_email: dict[str, str] = {}
-    for c in ativos_por_matricula.values():
-        em = _email_colab(c)
-        if not em:
-            continue
-        nome_por_email[em] = _nome_colab(c)
-        matricula_por_email[em] = _matricula_colab(c)
-
-    disponiveis: list[dict] = []
+    t_list_start = time.perf_counter()
     subs: list[str] = []
 
-    if is_dp_or_admin:
-        disponiveis = list(ativos_por_matricula.values())
-    else:
-        subs = get_subordinados(gestor_email)
-        if not subs:
+    if postgres_enabled():
+        # Consulta leve e filtrada no backend. A matrícula é a chave operacional.
+        # ADMIN vê todos; DP/Gestor respeitam colaborador_complemento.gestor_direto
+        # e gestor_superior. Não há filtragem por e-mail nesta tela.
+        escopo_role = "ADMIN" if role == "admin" else ("DP" if role == "DP" else "GESTOR")
+        opcoes_base = listar_colaboradores_opcoes_ferias_postgres(gestor_email, escopo_role)
+        if not is_dp_or_admin and not opcoes_base:
             return render_template(
                 "sem_permissao.html",
                 active_page="ferias",
                 user=user,
                 gestor_email=gestor_email,
                 message=(
-                    "Nenhum subordinado vinculado ao seu usuário. "
-                    "Peça ao DP para preencher a coluna 'GESTOR DIRETO' (ou 'GESTOR') no cadastro."
+                    "Nenhum subordinado ativo vinculado à sua matrícula. "
+                    "Peça ao DP/Admin para preencher gestor_direto ou gestor_superior no cadastro."
                 ),
             ), 403
-        seen_mats: set[str] = set()
-        for e in subs:
-            c = ativos_por_email.get(safe_lower(e))
-            if not c:
-                continue
-            mat = _matricula_colab(c)
-            if mat and mat not in seen_mats:
-                seen_mats.add(mat)
-                disponiveis.append(c)
-        own = ativos_por_email.get(gestor_email)
-        if own:
-            mat = _matricula_colab(own)
-            if mat and mat not in seen_mats:
-                disponiveis.append(own)
+    else:
+        colaboradores_all = listar_colaboradores(only_ativos=True)
+        opcoes_base = [
+            {"matricula": _matricula_colab(c), "email": _email_colab(c), "nome": _nome_colab(c), "status": c.get("STATUS") or c.get("status")}
+            for c in (colaboradores_all or [])
+            if isinstance(c, dict) and is_colaborador_ativo(c) and _matricula_colab(c)
+        ]
 
-    opcoes = [
-        {"matricula": _matricula_colab(c), "email": _email_colab(c), "nome": _nome_colab(c)}
-        for c in disponiveis
-        if _matricula_colab(c)
-    ]
+        if not is_dp_or_admin:
+            subs = get_subordinados(gestor_email)
+            if not subs:
+                return render_template(
+                    "sem_permissao.html",
+                    active_page="ferias",
+                    user=user,
+                    gestor_email=gestor_email,
+                    message=(
+                        "Nenhum subordinado vinculado ao seu usuário. "
+                        "Peça ao DP para preencher o gestor direto no cadastro."
+                    ),
+                ), 403
+            allowed = {safe_lower(e) for e in ([gestor_email] + list(subs or [])) if safe_lower(e)}
+            allowed_locals = {e.split('@', 1)[0] for e in allowed if '@' in e}
+            opcoes_base = [
+                c for c in opcoes_base
+                if _email_colab(c) in allowed or (_email_colab(c).split('@', 1)[0] in allowed_locals if _email_colab(c) else False)
+            ]
+
+    opcoes = []
+    seen_mats: set[str] = set()
+    for c in opcoes_base or []:
+        mat = _matricula_colab(c)
+        if not mat or mat in seen_mats:
+            continue
+        seen_mats.add(mat)
+        opcoes.append({"matricula": mat, "email": _email_colab(c), "nome": _nome_colab(c)})
     opcoes.sort(key=lambda x: (_sort_text_pt(x.get("nome") or ""), str(x.get("matricula") or "")))
+    t_list = time.perf_counter() - t_list_start
+
+    nome_por_email: dict[str, str] = {}
+    matricula_por_email: dict[str, str] = {}
+    for o in opcoes:
+        mat = str(o.get("matricula") or "").upper()
+        nome = str(o.get("nome") or mat)
+        email = safe_lower(o.get("email") or "")
+        if mat:
+            nome_por_email[mat] = nome
+        if email:
+            # Mantido somente para exibição de históricos antigos que ainda venham por e-mail.
+            nome_por_email[email] = nome
+            matricula_por_email[email] = mat
 
     raw_matricula = str(request.args.get("matricula") or request.args.get("colaborador_matricula") or "").strip().upper()
-
-    # V38: nenhuma seleção operacional por e-mail. A seleção só é válida quando
-    # vier uma matrícula existente na lista ativa/autorizada.
-    selecionado_matricula = raw_matricula
-
     opcoes_por_matricula = {o["matricula"]: o for o in opcoes}
-    if selecionado_matricula not in opcoes_por_matricula:
-        selecionado_matricula = opcoes[0]["matricula"] if opcoes else ""
-
+    selecionado_matricula = raw_matricula if raw_matricula in opcoes_por_matricula else (opcoes[0]["matricula"] if opcoes else "")
     selecionado_opcao = opcoes_por_matricula.get(selecionado_matricula) or {}
     selecionado_email = safe_lower(selecionado_opcao.get("email") or "")
 
-    # A fonte operacional é a matrícula. O e-mail é apenas informativo.
-    resumo = get_resumo_ferias(selecionado_matricula)
+    t_resumo_start = time.perf_counter()
+    if postgres_enabled():
+        resumo = get_resumo_ferias_por_matricula_postgres(selecionado_matricula)
+    else:
+        resumo = get_resumo_ferias(selecionado_matricula)
+    t_resumo = time.perf_counter() - t_resumo_start
+
     dias_direito = resumo["regular"]["direito"]
-    dias_usados = resumo["regular"]["usados"]
-    dias_reservados = resumo["regular"]["reservados"]
-    saldo = resumo["regular"]["saldo"]
+    dias_usados = resumo["regular"].get("usados", resumo["regular"].get("usado", 0))
+    dias_reservados = resumo["regular"].get("reservados", resumo["regular"].get("reservado", 0))
+    saldo = resumo["regular"].get("saldo", resumo["regular"].get("disponivel", 0))
     regular_periodos = resumo["regular"].get("periodos") or []
     periodo_aquisitivo_atual = resumo["regular"].get("periodo_atual")
 
     premium_direito = resumo["premium"]["direito"]
-    premium_usados = resumo["premium"]["usados"]
-    premium_reservados = resumo["premium"]["reservados"]
-    premium_saldo = resumo["premium"]["saldo"]
+    premium_usados = resumo["premium"].get("usados", resumo["premium"].get("usado", 0))
+    premium_reservados = resumo["premium"].get("reservados", resumo["premium"].get("reservado", 0))
+    premium_saldo = resumo["premium"].get("saldo", resumo["premium"].get("disponivel", 0))
 
-    if is_dp_or_admin:
+    t_hist_start = time.perf_counter()
+    if postgres_enabled():
+        # Histórico do colaborador selecionado. Evita carregar todas as solicitações
+        # do banco a cada troca no autocomplete.
+        solicitacoes = listar_solicitacoes_matricula_postgres(selecionado_matricula)
+    elif is_dp_or_admin:
         solicitacoes = listar_solicitacoes_todas()
     else:
         solicitacoes = listar_solicitacoes_equipes([gestor_email] + subs)
+    t_hist = time.perf_counter() - t_hist_start
 
     colaborador_nome = selecionado_opcao.get("nome") or selecionado_matricula or selecionado_email
     is_viewing_own_holidays = selecionado_email == gestor_email and not is_dp_or_admin
+
+    total = time.perf_counter() - t0
+    log.info(
+        "FERIAS_PERF matricula=%s opcoes=%s escopo=%s list=%.3fs resumo=%.3fs hist=%.3fs total=%.3fs",
+        selecionado_matricula,
+        len(opcoes),
+        "ADMIN" if role == "admin" else ("DP" if role == "DP" else "GESTOR"),
+        t_list,
+        t_resumo,
+        t_hist,
+        total,
+    )
 
     return render_template(
         "ferias.html",
