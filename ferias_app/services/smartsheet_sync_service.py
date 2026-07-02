@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import threading
 import traceback
 import unicodedata
 from dataclasses import dataclass
@@ -1672,6 +1673,82 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
             log.exception("Falha ao registrar erro de sincronização no sync_state.")
         log.exception("Falha na sincronização de cadastro")
         raise
+
+
+# Wrapper de concorrencia: evita duas sincronizacoes simultaneas no mesmo worker
+# e permite que o Painel ADMIN dispare a rotina em background sem estourar timeout HTTP.
+_SYNC_CADASTRO_LOCK = threading.Lock()
+_sync_cadastro_from_smartsheet_impl = sync_cadastro_from_smartsheet
+
+
+def is_sync_cadastro_running() -> bool:
+    return _SYNC_CADASTRO_LOCK.locked()
+
+
+def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str = "", recalculate: bool = False, include_solicitacoes: bool = False) -> dict:
+    if not _SYNC_CADASTRO_LOCK.acquire(blocking=False):
+        raise RuntimeError("Já existe uma sincronização de cadastro em execução. Aguarde a conclusão antes de iniciar outra.")
+    try:
+        return _sync_cadastro_from_smartsheet_impl(
+            triggered_by=triggered_by,
+            actor_email=actor_email,
+            recalculate=recalculate,
+            include_solicitacoes=include_solicitacoes,
+        )
+    finally:
+        _SYNC_CADASTRO_LOCK.release()
+
+
+def start_sync_cadastro_background(triggered_by: str = "manual", actor_email: str = "", recalculate: bool = False, include_solicitacoes: bool = False) -> dict:
+    """Dispara a sincronização em thread separada e retorna imediatamente.
+
+    A rota HTTP do Render/Gunicorn não deve esperar a sincronização completa,
+    pois a etapa de permissões/hierarquia pode levar vários minutos.
+    """
+    if not _SYNC_CADASTRO_LOCK.acquire(blocking=False):
+        return {
+            "ok": True,
+            "started": False,
+            "running": True,
+            "message": "Já existe uma sincronização de cadastro em execução. Acompanhe pelo status.",
+        }
+
+    try:
+        with get_session() as session:
+            _mark_sync(session, "cadastro", "running", extra={
+                "triggered_by": triggered_by,
+                "actor_email": actor_email,
+                "progress_message": "Sincronização iniciada em background",
+                "progress_percent": 0,
+                "include_solicitacoes": include_solicitacoes,
+                "recalculate": recalculate,
+            })
+            session.commit()
+    except Exception:
+        log.exception("Nao foi possivel registrar inicio da sincronizacao em background")
+
+    def worker() -> None:
+        try:
+            _sync_cadastro_from_smartsheet_impl(
+                triggered_by=triggered_by,
+                actor_email=actor_email,
+                recalculate=recalculate,
+                include_solicitacoes=include_solicitacoes,
+            )
+        except Exception:
+            log.exception("Falha na sincronização de cadastro em background")
+        finally:
+            _SYNC_CADASTRO_LOCK.release()
+
+    threading.Thread(target=worker, name="admin-sync-cadastro", daemon=True).start()
+    return {
+        "ok": True,
+        "started": True,
+        "running": True,
+        "message": "Sincronização iniciada em background. Acompanhe o andamento pelo status.",
+        "include_solicitacoes": include_solicitacoes,
+        "recalculate": recalculate,
+    }
 
 def get_sync_states() -> dict:
     with get_session() as session:

@@ -30,7 +30,7 @@ from ..services.admin_cadastro_service import (
     atualizar_colaborador_admin,
     atualizar_user_type_por_email,
 )
-from ..services.smartsheet_sync_service import sync_cadastro_from_smartsheet, get_sync_states
+from ..services.smartsheet_sync_service import start_sync_cadastro_background, get_sync_states
 
 @bp.route("/api/admin/listar-usuarios")
 def api_admin_listar_usuarios():
@@ -376,17 +376,20 @@ def api_admin_sync_cadastro():
 
     payload = request.get_json(silent=True) or {}
     recalculate = bool(payload.get("recalculate", False))
-    include_solicitacoes = bool(payload.get("include_solicitacoes", True))
+    # O botão do painel ADMIN sincroniza cadastro/permissões/hierarquia.
+    # Solicitações e recálculo de saldos são rotinas separadas e só entram se
+    # forem pedidos explicitamente no payload, evitando timeout HTTP.
+    include_solicitacoes = bool(payload.get("include_solicitacoes", False))
     try:
-        result = sync_cadastro_from_smartsheet(
+        result = start_sync_cadastro_background(
             triggered_by="manual",
             actor_email=user.get("email") or "",
             recalculate=recalculate,
             include_solicitacoes=include_solicitacoes,
         )
-        return jsonify(result)
+        return jsonify(result), 202
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Erro ao sincronizar cadastro: {str(e)}"}), 500
+        return jsonify({"ok": False, "message": f"Erro ao iniciar sincronização: {str(e)}"}), 500
 
 
 @bp.route("/api/admin/sync-state", methods=["GET"])

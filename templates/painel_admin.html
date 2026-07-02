@@ -519,6 +519,8 @@
     el.className = cls;
   }
 
+  let syncPollTimer = null;
+
   function renderSyncResumo(result) {
     const el = cad$("syncResumo");
     if (!el) return;
@@ -526,10 +528,14 @@
       el.textContent = "";
       return;
     }
-    const extra = result.extra || result;
+    const extra = result.extra || {};
     const partes = [];
-    if (extra.last_status) partes.push(`status: ${extra.last_status}`);
-    if (extra.last_success_at) partes.push(`último sucesso: ${extra.last_success_at}`);
+    const status = result.last_status || extra.last_status;
+    const lastSuccess = result.last_success_at || extra.last_success_at;
+    if (status) partes.push(`status: ${status}`);
+    if (extra.progress_message) partes.push(extra.progress_message);
+    if (extra.progress_percent !== undefined && extra.progress_percent !== null) partes.push(`${extra.progress_percent}%`);
+    if (lastSuccess) partes.push(`último sucesso: ${lastSuccess}`);
     if (extra.records !== undefined) partes.push(`${extra.records} cadastro(s) processado(s)`);
     if (extra.inserted !== undefined) partes.push(`${extra.inserted} novo(s)`);
     if (extra.updated !== undefined && extra.updated > 0) partes.push(`${extra.updated} atualizado(s)`);
@@ -543,43 +549,72 @@
     el.textContent = partes.join(" • ") || "Sem histórico de sincronização.";
   }
 
+  function syncIsRunning(cadastro) {
+    return !!cadastro && cadastro.last_status === "running";
+  }
+
+  function setSyncButtonRunning(running) {
+    const btn = cad$("syncBtnCadastro");
+    if (btn) btn.disabled = !!running;
+  }
+
+  function startSyncPolling() {
+    if (syncPollTimer) clearInterval(syncPollTimer);
+    syncPollTimer = setInterval(async () => {
+      const cadastro = await carregarSyncStatus(true);
+      if (!syncIsRunning(cadastro)) {
+        clearInterval(syncPollTimer);
+        syncPollTimer = null;
+        setSyncButtonRunning(false);
+        if (cadastro && cadastro.last_status === "success") {
+          syncSetMsg("Sincronização concluída com sucesso.", "text-success");
+        } else if (cadastro && cadastro.last_status === "error") {
+          syncSetMsg("A sincronização terminou com erro. Consulte o status/log.", "text-danger");
+        }
+      }
+    }, 7000);
+  }
+
   async function sincronizarCadastro() {
     if (!confirm("Sincronizar agora o cadastro do Smartsheet com o PostgreSQL?\n\nOs dados principais dos colaboradores já existentes serão preservados, mas permissões e hierarquia serão atualizadas com base no Smartsheet.")) return;
-    syncSetMsg("Sincronizando cadastro, permissões e hierarquia... aguarde.", "muted");
-    cad$("syncBtnCadastro").disabled = true;
+    syncSetMsg("Sincronização iniciada em background. Você pode acompanhar pelo status.", "muted");
+    setSyncButtonRunning(true);
     try {
       const resp = await fetch(`/api/admin/sync-cadastro`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recalculate: false }),
+        body: JSON.stringify({ recalculate: false, include_solicitacoes: false }),
       });
       const data = await resp.json();
       if (!data.ok) {
-        syncSetMsg(data.message || "Erro ao sincronizar.", "text-danger");
+        syncSetMsg(data.message || "Erro ao iniciar sincronização.", "text-danger");
+        setSyncButtonRunning(false);
         return;
       }
-      syncSetMsg("Sincronização concluída com sucesso.", "text-success");
-      renderSyncResumo(data);
+      syncSetMsg(data.message || "Sincronização iniciada em background.", "muted");
+      startSyncPolling();
     } catch (e) {
-      syncSetMsg("Erro ao sincronizar cadastro.", "text-danger");
+      syncSetMsg("Erro ao iniciar sincronização de cadastro.", "text-danger");
+      setSyncButtonRunning(false);
       console.error(e);
-    } finally {
-      cad$("syncBtnCadastro").disabled = false;
     }
   }
 
-  async function carregarSyncStatus() {
+  async function carregarSyncStatus(silent = false) {
     try {
       const resp = await fetch(`/api/admin/sync-state`);
       const data = await resp.json();
       if (!data.ok) {
-        syncSetMsg(data.message || "Erro ao carregar status.", "text-danger");
-        return;
+        if (!silent) syncSetMsg(data.message || "Erro ao carregar status.", "text-danger");
+        return null;
       }
       const cadastro = (data.states || []).find((s) => s.sync_name === "cadastro") || null;
       renderSyncResumo(cadastro);
+      setSyncButtonRunning(syncIsRunning(cadastro));
+      return cadastro;
     } catch (e) {
-      syncSetMsg("Erro ao carregar status da sincronização.", "text-danger");
+      if (!silent) syncSetMsg("Erro ao carregar status da sincronização.", "text-danger");
+      return null;
     }
   }
 
