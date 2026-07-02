@@ -14,6 +14,7 @@ from .postgres_service import (
     listar_solicitacoes,
     get_db_session,
 )
+from .postgres_compat_service import get_resumo_ferias_por_matricula_postgres
 
 log = get_logger(__name__)
 
@@ -51,52 +52,41 @@ def listar_colaboradores_bridge() -> List[Dict[str, Any]]:
         return []
 
 
-def get_resumo_ferias_bridge(email: str) -> Dict[str, Any]:
-    """Bridge para obter saldos do colaborador.
-    
-    Retorna no formato esperado pelos blueprints.
+def get_resumo_ferias_bridge(identificador: str) -> Dict[str, Any]:
+    """Bridge para obter saldos do colaborador via saldo_periodo.
+
+    A matrícula é a chave operacional. Quando receber e-mail por compatibilidade,
+    primeiro descobre a matrícula ativa e depois consulta saldo_periodo.
     """
+    empty = {
+        'regular': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
+        'premium': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
+    }
     try:
-        email = str(email).strip().lower()
-        colab_data = get_colaborador(email)
-        
-        if not colab_data:
+        ident = str(identificador or '').strip()
+        colab_data = get_colaborador(ident)
+        matricula = str((colab_data or {}).get('matricula') or ident).strip().upper()
+        if not matricula:
+            return empty
+
+        resumo = get_resumo_ferias_por_matricula_postgres(matricula)
+
+        def map_tipo(tipo: str) -> Dict[str, int]:
+            data = resumo.get(tipo, {}) or {}
             return {
-                'regular': {
-                    'direito': 0,
-                    'usado': 0,
-                    'reservado': 0,
-                    'disponivel': 0,
-                },
-                'premium': {
-                    'direito': 0,
-                    'usado': 0,
-                    'reservado': 0,
-                    'disponivel': 0,
-                },
+                'direito': int(data.get('direito') or 0),
+                'usado': int(data.get('usados') or data.get('usado') or 0),
+                'reservado': int(data.get('reservados') or data.get('reservado') or 0),
+                'disponivel': int(data.get('saldo') or data.get('disponivel') or 0),
             }
-        
-        # Extrai saldos
-        regular = {
-            'direito': colab_data.get('saldo_regular_direito', 0),
-            'usado': colab_data.get('saldo_regular_usado', 0),
-            'reservado': colab_data.get('saldo_regular_reservado', 0),
-            'disponivel': colab_data.get('saldo_regular_disponivel', 0),
-        }
-        premium = {
-            'direito': colab_data.get('saldo_premium_direito', 0),
-            'usado': colab_data.get('saldo_premium_usado', 0),
-            'reservado': colab_data.get('saldo_premium_reservado', 0),
-            'disponivel': colab_data.get('saldo_premium_disponivel', 0),
-        }
-        
+
         return {
-            'regular': regular,
-            'premium': premium,
+            'regular': map_tipo('regular'),
+            'premium': map_tipo('premium'),
         }
     except Exception as e:
         log.error(f"Erro ao obter saldos via bridge: {e}")
-        return {}
+        return empty
 
 
 def listar_gestores_bridge() -> List[str]:

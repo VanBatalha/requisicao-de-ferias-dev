@@ -26,10 +26,7 @@ templates/
   Telas HTML/Jinja.
 
 migracao/
-  Scripts e SQLs usados para carga inicial, ajustes e recálculo.
-
-documentacao/historico/
-  Documentos antigos preservados apenas para consulta.
+  Scripts e SQLs usados para carga inicial, ajustes, limpeza e recálculo.
 ```
 
 ## Arquivos mais relevantes
@@ -48,7 +45,10 @@ ferias_app/blueprints/solicitacoes_api.py
   API de criação de solicitações.
 
 ferias_app/services/postgres_compat_service.py
-  Camada PostgreSQL usada pelas telas legadas.
+  Camada PostgreSQL usada pelas telas legadas e pela rota /ferias.
+
+ferias_app/services/postgres_service.py
+  Serviço principal de banco e movimentações de saldo/solicitações.
 
 ferias_app/services/smartsheet_sync_service.py
   Rotina de sincronização com Smartsheet.
@@ -59,6 +59,19 @@ ferias_app/models.py
 templates/ferias.html
   Tela de solicitações de férias.
 
+templates/painel_admin.html
+  Painel Admin, edição de cadastro, permissões e sincronização.
+
 templates/painel_dp.html
   Painel DP, gestores e ajustes.
+```
+
+## Scripts SQL importantes
+
+```text
+migracao/sql/v43_drop_saldos_colaborador_complemento.sql
+  Remove colunas obsoletas de saldo da tabela colaborador_complemento.
+
+migracao/sql/validacao_v43_colaborador_complemento_sem_saldos.sql
+  Valida se as colunas foram removidas e se saldo_periodo segue populada.
 ```

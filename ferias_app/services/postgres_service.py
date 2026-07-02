@@ -287,16 +287,6 @@ def init_db(run_migrations: bool = False):
                AND (cc.gestor_superior IS NULL OR btrim(cc.gestor_superior) = '')
         """))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS flags_internas JSONB"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_direito INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_usado INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_reservado INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_regular_disponivel INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_direito INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_usado INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_reservado INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS saldo_premium_disponivel INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS total_solicitacoes INTEGER DEFAULT 0"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS periodo_aquisitivo_atual JSONB"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS calculated_at TIMESTAMP"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS origem_sheet_id VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.colaborador_complemento ADD COLUMN IF NOT EXISTS origem_row_id VARCHAR(50)"))
@@ -399,24 +389,55 @@ def listar_colaboradores(status_filter: Optional[str] = None) -> List[Dict[str, 
         return []
 
 
-def get_saldos_colaborador(email: str) -> Dict[str, Any]:
-    """Retorna saldos do colaborador."""
-    session = get_db_session()
-    try:
-        rows = session.query(Colaborador).filter(func.lower(Colaborador.email) == email.lower()).all()
-        rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
-        colab = rows[0] if rows else None
+def get_saldos_colaborador(identificador: str) -> Dict[str, Any]:
+    """Retorna saldos consolidados diretamente de saldo_periodo.
 
-        if not colab or not colab.complemento:
-            return {
-                'regular': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
-                'premium': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
-            }
-        
-        return colab.complemento.to_dict()['saldo_regular'] if colab.complemento else {}
+    A matrícula é a chave operacional. O e-mail é aceito apenas por
+    compatibilidade para descobrir a matrícula ativa antes da consulta.
+    """
+    session = get_db_session()
+    empty = {
+        'regular': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
+        'premium': {'direito': 0, 'usado': 0, 'reservado': 0, 'disponivel': 0},
+    }
+    try:
+        ident = str(identificador or '').strip()
+        colab = None
+        if ident and '@' not in ident:
+            colab = session.query(Colaborador).filter(func.upper(Colaborador.matricula) == ident.upper()).first()
+        if not colab and ident:
+            rows = session.query(Colaborador).filter(func.lower(Colaborador.email) == ident.lower()).all()
+            rows.sort(key=lambda c: (1 if str(c.status or '').strip().upper() in {'ATIVO', 'ACTIVE'} else 0, int(c.id or 0)), reverse=True)
+            colab = rows[0] if rows else None
+        if not colab or not colab.matricula:
+            return empty
+
+        rows = (
+            session.query(SaldoPeriodoNovo)
+            .filter(func.upper(SaldoPeriodoNovo.colaborador_matricula) == str(colab.matricula).upper())
+            .all()
+        )
+
+        def sumtipo(tipo: str, attr: str) -> int:
+            return int(round(sum(float(getattr(r, attr) or 0) for r in rows if (r.tipo_saldo or '').upper() == tipo)))
+
+        return {
+            'regular': {
+                'direito': sumtipo('REGULAR', 'saldo_inicial'),
+                'usado': sumtipo('REGULAR', 'saldo_utilizado'),
+                'reservado': sumtipo('REGULAR', 'saldo_reservado'),
+                'disponivel': sumtipo('REGULAR', 'saldo_disponivel'),
+            },
+            'premium': {
+                'direito': sumtipo('PREMIUM', 'saldo_inicial'),
+                'usado': sumtipo('PREMIUM', 'saldo_utilizado'),
+                'reservado': sumtipo('PREMIUM', 'saldo_reservado'),
+                'disponivel': sumtipo('PREMIUM', 'saldo_disponivel'),
+            },
+        }
     except Exception as e:
-        log.error(f"Erro ao obter saldos do colaborador {email}: {e}")
-        return {}
+        log.error(f"Erro ao obter saldos do colaborador {identificador}: {e}")
+        return empty
 
 
 def _to_int_days(value) -> int:
@@ -573,28 +594,22 @@ def _saldo_periodo_destino_ajuste_v29(session, colab: Colaborador, saldo_tipo: s
 
 
 def _atualizar_complemento_cache(session, colab: Colaborador):
+    """Mantém apenas metadados operacionais em colaborador_complemento.
+
+    Desde a V43, os totais de saldo e total de solicitações não são mais
+    gravados nesta tabela. A fonte oficial é saldo_periodo.
+    """
     comp = colab.complemento
     if not comp:
-        comp = ColaboradorComplemento(colaborador_id=colab.id, colaborador_matricula=colab.matricula, user_type="USER", ativo_no_app=True)
+        comp = ColaboradorComplemento(
+            colaborador_id=colab.id,
+            colaborador_matricula=colab.matricula,
+            user_type="USER",
+            ativo_no_app=True,
+        )
         session.add(comp)
         session.flush()
-    rows = (
-        session.query(SaldoPeriodoNovo)
-        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
-        .all()
-    )
-    def sumtipo(tipo, attr):
-        return int(round(sum(float(getattr(r, attr) or 0) for r in rows if (r.tipo_saldo or '').upper() == tipo)))
     comp.colaborador_matricula = colab.matricula
-    comp.saldo_regular_direito = sumtipo('REGULAR', 'saldo_inicial')
-    comp.saldo_regular_usado = sumtipo('REGULAR', 'saldo_utilizado')
-    comp.saldo_regular_reservado = sumtipo('REGULAR', 'saldo_reservado')
-    comp.saldo_regular_disponivel = sumtipo('REGULAR', 'saldo_disponivel')
-    comp.saldo_premium_direito = sumtipo('PREMIUM', 'saldo_inicial')
-    comp.saldo_premium_usado = sumtipo('PREMIUM', 'saldo_utilizado')
-    comp.saldo_premium_reservado = sumtipo('PREMIUM', 'saldo_reservado')
-    comp.saldo_premium_disponivel = sumtipo('PREMIUM', 'saldo_disponivel')
-    comp.total_solicitacoes = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula == colab.matricula, Solicitacao.is_ajuste.is_(False)).count()
     comp.calculated_at = datetime.utcnow()
     comp.updated_at = datetime.utcnow()
     return comp
@@ -848,62 +863,15 @@ def listar_solicitacoes(
         return []
 
 
-def atualizar_saldos_colaborador(
-    email: str,
-    saldo_regular_direito: Optional[int] = None,
-    saldo_regular_usado: Optional[int] = None,
-    saldo_regular_reservado: Optional[int] = None,
-    saldo_premium_direito: Optional[int] = None,
-    saldo_premium_usado: Optional[int] = None,
-    saldo_premium_reservado: Optional[int] = None,
-) -> bool:
-    """Atualiza os saldos do colaborador."""
-    session = get_db_session()
-    try:
-        colab = session.query(Colaborador).filter(
-            Colaborador.email == email.lower()
-        ).first()
-        
-        if not colab:
-            return False
-        
-        if not colab.complemento:
-            colab.complemento = ColaboradorComplemento(colaborador_id=colab.id)
-        
-        # Atualiza saldos (apenas se fornecido)
-        if saldo_regular_direito is not None:
-            colab.complemento.saldo_regular_direito = saldo_regular_direito
-        if saldo_regular_usado is not None:
-            colab.complemento.saldo_regular_usado = saldo_regular_usado
-        if saldo_regular_reservado is not None:
-            colab.complemento.saldo_regular_reservado = saldo_regular_reservado
-        if saldo_premium_direito is not None:
-            colab.complemento.saldo_premium_direito = saldo_premium_direito
-        if saldo_premium_usado is not None:
-            colab.complemento.saldo_premium_usado = saldo_premium_usado
-        if saldo_premium_reservado is not None:
-            colab.complemento.saldo_premium_reservado = saldo_premium_reservado
-        
-        # Recalcula saldos disponíveis
-        colab.complemento.saldo_regular_disponivel = (
-            colab.complemento.saldo_regular_direito -
-            colab.complemento.saldo_regular_usado -
-            colab.complemento.saldo_regular_reservado
-        )
-        colab.complemento.saldo_premium_disponivel = (
-            colab.complemento.saldo_premium_direito -
-            colab.complemento.saldo_premium_usado -
-            colab.complemento.saldo_premium_reservado
-        )
-        
-        colab.complemento.calculated_at = datetime.utcnow()
-        session.commit()
-        
-        return True
-    except Exception as e:
-        log.error(f"Erro ao atualizar saldos: {e}")
-        session.rollback()
-        return False
+def atualizar_saldos_colaborador(*args, **kwargs) -> bool:
+    """Função descontinuada.
+
+    Os saldos não são mais gravados em colaborador_complemento. Use a tabela
+    saldo_periodo ou os fluxos de solicitação/ajuste que movimentam saldos por
+    matrícula e período.
+    """
+    log.warning("atualizar_saldos_colaborador foi chamada, mas está descontinuada desde a V43; use saldo_periodo.")
+    return False
 
 
 def registrar_auditoria(

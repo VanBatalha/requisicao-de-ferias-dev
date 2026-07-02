@@ -208,27 +208,10 @@
     </div>
 
     <h3 style="margin:18px 0 8px;">Saldos</h3>
-    <p class="muted" style="margin-top:-4px;">Edite com cuidado. O botão de sincronização do Smartsheet não recalcula nem sobrescreve saldos por padrão.</p>
-    <div class="grid-2">
-      <div class="card" style="box-shadow:none; padding:12px;">
-        <strong>Regular</strong>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
-          <div><label class="muted">Direito</label><input id="cadRegDireito" class="input" type="number" /></div>
-          <div><label class="muted">Usado</label><input id="cadRegUsado" class="input" type="number" /></div>
-          <div><label class="muted">Reservado</label><input id="cadRegReservado" class="input" type="number" /></div>
-          <div><label class="muted">Disponível</label><input id="cadRegDisponivel" class="input" type="number" /></div>
-        </div>
-      </div>
-      <div class="card" style="box-shadow:none; padding:12px;">
-        <strong>Premium</strong>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
-          <div><label class="muted">Direito</label><input id="cadPremDireito" class="input" type="number" /></div>
-          <div><label class="muted">Usado</label><input id="cadPremUsado" class="input" type="number" /></div>
-          <div><label class="muted">Reservado</label><input id="cadPremReservado" class="input" type="number" /></div>
-          <div><label class="muted">Disponível</label><input id="cadPremDisponivel" class="input" type="number" /></div>
-        </div>
-      </div>
-    </div>
+    <p class="muted" style="margin-top:-4px;">
+      Os saldos consolidados não são mais gravados em colaborador_complemento.
+      A fonte oficial é a tabela saldo_periodo, exibida abaixo por matrícula e tipo de saldo.
+    </p>
 
     <h3 style="margin:18px 0 8px;">Saldos por período aquisitivo</h3>
     <div id="cadSaldosPeriodo" class="muted" style="overflow:auto; margin-bottom:12px;"></div>
@@ -477,14 +460,6 @@
     cad$("cadAtivoNoApp").checked = !!c.ativo_no_app;
     cad$("cadGestorDireto").value = c.gestor_direto_email || "";
     cad$("cadGestorSuperior").value = c.gestor_superior_email || "";
-    cad$("cadRegDireito").value = c.saldo_regular_direito || 0;
-    cad$("cadRegUsado").value = c.saldo_regular_usado || 0;
-    cad$("cadRegReservado").value = c.saldo_regular_reservado || 0;
-    cad$("cadRegDisponivel").value = c.saldo_regular_disponivel || 0;
-    cad$("cadPremDireito").value = c.saldo_premium_direito || 0;
-    cad$("cadPremUsado").value = c.saldo_premium_usado || 0;
-    cad$("cadPremReservado").value = c.saldo_premium_reservado || 0;
-    cad$("cadPremDisponivel").value = c.saldo_premium_disponivel || 0;
     renderSaldosPeriodo(c.saldos_periodo || []);
     cad$("cadEditor").style.display = "block";
   }
@@ -504,14 +479,6 @@
       ativo_no_app: cad$("cadAtivoNoApp").checked,
       gestor_direto_email: cadNorm(cad$("cadGestorDireto").value).toLowerCase(),
       gestor_superior_email: cadNorm(cad$("cadGestorSuperior").value).toLowerCase(),
-      saldo_regular_direito: parseInt(cad$("cadRegDireito").value || "0", 10),
-      saldo_regular_usado: parseInt(cad$("cadRegUsado").value || "0", 10),
-      saldo_regular_reservado: parseInt(cad$("cadRegReservado").value || "0", 10),
-      saldo_regular_disponivel: parseInt(cad$("cadRegDisponivel").value || "0", 10),
-      saldo_premium_direito: parseInt(cad$("cadPremDireito").value || "0", 10),
-      saldo_premium_usado: parseInt(cad$("cadPremUsado").value || "0", 10),
-      saldo_premium_reservado: parseInt(cad$("cadPremReservado").value || "0", 10),
-      saldo_premium_disponivel: parseInt(cad$("cadPremDisponivel").value || "0", 10),
     };
   }
 

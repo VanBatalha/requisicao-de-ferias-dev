@@ -255,16 +255,8 @@ def import_colaborador_complemento(session, excel_file: str) -> None:
         compl.gestor_superior_email = clean_str(row.get("gestor_superior_email"), lower=True)
         compl.ativo_no_app = parse_bool(row.get("ativo_no_app"), True)
         compl.flags_internas = parse_json_value(row.get("flags_internas")) or {}
-        compl.saldo_regular_direito = parse_int(row.get("saldo_regular_direito"), 0) or 0
-        compl.saldo_regular_usado = parse_int(row.get("saldo_regular_usado"), 0) or 0
-        compl.saldo_regular_reservado = parse_int(row.get("saldo_regular_reservado"), 0) or 0
-        compl.saldo_regular_disponivel = parse_int(row.get("saldo_regular_disponivel"), 0) or 0
-        compl.saldo_premium_direito = parse_int(row.get("saldo_premium_direito"), 0) or 0
-        compl.saldo_premium_usado = parse_int(row.get("saldo_premium_usado"), 0) or 0
-        compl.saldo_premium_reservado = parse_int(row.get("saldo_premium_reservado"), 0) or 0
-        compl.saldo_premium_disponivel = parse_int(row.get("saldo_premium_disponivel"), 0) or 0
-        compl.total_solicitacoes = parse_int(row.get("total_solicitacoes"), 0) or 0
-        compl.periodo_aquisitivo_atual = parse_json_value(row.get("periodo_aquisitivo_atual")) or {}
+        # V43: saldos consolidados não são mais importados para colaborador_complemento.
+        # Use saldo_periodo como fonte oficial.
         compl.calculated_at = parse_datetime(row.get("calculated_at"))
         compl.origem_sheet_id = clean_str(row.get("origem_sheet_id"))
         compl.origem_row_id = clean_str(row.get("origem_row_id"))

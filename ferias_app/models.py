@@ -278,10 +278,10 @@ class AuditoriaSaldos(Base):
 
 
 class ColaboradorComplemento(Base):
-    """Cache de compatibilidade para telas antigas.
+    """Complemento operacional do cadastro.
 
-    Os saldos reais ficam em periodos_aquisitivos/saldos_periodo. Esta tabela
-    consolida totais para telas/serviços já existentes.
+    Mantém permissões, hierarquia e flags do colaborador. Os saldos reais e
+    consolidados ficam exclusivamente na tabela saldo_periodo.
     """
     __tablename__ = "colaborador_complemento"
     __table_args__ = {"schema": _MODEL_SCHEMA}
@@ -299,17 +299,6 @@ class ColaboradorComplemento(Base):
     ativo_no_app = Column(Boolean, default=True)
     flags_internas = Column(JSONB, nullable=True)
 
-    saldo_regular_direito = Column(Integer, default=0)
-    saldo_regular_usado = Column(Integer, default=0)
-    saldo_regular_reservado = Column(Integer, default=0)
-    saldo_regular_disponivel = Column(Integer, default=0)
-    saldo_premium_direito = Column(Integer, default=0)
-    saldo_premium_usado = Column(Integer, default=0)
-    saldo_premium_reservado = Column(Integer, default=0)
-    saldo_premium_disponivel = Column(Integer, default=0)
-
-    total_solicitacoes = Column(Integer, default=0)
-    periodo_aquisitivo_atual = Column(JSONB, nullable=True)
     calculated_at = Column(DateTime, nullable=True)
     origem_sheet_id = Column(String(50), nullable=True)
     origem_row_id = Column(String(50), nullable=True)
@@ -327,18 +316,6 @@ class ColaboradorComplemento(Base):
             "gestor_direto": self.gestor_direto,
             "gestor_superior": self.gestor_superior,
             "ativo_no_app": self.ativo_no_app,
-            "saldo_regular": {
-                "direito": self.saldo_regular_direito,
-                "usado": self.saldo_regular_usado,
-                "reservado": self.saldo_regular_reservado,
-                "disponivel": self.saldo_regular_disponivel,
-            },
-            "saldo_premium": {
-                "direito": self.saldo_premium_direito,
-                "usado": self.saldo_premium_usado,
-                "reservado": self.saldo_premium_reservado,
-                "disponivel": self.saldo_premium_disponivel,
-            },
         }
 
 

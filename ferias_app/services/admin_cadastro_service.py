@@ -31,28 +31,12 @@ EDITABLE_COMP_FIELDS = {
     "gestor_direto_email",
     "gestor_superior_email",
     "ativo_no_app",
-    "saldo_regular_direito",
-    "saldo_regular_usado",
-    "saldo_regular_reservado",
-    "saldo_regular_disponivel",
-    "saldo_premium_direito",
-    "saldo_premium_usado",
-    "saldo_premium_reservado",
-    "saldo_premium_disponivel",
-    "total_solicitacoes",
+    "gestor_direto",
+    "gestor_superior",
 }
 
 INTEGER_FIELDS = {
     "dias_direito",
-    "saldo_regular_direito",
-    "saldo_regular_usado",
-    "saldo_regular_reservado",
-    "saldo_regular_disponivel",
-    "saldo_premium_direito",
-    "saldo_premium_usado",
-    "saldo_premium_reservado",
-    "saldo_premium_disponivel",
-    "total_solicitacoes",
 }
 
 
@@ -185,8 +169,38 @@ def _saldos_periodo_json(session, colab: Colaborador):
         })
     return out
 
+
+
+def _resumo_saldos_periodo(session, colab: Colaborador) -> Dict[str, Any]:
+    rows = (
+        session.query(SaldoPeriodoNovo)
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
+        .all()
+    )
+
+    def sumtipo(tipo: str, attr: str) -> int:
+        return int(round(sum(float(getattr(r, attr) or 0) for r in rows if (r.tipo_saldo or "").upper() == tipo)))
+
+    return {
+        "regular": {
+            "direito": sumtipo("REGULAR", "saldo_inicial"),
+            "usado": sumtipo("REGULAR", "saldo_utilizado"),
+            "reservado": sumtipo("REGULAR", "saldo_reservado"),
+            "disponivel": sumtipo("REGULAR", "saldo_disponivel"),
+        },
+        "premium": {
+            "direito": sumtipo("PREMIUM", "saldo_inicial"),
+            "usado": sumtipo("PREMIUM", "saldo_utilizado"),
+            "reservado": sumtipo("PREMIUM", "saldo_reservado"),
+            "disponivel": sumtipo("PREMIUM", "saldo_disponivel"),
+        },
+    }
+
 def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
+    session = get_db_session()
     comp = colab.complemento
+    saldos_periodo = _saldos_periodo_json(session, colab)
+    saldos_resumo = _resumo_saldos_periodo(session, colab)
     return {
         "id": colab.id,
         "matricula": colab.matricula or "",
@@ -208,20 +222,11 @@ def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
         "gestor_superior": (getattr(comp, "gestor_superior", None) if comp else "") or "",
         "ativo_no_app": bool(comp.ativo_no_app) if comp else True,
         "flags_internas": comp.flags_internas if comp else {},
-        "saldo_regular_direito": int((comp.saldo_regular_direito if comp else 0) or 0),
-        "saldo_regular_usado": int((comp.saldo_regular_usado if comp else 0) or 0),
-        "saldo_regular_reservado": int((comp.saldo_regular_reservado if comp else 0) or 0),
-        "saldo_regular_disponivel": int((comp.saldo_regular_disponivel if comp else 0) or 0),
-        "saldo_premium_direito": int((comp.saldo_premium_direito if comp else 0) or 0),
-        "saldo_premium_usado": int((comp.saldo_premium_usado if comp else 0) or 0),
-        "saldo_premium_reservado": int((comp.saldo_premium_reservado if comp else 0) or 0),
-        "saldo_premium_disponivel": int((comp.saldo_premium_disponivel if comp else 0) or 0),
-        "total_solicitacoes": int((comp.total_solicitacoes if comp else 0) or 0),
-        "periodo_aquisitivo_atual": comp.periodo_aquisitivo_atual if comp else {},
         "created_at": colab.created_at.isoformat() if colab.created_at else None,
         "updated_at": colab.updated_at.isoformat() if colab.updated_at else None,
         "complemento_updated_at": comp.updated_at.isoformat() if comp and comp.updated_at else None,
-        "saldos_periodo": _saldos_periodo_json(get_db_session(), colab),
+        "saldos_periodo": saldos_periodo,
+        "saldos_resumo": saldos_resumo,
     }
 
 

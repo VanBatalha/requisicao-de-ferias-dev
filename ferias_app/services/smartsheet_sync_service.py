@@ -1457,7 +1457,6 @@ def _recalculate_complemento(session) -> dict:
         movimentos = [r for r in rows if not bool(r.is_ajuste)]
         rows_ordenadas = sorted(ajustes, key=lambda x: (x.data_inicio or dt.date.min, x.id or 0)) + sorted(movimentos, key=lambda x: (x.data_inicio or dt.date.min, x.id or 0))
 
-        total_solicitacoes = 0
         for sol in rows_ordenadas:
             dias = float(sol.dias if sol.dias is not None else (sol.dias_solicitados or 0))
             if abs(dias) <= 0.0001:
@@ -1487,7 +1486,6 @@ def _recalculate_complemento(session) -> dict:
                     alloc = explicit_alloc
             else:
                 dias = abs(dias)
-                total_solicitacoes += 1
                 if saldo_tipo == "PREMIUM" and premium_ini and premium_fim_excl and data_inicio and not (premium_ini <= data_inicio < premium_fim_excl):
                     # Fora da janela premium: preserva origem se existir, mas não impacta saldo premium.
                     alloc = explicit_alloc
@@ -1508,31 +1506,13 @@ def _recalculate_complemento(session) -> dict:
                 sol.updated_at = dt.datetime.utcnow()
                 origem_preenchida += 1
 
-        regular_direito = sum(float(s.saldo_inicial or 0) for s in saldos_regular)
-        regular_usados = sum(float(s.saldo_utilizado or 0) for s in saldos_regular)
-        regular_reservados = sum(float(s.saldo_reservado or 0) for s in saldos_regular)
-        regular_disponivel = sum(float(s.saldo_disponivel or 0) for s in saldos_regular)
-        premium_direito = sum(float(s.saldo_inicial or 0) for s in saldos_premium)
-        premium_usados = sum(float(s.saldo_utilizado or 0) for s in saldos_premium)
-        premium_reservados = sum(float(s.saldo_reservado or 0) for s in saldos_premium)
-        premium_disponivel = sum(float(s.saldo_disponivel or 0) for s in saldos_premium)
-        periodo_atual = current_partial_period(admissao, ref_date)
-
         comp = colab.complemento
         if not comp:
             comp = ColaboradorComplemento(colaborador_id=colab.id, colaborador_matricula=colab.matricula, user_type="USER", ativo_no_app=True)
             session.add(comp)
         comp.colaborador_matricula = colab.matricula
-        comp.saldo_regular_direito = int(round(regular_direito))
-        comp.saldo_regular_usado = int(round(regular_usados))
-        comp.saldo_regular_reservado = int(round(regular_reservados))
-        comp.saldo_regular_disponivel = int(round(regular_disponivel))
-        comp.saldo_premium_direito = int(round(premium_direito))
-        comp.saldo_premium_usado = int(round(premium_usados))
-        comp.saldo_premium_reservado = int(round(premium_reservados))
-        comp.saldo_premium_disponivel = int(round(premium_disponivel))
-        comp.total_solicitacoes = int(total_solicitacoes)
-        comp.periodo_aquisitivo_atual = periodo_atual or {}
+        # V43: saldos consolidados e total de solicitações não são mais gravados
+        # em colaborador_complemento. A fonte oficial é saldo_periodo.
         comp.calculated_at = dt.datetime.utcnow()
         comp.updated_at = dt.datetime.utcnow()
         recalculated += 1
