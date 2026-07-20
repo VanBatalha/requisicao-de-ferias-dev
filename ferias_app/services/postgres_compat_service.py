@@ -581,18 +581,32 @@ def listar_solicitacoes_postgres(email: str):
         return []
 
 
-def listar_solicitacoes_equipes_postgres(emails: Sequence[str]):
-    allowed = {safe_lower(e) for e in (emails or []) if safe_lower(e)}
-    if not allowed:
+def listar_solicitacoes_equipes_postgres(identificadores: Sequence[str]):
+    """Lista solicitações por matrícula; e-mail é aceito só como compatibilidade."""
+    valores = {str(v or '').strip() for v in (identificadores or []) if str(v or '').strip()}
+    if not valores:
         return []
     session = get_db_session()
     try:
-        locals_allowed = {_email_local(e) for e in allowed if _email_local(e)}
-        colaboradores = session.query(Colaborador).all()
-        matriculas = [c.matricula for c in colaboradores if safe_lower(c.email) in allowed or _email_local(c.email) in locals_allowed]
+        matriculas_diretas = {v.upper() for v in valores if '@' not in v}
+        emails = {safe_lower(v) for v in valores if '@' in v}
+        locals_allowed = {_email_local(e) for e in emails if _email_local(e)}
+        matriculas = set(matriculas_diretas)
+        if emails:
+            colaboradores = session.query(Colaborador).all()
+            matriculas.update(
+                str(c.matricula or '').strip().upper()
+                for c in colaboradores
+                if c.matricula and (safe_lower(c.email) in emails or _email_local(c.email) in locals_allowed)
+            )
         if not matriculas:
             return []
-        rows = session.query(Solicitacao).filter(Solicitacao.colaborador_matricula.in_(matriculas), Solicitacao.is_ajuste.is_(False)).order_by(Solicitacao.data_inicio.desc()).all()
+        rows = (
+            session.query(Solicitacao)
+            .filter(func.upper(Solicitacao.colaborador_matricula).in_(sorted(matriculas)), Solicitacao.is_ajuste.is_(False))
+            .order_by(Solicitacao.data_inicio.desc())
+            .all()
+        )
         return [_solicitacao_tuple(s, include_email=True) for s in rows]
     except Exception as exc:
         log.exception("Falha ao listar solicitações da equipe no PostgreSQL: %s", exc)

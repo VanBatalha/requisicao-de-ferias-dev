@@ -809,6 +809,9 @@
     						<button class="btn-pill btn-status" data-status="INATIVO">Inativo</button>
     					</div>
     				</div>
+                    <div style="display:flex; justify-content:flex-end; margin:0 0 10px 0;">
+                        <button type="button" id="btn-exportar-saldos" class="btn btn-primary">Exportar relatório de saldos</button>
+                    </div>
                     <div id="lista-colaboradores" class="colaboradores-lista">
                         <p class="loading">⏳ Carregando colaboradores...</p>
                     </div>
@@ -854,6 +857,18 @@
                         <div class="detalhes-campo">
                             <strong>Status</strong>
                             <span id="det-colab-status"></span>
+                        </div>
+                        <div class="detalhes-campo">
+                            <strong>Saldo regular</strong>
+                            <span id="det-colab-saldo-regular"></span>
+                        </div>
+                        <div class="detalhes-campo">
+                            <strong>Saldo Certariana</strong>
+                            <span id="det-colab-saldo-premium"></span>
+                        </div>
+                        <div class="detalhes-campo">
+                            <strong>Saldo total</strong>
+                            <span id="det-colab-saldo-total"></span>
                         </div>
                     </div>
                 </aside>
@@ -1471,15 +1486,15 @@ function renderizarColaboradores() {
     
     let html = '';
     colaboradores.forEach((colab, idx) => {
-        const statusRaw = (colab.STATUS || colab.Status || '').toString();
+        const statusRaw = (colab.STATUS || colab.Status || colab.status || '').toString();
         const statusText = statusRaw ? statusRaw : 'Sem status';
         const statusClass = statusText.toUpperCase().trim() === 'ATIVO' ? 'status-ativo' : 'status-inativo';
 
-        const email = (colab['EMAIL DA EMPRESA'] || '').toString();
+        const email = (colab['EMAIL DA EMPRESA'] || colab.email || '').toString();
         const matricula = (colab.MATRICULA || colab['MATRÍCULA'] || colab.matricula || '').toString();
-        const nome = (colab['NOME COMPLETO'] || '-').toString();
-        const cargo = (colab.CARGO || '-').toString();
-        const setor = (colab.SETOR || '-').toString();
+        const nome = (colab['NOME COMPLETO'] || colab.nome_completo || colab.nome || '-').toString();
+        const cargo = (colab.CARGO || colab.cargo || '-').toString();
+        const setor = (colab.SETOR || colab.setor || '-').toString();
 
         html += `
             <div class="colaborador-card" data-idx="${idx}">
@@ -1487,6 +1502,7 @@ function renderizarColaboradores() {
                 <div class="colaborador-info">📧 ${escapeHtml(email)}</div>
                 <div class="colaborador-info">💼 ${escapeHtml(cargo)}</div>
                 <div class="colaborador-info">🏢 ${escapeHtml(setor)}</div>
+                <div class="colaborador-info">Saldo: Regular ${Number(colab.saldo_regular || 0).toFixed(1)} | Certariana ${Number(colab.saldo_premium || 0).toFixed(1)} | Total ${Number(colab.saldo_total || 0).toFixed(1)}</div>
                 <span class="colaborador-status ${statusClass}">${escapeHtml(statusText)}</span>
             </div>
         `;
@@ -1511,15 +1527,15 @@ function renderizarColaboradores() {
 
 function mostrarColaboradorPorIndice(idx, cardElement) {
     const colab = colaboradores[idx] || {};
-    const status = (colab.STATUS || colab.Status || 'Sem status').toString();
-    const email = (colab['EMAIL DA EMPRESA'] || '').toString();
+    const status = (colab.STATUS || colab.Status || colab.status || 'Sem status').toString();
+    const email = (colab['EMAIL DA EMPRESA'] || colab.email || '').toString();
     const matricula = (colab.MATRICULA || colab['MATRÍCULA'] || colab.matricula || '').toString();
-    const nome = (colab['NOME COMPLETO'] || '-').toString();
-    const cargo = (colab.CARGO || '-').toString();
-    const setor = (colab.SETOR || '-').toString();
-    const unidade = (colab.UNIDADE || '-').toString();
-    const empresa = (colab.EMPRESA || '-').toString();
-    const telefone = (colab.TELEFONE || '-').toString();
+    const nome = (colab['NOME COMPLETO'] || colab.nome_completo || colab.nome || '-').toString();
+    const cargo = (colab.CARGO || colab.cargo || '-').toString();
+    const setor = (colab.SETOR || colab.setor || '-').toString();
+    const unidade = (colab.UNIDADE || colab.unidade || '-').toString();
+    const empresa = (colab.EMPRESA || colab.empresa || '-').toString();
+    const telefone = (colab.TELEFONE || colab.telefone || '-').toString();
 
     // Remove seleção anterior
     document.querySelectorAll('.colaborador-card.selecionado').forEach(el => {
@@ -1541,6 +1557,9 @@ function mostrarColaboradorPorIndice(idx, cardElement) {
     document.getElementById('det-colab-empresa').textContent = empresa;
     document.getElementById('det-colab-telefone').textContent = telefone;
     document.getElementById('det-colab-status').textContent = status;
+    document.getElementById('det-colab-saldo-regular').textContent = Number(colab.saldo_regular || 0).toFixed(1);
+    document.getElementById('det-colab-saldo-premium').textContent = Number(colab.saldo_premium || 0).toFixed(1);
+    document.getElementById('det-colab-saldo-total').textContent = Number(colab.saldo_total || 0).toFixed(1);
 
     document.getElementById('painel-vazio-colab').style.display = 'none';
     document.getElementById('detalhes-conteudo-colab').classList.add('show');
@@ -1796,7 +1815,7 @@ async function atualizarStatusDP() {
 // ===============================
 let ajustesModo = "AJUSTE FÉRIAS"; // ou "AJUSTE CERTARIANA"
 let ajustesGestorSel = null;
-let ajustesSubSel = null;
+let ajustesSubSel = null; // matrícula
 let ajustesColabsCache = null;
 let ajustesGestorMap = {};      // { gestorEmail: [subEmail,...] }
 let ajustesNomePorEmail = {};   // { email: nome }
@@ -1813,10 +1832,9 @@ function aEmail(s){
   return (s || "").toString().trim().toLowerCase();
 }
 
-function aNome(email){
-  const e = aEmail(email);
-  const nome = ajustesNomePorEmail[e] || e || "";
-  const mat = ajustesMatriculaPorEmail[e] || "";
+function aNome(matricula){
+  const mat = (matricula || '').toString().trim().toUpperCase();
+  const nome = ajustesNomePorEmail[mat] || mat || '';
   return mat ? `${mat} | ${nome}` : nome;
 }
 
@@ -1824,42 +1842,31 @@ function aBuildNomeIndex(colabs){
   ajustesNomePorEmail = {};
   ajustesMatriculaPorEmail = {};
   (colabs || []).forEach(c => {
-    const email = aEmail(c["EMAIL DA EMPRESA"] || c["EMAIL"] || c["E-MAIL"] || "");
-    if (!email) return;
-    const nome = (c["NOME COMPLETO"] || c["NOME"] || "").toString().trim();
-    const mat = (c.MATRICULA || c["MATRÍCULA"] || c.matricula || "").toString().trim().toUpperCase();
-    ajustesNomePorEmail[email] = nome || email;
-    ajustesMatriculaPorEmail[email] = mat;
+    const mat = (c.MATRICULA || c['MATRÍCULA'] || c.matricula || '').toString().trim().toUpperCase();
+    if (!mat) return;
+    const nome = (c['NOME COMPLETO'] || c.nome_completo || c.nome || '').toString().trim();
+    ajustesNomePorEmail[mat] = nome || mat;
   });
 }
 
 function aBuildGestorMap(colabs){
   const map = {};
   function add(gestor, sub){
-    const g = aEmail(gestor);
-    const s = aEmail(sub);
+    const g = (gestor || '').toString().trim().toUpperCase();
+    const s = (sub || '').toString().trim().toUpperCase();
     if (!g || !s || g === s) return;
     if (!map[g]) map[g] = [];
     if (!map[g].includes(s)) map[g].push(s);
   }
-
   (colabs || []).forEach(c => {
-    const sub = aEmail(c["EMAIL DA EMPRESA"] || "");
+    const sub = (c.MATRICULA || c['MATRÍCULA'] || c.matricula || '').toString().trim().toUpperCase();
     if (!sub) return;
-
-    const gestorDireto = aEmail(c["GESTOR DIRETO"] || c["GESTOR"] || "");
-    const gestorSup = aEmail(c["GESTOR SUPERIOR"] || "");
-
+    const gestorDireto = (c.GESTOR_DIRETO_MATRICULA || c.gestor_direto || '').toString().trim().toUpperCase();
+    const gestorSup = (c.GESTOR_SUPERIOR_MATRICULA || c.gestor_superior || '').toString().trim().toUpperCase();
     if (gestorDireto) add(gestorDireto, sub);
-
-    // gestor superior: se "DP" vira bucket especial dp
-    if (gestorSup){
-      if (aNorm(gestorSup) === "dp") add("dp", sub);
-      else if (aNorm(gestorSup) !== "gestor") add(gestorSup, sub);
-    }
+    if (gestorSup === 'DP') add('DP', sub);
+    else if (gestorSup && gestorSup !== 'GESTOR') add(gestorSup, sub);
   });
-
-  // ordena listas
   Object.keys(map).forEach(g => map[g] = map[g].sort());
   ajustesGestorMap = map;
 }
@@ -1880,7 +1887,7 @@ function aRenderGestores(filterText=""){
 
   let html = "";
   gestores.forEach(g => {
-    const nome = (g === "dp") ? "DP (Gestor Superior = DP)" : aNome(g);
+    const nome = (g === "DP") ? "DP (Gestor Superior = DP)" : aNome(g);
     const subCount = (ajustesGestorMap[g] || []).length;
 
     if (f && !aNorm(nome).includes(f) && !aNorm(g).includes(f)) return;
@@ -1889,7 +1896,7 @@ function aRenderGestores(filterText=""){
     html += `
       <div class="ajustes-item ${active}" data-gestor="${g}">
         <div class="title">${nome}</div>
-        <div class="sub">${g === "dp" ? "" : g} • ${subCount} subordinado(s)</div>
+        <div class="sub">${g === "DP" ? "" : g} • ${subCount} subordinado(s)</div>
       </div>
     `;
   });
@@ -1973,7 +1980,7 @@ function aSelectGestor(gestorEmail){
 }
 
 async function aSelectSub(subEmail){
-  ajustesSubSel = aEmail(subEmail);
+  ajustesSubSel = (subEmail || "").toString().trim().toUpperCase();
 
   aRenderSubordinados();
 
@@ -2022,7 +2029,7 @@ async function aSalvarAjuste(){
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
-        colaborador_email: ajustesSubSel,
+        colaborador_matricula: ajustesSubSel,
         solicitacao: ajustesModo,   // "AJUSTE FÉRIAS" | "AJUSTE CERTARIANA"
         dias: dias,
         observacoes: obs
@@ -2081,6 +2088,23 @@ async function initAjustesTab(){
 
     
 // ===== EVENT LISTENERS =====
+function exportarRelatorioSaldos(){
+  const cols = ['Matrícula','Nome','Email','Cargo','Setor','Unidade','Empresa','Status','Saldo Regular','Saldo Certariana','Saldo Total'];
+  const rows = (colaboradores || []).map(c => [
+    c.matricula || c.MATRICULA || c['MATRÍCULA'] || '', c.nome_completo || c['NOME COMPLETO'] || c.nome || '',
+    c.email || c['EMAIL DA EMPRESA'] || '', c.cargo || c.CARGO || '', c.setor || c.SETOR || '',
+    c.unidade || c.UNIDADE || '', c.empresa || c.EMPRESA || '', c.status || c.STATUS || '',
+    Number(c.saldo_regular || 0), Number(c.saldo_premium || 0), Number(c.saldo_total || 0)
+  ]);
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const csv = '\ufeff' + [cols, ...rows].map(r => r.map(esc).join(';')).join('\r\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `relatorio_saldos_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+document.getElementById('btn-exportar-saldos')?.addEventListener('click', exportarRelatorioSaldos);
 document.getElementById('busca-colaboradores')?.addEventListener('input', aplicarFiltros);
 
 document.querySelectorAll('.btn-status').forEach(btn => {

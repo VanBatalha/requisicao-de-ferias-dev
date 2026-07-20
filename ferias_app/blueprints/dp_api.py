@@ -58,46 +58,48 @@ def api_dp_colaboradores():
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
     status_filter = (request.args.get("status") or "").upper().strip()
-
     try:
-        colaboradores = listar_colaboradores()
-
-        # Filtra por status se solicitado (aceita coluna Status/STATUS)
-        if status_filter == "ATIVO":
-            colaboradores = [c for c in colaboradores if is_colaborador_ativo(c)]
-        elif status_filter == "INATIVO":
-            colaboradores = [c for c in colaboradores if not is_colaborador_ativo(c)]
+        from ..services.postgres_compat_service import postgres_enabled
+        if postgres_enabled():
+            from ..services.postgres_service import listar_colaboradores_com_saldos
+            colaboradores = listar_colaboradores_com_saldos(status_filter or None)
+        else:
+            colaboradores = listar_colaboradores()
+            if status_filter == "ATIVO":
+                colaboradores = [c for c in colaboradores if is_colaborador_ativo(c)]
+            elif status_filter == "INATIVO":
+                colaboradores = [c for c in colaboradores if not is_colaborador_ativo(c)]
 
         colaboradores = sorted(
             colaboradores,
-            key=lambda c: (str(c.get("NOME COMPLETO") or c.get("nome") or "").casefold(), str(c.get("EMAIL DA EMPRESA") or "").casefold())
+            key=lambda c: (str(c.get("NOME COMPLETO") or c.get("nome_completo") or c.get("nome") or "").casefold(), str(c.get("matricula") or c.get("MATRICULA") or ""))
         )
-
-        return jsonify({
-            "ok": True,
-            "colaboradores": colaboradores
-        })
+        return jsonify({"ok": True, "colaboradores": colaboradores, "total": len(colaboradores)})
     except Exception as e:
         print(f"ERRO em api_dp_colaboradores: {e}")
         return jsonify({"ok": False, "message": str(e)}), 500
-@bp.route("/api/dp/saldos/<path:email>")
-def api_dp_saldos(email):
+
+
+@bp.route("/api/dp/saldos/<path:identificador>")
+def api_dp_saldos(identificador):
     user = session.get("user")
     if not user or not _has_dp_access(user.get("email")):
         return jsonify({"ok": False, "message": "Acesso negado"}), 403
-
-    email = safe_lower(email or "")
-    if not email:
-        return jsonify({"ok": False, "message": "Email inválido"}), 400
-
+    identificador = str(identificador or "").strip()
+    if not identificador:
+        return jsonify({"ok": False, "message": "Matrícula inválida"}), 400
     try:
-        resumo = get_resumo_ferias(email)
-        return jsonify({
-            "ok": True,
-            "email": email,
-            "regular": resumo["regular"],
-            "premium": resumo["premium"],
-        })
+        from ..services.postgres_compat_service import postgres_enabled
+        if postgres_enabled():
+            from ..services.postgres_service import get_saldos_colaborador
+            saldos = get_saldos_colaborador(identificador)
+            return jsonify({
+                "ok": True, "matricula": identificador.upper(),
+                "regular": {"direito": saldos["regular"]["direito"], "usados": saldos["regular"]["usado"], "reservados": saldos["regular"]["reservado"], "saldo": saldos["regular"]["disponivel"]},
+                "premium": {"direito": saldos["premium"]["direito"], "usados": saldos["premium"]["usado"], "reservados": saldos["premium"]["reservado"], "saldo": saldos["premium"]["disponivel"]},
+            })
+        resumo = get_resumo_ferias(identificador)
+        return jsonify({"ok": True, "identificador": identificador, "regular": resumo["regular"], "premium": resumo["premium"]})
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
 
@@ -116,7 +118,7 @@ def api_dp_ajustes_lancar():
             return jsonify({"ok": False, "message": "Acesso negado"}), 403
 
         payload = request.get_json(silent=True) or {}
-        colab_email = safe_lower(payload.get("colaborador_email") or payload.get("email") or "")
+        colab_matricula = str(payload.get("colaborador_matricula") or payload.get("matricula") or "").strip().upper()
         solicitacao_raw = (payload.get("solicitacao") or "").strip()
         obs_user = (payload.get("observacoes") or "").strip()
         try:
@@ -124,8 +126,8 @@ def api_dp_ajustes_lancar():
         except Exception:
             dias = 0
 
-        if not colab_email:
-            return jsonify({"ok": False, "message": "Colaborador inválido"}), 400
+        if not colab_matricula:
+            return jsonify({"ok": False, "message": "Matrícula do colaborador inválida"}), 400
         if dias == 0:
             return jsonify({"ok": False, "message": "Dias deve ser diferente de zero"}), 400
 
@@ -152,7 +154,7 @@ def api_dp_ajustes_lancar():
         from ..services.postgres_service import criar_solicitacao
         hoje = dt.date.today()
         ok, msg, row_id = criar_solicitacao({
-            "colaborador_email": colab_email,
+            "colaborador_matricula": colab_matricula,
             "gestor_email": dp_email,
             "criado_por": dp_email,
             "solicitacao": solicitacao,
@@ -175,7 +177,7 @@ def api_dp_ajustes_lancar():
             "inserted_ids": [row_id] if row_id else [],
         }
         try:
-            resumo = get_resumo_ferias(colab_email)
+            resumo = get_resumo_ferias(colab_matricula)
             retorno["regular"] = resumo.get("regular")
             retorno["premium"] = resumo.get("premium")
         except Exception as e:

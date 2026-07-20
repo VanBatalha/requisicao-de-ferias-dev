@@ -390,6 +390,84 @@ def listar_colaboradores(status_filter: Optional[str] = None) -> List[Dict[str, 
         return []
 
 
+def listar_colaboradores_com_saldos(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista colaboradores com saldos consolidados por matrícula em uma única consulta.
+
+    Evita o padrão N+1 da tela do DP e usa ``saldo_periodo`` como fonte oficial.
+    """
+    session = get_db_session()
+    try:
+        query = session.query(Colaborador)
+        if status_filter:
+            query = query.filter(func.upper(func.coalesce(Colaborador.status, 'ATIVO')) == str(status_filter).upper())
+        colaboradores = query.order_by(func.lower(Colaborador.nome_completo), Colaborador.matricula).all()
+
+        mats = [str(c.matricula or '').strip().upper() for c in colaboradores if c.matricula]
+        saldos = {}
+        if mats:
+            rows = (
+                session.query(
+                    SaldoPeriodoNovo.colaborador_matricula,
+                    SaldoPeriodoNovo.tipo_saldo,
+                    func.coalesce(func.sum(SaldoPeriodoNovo.saldo_inicial), 0),
+                    func.coalesce(func.sum(SaldoPeriodoNovo.saldo_utilizado), 0),
+                    func.coalesce(func.sum(SaldoPeriodoNovo.saldo_reservado), 0),
+                    func.coalesce(func.sum(SaldoPeriodoNovo.saldo_disponivel), 0),
+                )
+                .filter(func.upper(SaldoPeriodoNovo.colaborador_matricula).in_(mats))
+                .group_by(SaldoPeriodoNovo.colaborador_matricula, SaldoPeriodoNovo.tipo_saldo)
+                .all()
+            )
+            for mat, tipo, direito, usado, reservado, disponivel in rows:
+                key = str(mat or '').strip().upper()
+                tipo_key = str(tipo or 'REGULAR').strip().upper()
+                saldos.setdefault(key, {})[tipo_key] = {
+                    'direito': float(direito or 0),
+                    'usado': float(usado or 0),
+                    'reservado': float(reservado or 0),
+                    'disponivel': float(disponivel or 0),
+                }
+
+        hierarquia = {}
+        if mats:
+            for h in session.query(HierarquiaGestao).filter(func.upper(HierarquiaGestao.colaborador_matricula).in_(mats)).all():
+                hierarquia[str(h.colaborador_matricula or '').strip().upper()] = h
+
+        out = []
+        for c in colaboradores:
+            item = c.to_dict()
+            mat = str(c.matricula or '').strip().upper()
+            h = hierarquia.get(mat)
+            gestor_direto = str(getattr(h, 'gestor_direto_matricula', '') or '').strip().upper()
+            gestor_superior = str(getattr(h, 'gestor_superior_matricula', '') or '').strip().upper()
+            item.update({
+                'MATRICULA': mat, 'MATRÍCULA': mat,
+                'EMAIL DA EMPRESA': c.email or '', 'NOME COMPLETO': c.nome_completo or '',
+                'CARGO': c.cargo or '', 'SETOR': c.setor or '', 'UNIDADE': c.unidade or '',
+                'EMPRESA': c.empresa or '', 'TELEFONE': c.telefone or '', 'STATUS': c.status or '',
+                'gestor_direto': gestor_direto, 'gestor_superior': gestor_superior,
+                'GESTOR_DIRETO_MATRICULA': gestor_direto, 'GESTOR_SUPERIOR_MATRICULA': gestor_superior,
+            })
+            reg = saldos.get(mat, {}).get('REGULAR', {'direito':0,'usado':0,'reservado':0,'disponivel':0})
+            prem = saldos.get(mat, {}).get('PREMIUM', {'direito':0,'usado':0,'reservado':0,'disponivel':0})
+            item.update({
+                'saldo_regular': reg['disponivel'],
+                'saldo_premium': prem['disponivel'],
+                'saldo_total': reg['disponivel'] + prem['disponivel'],
+                'saldo_regular_direito': reg['direito'],
+                'saldo_regular_usado': reg['usado'],
+                'saldo_regular_reservado': reg['reservado'],
+                'saldo_premium_direito': prem['direito'],
+                'saldo_premium_usado': prem['usado'],
+                'saldo_premium_reservado': prem['reservado'],
+            })
+            out.append(item)
+        return out
+    except Exception as e:
+        log.exception('Erro ao listar colaboradores com saldos: %s', e)
+        raise
+
+
 def get_saldos_colaborador(identificador: str) -> Dict[str, Any]:
     """Retorna saldos consolidados diretamente de saldo_periodo.
 

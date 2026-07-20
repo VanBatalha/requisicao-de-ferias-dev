@@ -23,8 +23,8 @@ def api_solicitar_ferias():
     return jsonify(payload), status
 
 
-def _emails_colaboradores_ativos() -> list[str]:
-    """Retorna todos os e-mails ativos no formato esperado pelo relatório."""
+def _matriculas_colaboradores_ativos() -> list[str]:
+    """Retorna matrículas ativas, chave operacional do relatório."""
     out: list[str] = []
     seen: set[str] = set()
     for colab in listar_colaboradores_cached() or []:
@@ -35,10 +35,10 @@ def _emails_colaboradores_ativos() -> list[str]:
                 continue
         except Exception:
             pass
-        email = safe_lower(colab.get("EMAIL DA EMPRESA") or colab.get("email") or "")
-        if email and email not in seen:
-            seen.add(email)
-            out.append(email)
+        matricula = str(colab.get("MATRICULA") or colab.get("MATRÍCULA") or colab.get("matricula") or "").strip().upper()
+        if matricula and matricula not in seen:
+            seen.add(matricula)
+            out.append(matricula)
     return sorted(out)
 
 
@@ -93,7 +93,7 @@ def api_relatorio_lancamento():
         elif is_dp_or_admin:
             # Sem simulação e sem gestor específico, DP/Admin recebem relatório geral.
             target_email = user_email
-            subs = _emails_colaboradores_ativos()
+            subs = _matriculas_colaboradores_ativos()
             escopo = "todos_ativos"
         else:
             # Gestor comum: apenas os colaboradores que ele pode solicitar.
@@ -101,11 +101,23 @@ def api_relatorio_lancamento():
             subs = get_subordinados(user_email)
             escopo = "gestor_logado"
 
-        relatorio = gerar_relatorio_lancamento(target_email, subs or [], mes, ano)
+        # A hierarquia ainda pode devolver e-mails por compatibilidade; convertemos
+        # tudo para matrícula antes de consultar solicitações.
+        from ..services.postgres_compat_service import get_colaborador_model
+        escopo_matriculas = []
+        seen_matriculas = set()
+        for ident in (subs or []):
+            colab = get_colaborador_model(ident)
+            mat = str(getattr(colab, 'matricula', '') or ident or '').strip().upper()
+            if mat and mat not in seen_matriculas:
+                seen_matriculas.add(mat)
+                escopo_matriculas.append(mat)
+
+        relatorio = gerar_relatorio_lancamento(target_email, escopo_matriculas, mes, ano)
         if isinstance(relatorio, dict):
             relatorio.setdefault("escopo", escopo)
             relatorio.setdefault("gestor_referencia", target_email)
-            relatorio.setdefault("total_colaboradores_escopo", len(subs or []))
+            relatorio.setdefault("total_colaboradores_escopo", len(escopo_matriculas))
         return jsonify(relatorio)
 
     except Exception as e:

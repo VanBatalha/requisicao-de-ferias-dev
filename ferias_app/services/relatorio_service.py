@@ -21,7 +21,7 @@ def gerar_relatorio_lancamento(
     
     Args:
         gestor_email: Email do gestor
-        subordinados: Lista de emails de subordinados
+        subordinados: Lista de matrículas de subordinados
         mes: Mês para filtrar (1-12), ou None para todos
         ano: Ano para filtrar, ou None para todos
     
@@ -32,22 +32,20 @@ def gerar_relatorio_lancamento(
         # Busca todas as solicitações dos colaboradores dentro do escopo do gestor.
         # Importante: o relatório deve mostrar os colaboradores que o gestor pode
         # solicitar/acompanhar, não apenas o e-mail do gestor logado.
-        todos_emails = []
-        seen_emails = set()
-        for email in (subordinados or []):
-            email_norm = str(email or "").strip().lower()
-            if email_norm and email_norm not in seen_emails:
-                seen_emails.add(email_norm)
-                todos_emails.append(email_norm)
+        identificadores = []
+        vistos = set()
+        for valor in (subordinados or []):
+            ident = str(valor or "").strip().upper()
+            if ident and ident not in vistos:
+                vistos.add(ident)
+                identificadores.append(ident)
 
         # Compatibilidade: se for chamada sem lista de subordinados, mantém fallback
         # para o próprio gestor em vez de quebrar ou retornar erro.
-        if not todos_emails and gestor_email:
-            email_norm = str(gestor_email or "").strip().lower()
-            if email_norm:
-                todos_emails.append(email_norm)
+        if not identificadores and gestor_email:
+            identificadores.append(str(gestor_email or "").strip())
 
-        solicitacoes = listar_solicitacoes_equipes(todos_emails)
+        solicitacoes = listar_solicitacoes_equipes(identificadores)
         
         if not solicitacoes:
             return {
@@ -62,7 +60,7 @@ def gerar_relatorio_lancamento(
                     "reservada": 0,
                 },
                 "total_dias": 0,
-                "colaboradores_escopo": todos_emails,
+                "colaboradores_escopo": identificadores,
             }
         
         # Filtra por mês e ano se fornecidos
@@ -168,7 +166,7 @@ def gerar_relatorio_lancamento(
             "total_dias": round(total_dias, 2),
             "mes": mes,
             "ano": ano,
-            "colaboradores_escopo": todos_emails,
+            "colaboradores_escopo": identificadores,
         }
     
     except Exception as e:
