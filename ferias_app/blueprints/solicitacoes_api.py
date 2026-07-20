@@ -101,17 +101,31 @@ def api_relatorio_lancamento():
             subs = get_subordinados(user_email)
             escopo = "gestor_logado"
 
-        # A hierarquia ainda pode devolver e-mails por compatibilidade; convertemos
-        # tudo para matrícula antes de consultar solicitações.
-        from ..services.postgres_compat_service import get_colaborador_model
+        # Resolve o escopo em lote. Evita uma consulta por colaborador, que fazia
+        # o relatório exceder o timeout do worker em ambientes com poucos recursos.
+        identificadores = {str(v or "").strip() for v in (subs or []) if str(v or "").strip()}
         escopo_matriculas = []
-        seen_matriculas = set()
-        for ident in (subs or []):
-            colab = get_colaborador_model(ident)
-            mat = str(getattr(colab, 'matricula', '') or ident or '').strip().upper()
-            if mat and mat not in seen_matriculas:
-                seen_matriculas.add(mat)
-                escopo_matriculas.append(mat)
+        if identificadores:
+            from sqlalchemy import func, or_
+            from ..models import Colaborador
+            from ..services.postgres_compat_service import postgres_enabled
+            from ..services.postgres_service import get_db_session
+
+            if postgres_enabled():
+                matriculas_diretas = {v.upper() for v in identificadores if "@" not in v}
+                emails = {safe_lower(v) for v in identificadores if "@" in v}
+                filtros = []
+                if matriculas_diretas:
+                    filtros.append(func.upper(Colaborador.matricula).in_(sorted(matriculas_diretas)))
+                if emails:
+                    filtros.append(func.lower(Colaborador.email).in_(sorted(emails)))
+                if filtros:
+                    rows = get_db_session().query(Colaborador.matricula).filter(or_(*filtros)).all()
+                    escopo_matriculas = sorted({str(r[0] or "").strip().upper() for r in rows if r[0]})
+            else:
+                # No modo legado, get_subordinados já devolve os identificadores
+                # aceitos pelo serviço do Smartsheet.
+                escopo_matriculas = sorted({v.upper() for v in identificadores})
 
         relatorio = gerar_relatorio_lancamento(target_email, escopo_matriculas, mes, ano)
         if isinstance(relatorio, dict):

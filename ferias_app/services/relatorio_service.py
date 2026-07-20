@@ -10,6 +10,119 @@ from .solicitacao_query_service import listar_solicitacoes_equipes
 log = get_logger(__name__)
 
 
+def _gerar_relatorio_postgres(
+    identificadores: List[str],
+    mes: Optional[int],
+    ano: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Gera o relatório com uma única consulta leve no PostgreSQL.
+
+    Retorna ``None`` quando PostgreSQL não está habilitado, permitindo o fallback
+    legado. A consulta seleciona apenas as colunas usadas pela tela e aplica o
+    período diretamente no banco, evitando carregar objetos ORM completos.
+    """
+    try:
+        from calendar import monthrange
+        from sqlalchemy import func
+        from ..models import Colaborador, Solicitacao
+        from .postgres_compat_service import postgres_enabled
+        from .postgres_service import get_db_session
+
+        if not postgres_enabled():
+            return None
+
+        matriculas = sorted({
+            str(v or "").strip().upper()
+            for v in (identificadores or [])
+            if str(v or "").strip()
+        })
+        if not matriculas:
+            return {
+                "ok": True, "total": 0, "por_colaborador": {},
+                "resumo_status": {"pendente": 0, "em_analise": 0, "aprovada": 0, "negada": 0, "reservada": 0},
+                "total_dias": 0, "colaboradores_escopo": [],
+                "mes": mes, "ano": ano,
+            }
+
+        db = get_db_session()
+        dias_expr = func.coalesce(Solicitacao.dias_solicitados, Solicitacao.dias, 0)
+        query = (
+            db.query(
+                Solicitacao.id,
+                Solicitacao.colaborador_matricula,
+                Colaborador.nome_completo,
+                Solicitacao.data_inicio,
+                Solicitacao.data_fim,
+                dias_expr.label("dias"),
+                Solicitacao.status,
+                func.coalesce(Solicitacao.solicitacao, Solicitacao.tipo_solicitacao, "").label("solicitacao"),
+                func.coalesce(Solicitacao.saldo_tipo, Solicitacao.tipo_ferias, "REGULAR").label("saldo_tipo"),
+                func.coalesce(Solicitacao.observacoes, "").label("observacoes"),
+            )
+            .outerjoin(Colaborador, func.upper(Colaborador.matricula) == func.upper(Solicitacao.colaborador_matricula))
+            .filter(
+                func.upper(Solicitacao.colaborador_matricula).in_(matriculas),
+                Solicitacao.is_ajuste.is_(False),
+            )
+        )
+
+        if ano and mes:
+            inicio = date(int(ano), int(mes), 1)
+            fim = date(int(ano), int(mes), monthrange(int(ano), int(mes)))
+            query = query.filter(Solicitacao.data_inicio.between(inicio, fim))
+        elif ano:
+            query = query.filter(Solicitacao.data_inicio.between(date(int(ano), 1, 1), date(int(ano), 12, 31)))
+        elif mes:
+            query = query.filter(func.extract("month", Solicitacao.data_inicio) == int(mes))
+
+        rows = query.order_by(Solicitacao.data_inicio.desc()).all()
+
+        por_colaborador: Dict[str, Any] = {}
+        resumo_status = {"pendente": 0, "em_analise": 0, "aprovada": 0, "negada": 0, "reservada": 0}
+        total_dias = 0.0
+
+        for row in rows:
+            status_norm = str(row.status or "").strip().upper()
+            if "APROV" in status_norm:
+                status_key = "aprovada"
+            elif any(x in status_norm for x in ("REPROV", "REJEIT", "NEGAD")):
+                status_key = "negada"
+            elif "ANALISE" in status_norm or "ANÁLISE" in status_norm:
+                status_key = "em_analise"
+            elif "RESERV" in status_norm:
+                status_key = "reservada"
+            else:
+                status_key = "pendente"
+            resumo_status[status_key] += 1
+
+            matricula = str(row.colaborador_matricula or "SEM MATRÍCULA").strip().upper()
+            nome = str(row.nome_completo or "").strip()
+            chave = f"{nome} ({matricula})" if nome else matricula
+            info = por_colaborador.setdefault(chave, {"solicitacoes": [], "total_dias": 0.0, "total_aprovadas": 0.0})
+            dias = float(row.dias or 0)
+            info["solicitacoes"].append({
+                "inicio": row.data_inicio.strftime("%d/%m/%Y") if row.data_inicio else "",
+                "fim": row.data_fim.strftime("%d/%m/%Y") if row.data_fim else "",
+                "dias": dias, "status": status_norm,
+                "solicitacao": row.solicitacao or "",
+                "saldo_tipo": row.saldo_tipo or "REGULAR",
+                "observacoes": row.observacoes or "",
+            })
+            info["total_dias"] += dias
+            if status_key == "aprovada":
+                info["total_aprovadas"] += dias
+            total_dias += dias
+
+        return {
+            "ok": True, "total": len(rows), "por_colaborador": por_colaborador,
+            "resumo_status": resumo_status, "total_dias": round(total_dias, 2),
+            "mes": mes, "ano": ano, "colaboradores_escopo": matriculas,
+        }
+    except Exception as exc:
+        log.exception("Falha na consulta otimizada do relatório: %s", exc)
+        raise
+
+
 def gerar_relatorio_lancamento(
     gestor_email: str,
     subordinados: List[str],
@@ -44,6 +157,10 @@ def gerar_relatorio_lancamento(
         # para o próprio gestor em vez de quebrar ou retornar erro.
         if not identificadores and gestor_email:
             identificadores.append(str(gestor_email or "").strip())
+
+        relatorio_pg = _gerar_relatorio_postgres(identificadores, mes, ano)
+        if relatorio_pg is not None:
+            return relatorio_pg
 
         solicitacoes = listar_solicitacoes_equipes(identificadores)
         
