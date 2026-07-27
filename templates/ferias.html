@@ -946,80 +946,112 @@ _applyTipoFerias();
   const relMes = document.getElementById('rel-mes');
   const relAno = document.getElementById('rel-ano');
 
+  function escaparHtml(valor) {
+    return String(valor ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
   async function gerarRelatorio() {
     if (btnGerarRelatorio.disabled) return;
-    
+
     const mes = relMes.value ? parseInt(relMes.value, 10) : null;
     const ano = relAno.value ? parseInt(relAno.value, 10) : null;
-    
+
     const params = new URLSearchParams();
     if (mes) params.append('mes', mes);
     if (ano) params.append('ano', ano);
-    
+
     btnGerarRelatorio.disabled = true;
     btnGerarRelatorio.textContent = 'Gerando...';
     relResultado.innerHTML = '<div class="muted">Gerando relatório...</div>';
-    
+
     try {
-      const resp = await fetch(`/api/relatorio-lancamento?${params.toString()}`);
-      const data = await resp.json();
-      
-      if (!data.ok) {
-        relResultado.innerHTML = `<div class="text-danger">${data.message || 'Erro ao gerar relatório'}</div>`;
+      params.append('_ts', Date.now().toString());
+      const resp = await fetch(`/api/relatorio-lancamento?${params.toString()}`, {
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store',
+      });
+      const respostaTexto = await resp.text();
+      let data = null;
+      try {
+        data = respostaTexto ? JSON.parse(respostaTexto) : null;
+      } catch (_) {
+        data = null;
+      }
+
+      if (!resp.ok || !data || !data.ok) {
+        const codigo = data?.request_id ? ` Código: ${data.request_id}.` : '';
+        const mensagem = data?.message
+          || `O servidor interrompeu a geração do relatório (HTTP ${resp.status}).`;
+        relResultado.innerHTML = `<div class="text-danger">${escaparHtml(mensagem + codigo)}</div>`;
+        console.error('Falha ao gerar relatório', { status: resp.status, resposta: respostaTexto });
         return;
       }
-      
-      // Renderiza relatório
+
       let html = '<div style="overflow-x: auto;">';
-      
-      // Resumo
+
+      if (data.from_cache && data.warning) {
+        html += `<div style="margin-bottom:12px; padding:10px 12px; border-radius:8px; background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.35);">⚠️ ${escaparHtml(data.warning)}</div>`;
+      }
       html += '<div style="margin-bottom: 16px; padding: 12px; border-radius: 8px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2);">';
-      html += `<div style="font-weight: 700; margin-bottom: 6px;">📊 Resumo</div>`;
+      html += '<div style="font-weight: 700; margin-bottom: 6px;">📊 Resumo</div>';
       html += `<div style="font-size: 13px;">Total de solicitações: <strong>${data.total}</strong></div>`;
       html += `<div style="font-size: 13px;">Total de dias: <strong>${data.total_dias}</strong></div>`;
+      html += `<div style="font-size: 13px;">Colaboradores com lançamentos: <strong>${data.total_colaboradores_com_lancamento ?? Object.keys(data.por_colaborador || {}).length}</strong></div>`;
       if (data.gestor_referencia) {
-        html += `<div style="font-size: 13px;">Gestor/referência: <strong>${data.gestor_referencia}</strong></div>`;
+        html += `<div style="font-size: 13px;">Matrícula de referência: <strong>${escaparHtml(data.gestor_referencia)}</strong></div>`;
       }
-      if (typeof data.total_colaboradores_escopo !== 'undefined') {
-        html += `<div style="font-size: 13px;">Colaboradores no escopo: <strong>${data.total_colaboradores_escopo}</strong></div>`;
+      if (data.total_colaboradores_escopo !== null && typeof data.total_colaboradores_escopo !== 'undefined') {
+        html += `<div style="font-size: 13px;">Colaboradores vinculados à equipe: <strong>${data.total_colaboradores_escopo}</strong></div>`;
       }
-      html += `<div style="font-size: 13px; margin-top: 6px; display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px;">`;
+      html += '<div style="font-size: 13px; margin-top: 6px; display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px;">';
       html += `<span>✓ Aprovadas: ${data.resumo_status.aprovada}</span>`;
       html += `<span>⏳ Análise: ${data.resumo_status.em_analise}</span>`;
       html += `<span>⏸ Reservada: ${data.resumo_status.reservada}</span>`;
       html += `<span>⏳ Pendente: ${data.resumo_status.pendente}</span>`;
-      html += `<span>✗ Negadas: ${data.resumo_status.negada}</span>`;
+      html += `<span>✗ Negadas/canceladas: ${data.resumo_status.negada}</span>`;
       html += '</div></div>';
-      
-      // Tabela por colaborador
-      if (Object.keys(data.por_colaborador).length > 0) {
+
+      const colaboradores = Object.entries(data.por_colaborador || {});
+      if (colaboradores.length > 0) {
         html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
         html += '<thead><tr style="border-bottom: 2px solid rgba(148, 163, 184, 0.4); background: rgba(0,0,0,0.05);">';
         html += '<th style="padding: 10px; text-align: left;">Colaborador</th>';
         html += '<th style="padding: 10px; text-align: center;">Solicitações</th>';
-        html += '<th style="padding: 10px; text-align: center;">Total Dias</th>';
-        html += '<th style="padding: 10px; text-align: center;">Aprovadas</th>';
-        html += '</tr></thead>';
-        html += '<tbody>';
-        
-        Object.entries(data.por_colaborador).forEach(([email, info]) => {
+        html += '<th style="padding: 10px; text-align: center;">Total dias</th>';
+        html += '<th style="padding: 10px; text-align: center;">Dias aprovados</th>';
+        html += '</tr></thead><tbody>';
+
+        colaboradores.forEach(([chave, info]) => {
           html += '<tr style="border-bottom: 1px solid rgba(148, 163, 184, 0.2);">';
-          html += `<td style="padding: 10px;">${email}</td>`;
-          html += `<td style="padding: 10px; text-align: center;">${info.solicitacoes.length}</td>`;
-          html += `<td style="padding: 10px; text-align: center;"><strong>${info.total_dias.toFixed(1)}</strong></td>`;
-          html += `<td style="padding: 10px; text-align: center;">${info.total_aprovadas.toFixed(1)}</td>`;
+          html += `<td style="padding: 10px;"><details><summary style="cursor:pointer; font-weight:600;">${escaparHtml(chave)}</summary>`;
+          html += '<div style="margin-top:8px; display:grid; gap:6px; min-width:520px;">';
+          (info.solicitacoes || []).forEach((sol) => {
+            const observacao = sol.observacoes ? ` — ${escaparHtml(sol.observacoes)}` : '';
+            html += `<div style="padding:7px 9px; border:1px solid rgba(148,163,184,.25); border-radius:6px;">`;
+            html += `<strong>${escaparHtml(sol.inicio)} a ${escaparHtml(sol.fim)}</strong> · ${Number(sol.dias || 0).toFixed(1)} dias · ${escaparHtml(sol.status)} · ${escaparHtml(sol.solicitacao)} · ${escaparHtml(sol.saldo_tipo)}${observacao}`;
+            html += '</div>';
+          });
+          html += '</div></details></td>';
+          html += `<td style="padding: 10px; text-align: center;">${(info.solicitacoes || []).length}</td>`;
+          html += `<td style="padding: 10px; text-align: center;"><strong>${Number(info.total_dias || 0).toFixed(1)}</strong></td>`;
+          html += `<td style="padding: 10px; text-align: center;">${Number(info.total_aprovadas || 0).toFixed(1)}</td>`;
           html += '</tr>';
         });
-        
+
         html += '</tbody></table>';
       } else {
         html += '<div class="muted">Nenhum lançamento encontrado para o período.</div>';
       }
-      
+
       html += '</div>';
       relResultado.innerHTML = html;
     } catch (e) {
-      relResultado.innerHTML = '<div class="text-danger">Erro ao gerar relatório. Tente novamente.</div>';
+      relResultado.innerHTML = '<div class="text-danger">Não foi possível comunicar com o servidor para gerar o relatório.</div>';
       console.error(e);
     } finally {
       btnGerarRelatorio.disabled = false;

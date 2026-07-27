@@ -13,6 +13,11 @@ _SHEET_CACHE = {}
 _SHEET_CACHE_TTL_SECONDS = int(os.getenv("SHEET_CACHE_TTL_SECONDS", "20"))
 
 
+def _legacy_smartsheet_enabled() -> bool:
+    """Bloqueia acessos antigos; a sincronização ADMIN usa serviço próprio."""
+    return str(os.getenv("SMARTSHEET_LEGACY_ACCESS_ENABLED") or "").strip().lower() in {"1", "true", "yes", "sim"}
+
+
 def invalidate_sheet_cache(sheet_id=None):
     try:
         if sheet_id is None:
@@ -30,6 +35,8 @@ def invalidate_sheet_cache(sheet_id=None):
 
 
 def get_smartsheet_client(force_user_token: bool = False):
+    if not _legacy_smartsheet_enabled():
+        return None
     service_token = (
         os.getenv("SMARTSHEET_SERVICE_TOKEN")
         or os.getenv("SMARTSHEET_API_TOKEN")
@@ -44,6 +51,8 @@ def get_smartsheet_client(force_user_token: bool = False):
 
 
 def get_smartsheet_token() -> str | None:
+    if not _legacy_smartsheet_enabled():
+        return None
     service_token = (
         os.getenv("SMARTSHEET_SERVICE_TOKEN")
         or os.getenv("SMARTSHEET_API_TOKEN")
@@ -55,6 +64,8 @@ def get_smartsheet_token() -> str | None:
 
 
 def add_rows_rest(sheet_id: int, rows_to_add: list, *, timeout: int = 25) -> list[int]:
+    if not _legacy_smartsheet_enabled():
+        raise RuntimeError("Acesso legado ao Smartsheet desativado. Use a sincronização da aba ADMIN.")
     token = get_smartsheet_token()
     if not token:
         raise RuntimeError("Token Smartsheet ausente.")

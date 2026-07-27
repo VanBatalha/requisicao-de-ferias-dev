@@ -214,7 +214,42 @@
     </p>
 
     <h3 style="margin:18px 0 8px;">Saldos por período aquisitivo</h3>
+    <p class="muted" style="margin-top:-4px;">Cada linha representa P1 até PX para férias regulares ou Licença Certariana. O disponível é recalculado como direito − utilizado − reservado.</p>
     <div id="cadSaldosPeriodo" class="muted" style="overflow:auto; margin-bottom:12px;"></div>
+
+    <div id="cadSaldoEditor" style="display:none; margin:12px 0; padding:14px; border:1px solid rgba(148,163,184,.35); border-radius:10px;">
+      <h4 style="margin:0 0 10px;">Editar linha de saldo</h4>
+      <input type="hidden" id="cadSaldoId" />
+      <div class="grid-2">
+        <div><label class="muted">Tipo</label><select id="cadSaldoTipo" class="input"><option value="REGULAR">Férias regulares</option><option value="PREMIUM">Licença Certariana</option></select></div>
+        <div><label class="muted">Período</label><input id="cadSaldoPeriodo" class="input" type="number" min="1" /></div>
+        <div><label class="muted">Início</label><input id="cadSaldoInicio" class="input" type="date" /></div>
+        <div><label class="muted">Fim</label><input id="cadSaldoFim" class="input" type="date" /></div>
+        <div><label class="muted">Direito / saldo inicial</label><input id="cadSaldoInicial" class="input" type="number" step="0.01" min="0" /></div>
+        <div><label class="muted">Utilizado</label><input id="cadSaldoUtilizado" class="input" type="number" step="0.01" min="0" /></div>
+        <div><label class="muted">Reservado</label><input id="cadSaldoReservado" class="input" type="number" step="0.01" min="0" /></div>
+        <div><label class="chk" style="margin-top:24px;"><input id="cadSaldoAtual" type="checkbox" /> Período atual</label></div>
+      </div>
+      <div class="actions" style="margin-top:12px;"><button class="btn" id="cadSaldoSalvar">Salvar saldo</button><button class="btn btn-danger" id="cadSaldoExcluir">Excluir linha</button><button class="btn btn-secondary" id="cadSaldoCancelar">Cancelar</button></div>
+    </div>
+
+    <h3 style="margin:22px 0 8px;">Ajustes realizados</h3>
+    <p class="muted" style="margin-top:-4px;">Ao editar ou excluir um ajuste aprovado, o sistema estorna o efeito anterior e atualiza as linhas de saldo na mesma transação.</p>
+    <div id="cadAjustes" class="muted" style="overflow:auto; margin-bottom:12px;"></div>
+
+    <div id="cadAjusteEditor" style="display:none; margin:12px 0; padding:14px; border:1px solid rgba(148,163,184,.35); border-radius:10px;">
+      <h4 style="margin:0 0 10px;">Editar ajuste</h4>
+      <input type="hidden" id="cadAjusteId" />
+      <div class="grid-2">
+        <div><label class="muted">Tipo</label><select id="cadAjusteTipo" class="input"><option value="REGULAR">Férias regulares</option><option value="PREMIUM">Licença Certariana</option></select></div>
+        <div><label class="muted">Dias (positivo acrescenta; negativo desconta)</label><input id="cadAjusteDias" class="input" type="number" step="1" /></div>
+        <div><label class="muted">Data</label><input id="cadAjusteData" class="input" type="date" /></div>
+        <div><label class="muted">Status</label><select id="cadAjusteStatus" class="input"><option value="APROVADA">APROVADA</option><option value="PENDENTE">PENDENTE</option><option value="EM ANÁLISE">EM ANÁLISE</option><option value="CANCELADA">CANCELADA</option><option value="REPROVADO">REPROVADO</option></select></div>
+        <div><label class="muted">Aplicar no período P</label><input id="cadAjustePeriodo" class="input" type="number" min="1" placeholder="Automático" /></div>
+      </div>
+      <div style="margin-top:10px;"><label class="muted">Observações</label><textarea id="cadAjusteObs" class="input" style="height:90px; resize:vertical;"></textarea></div>
+      <div class="actions" style="margin-top:12px;"><button class="btn" id="cadAjusteSalvar">Salvar ajuste</button><button class="btn btn-danger" id="cadAjusteExcluir">Excluir ajuste</button><button class="btn btn-secondary" id="cadAjusteCancelar">Cancelar</button></div>
+    </div>
 
     <div class="actions" style="margin-top:16px;">
       <button class="btn" id="cadBtnSalvar">Salvar cadastro</button>
@@ -355,6 +390,19 @@
     return (value || "").toString().trim();
   }
 
+  function cadEscape(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function cadTipoLabel(tipo) {
+    return cadNorm(tipo).toUpperCase() === "PREMIUM" ? "Licença Certariana" : "Férias regulares";
+  }
+
   function cadSetMsg(text, cls = "muted") {
     const el = cad$("cadMsgSalvar");
     if (!el) return;
@@ -430,17 +478,152 @@
       return;
     }
     box.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12px;">
-      <thead><tr><th style="text-align:left; padding:6px;">Tipo</th><th style="text-align:left; padding:6px;">Período</th><th style="text-align:left; padding:6px;">Início</th><th style="text-align:left; padding:6px;">Fim</th><th style="text-align:right; padding:6px;">Direito</th><th style="text-align:right; padding:6px;">Usado</th><th style="text-align:right; padding:6px;">Reservado</th><th style="text-align:right; padding:6px;">Disponível</th></tr></thead>
+      <thead><tr><th style="text-align:left; padding:6px;">Tipo</th><th style="text-align:left; padding:6px;">Período</th><th style="text-align:left; padding:6px;">Início</th><th style="text-align:left; padding:6px;">Fim</th><th style="text-align:right; padding:6px;">Direito</th><th style="text-align:right; padding:6px;">Usado</th><th style="text-align:right; padding:6px;">Reservado</th><th style="text-align:right; padding:6px;">Disponível</th><th style="padding:6px;"></th></tr></thead>
       <tbody>${rows.map(r => `<tr>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadNorm(r.tipo_saldo)}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">P${r.periodo_numero || ''}${r.is_atual ? ' (atual)' : ''}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadNorm(r.data_inicio)}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadNorm(r.data_fim)}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right;">${r.dias_direito || 0}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right;">${r.dias_usados || 0}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right;">${r.dias_reservados || 0}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right; font-weight:700;">${r.dias_disponiveis || 0}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(cadTipoLabel(r.tipo_saldo))}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">P${Number(r.periodo_numero || 0)}${r.is_atual ? ' (atual)' : ''}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.data_inicio)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.data_fim)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right;">${Number(r.dias_direito || 0)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right;">${Number(r.dias_usados || 0)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right;">${Number(r.dias_reservados || 0)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right; font-weight:700;">${Number(r.dias_disponiveis || 0)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);"><button type="button" class="btn btn-secondary" style="padding:5px 8px;" onclick="editarCadSaldo(${Number(r.saldo_id)})">Editar</button></td>
       </tr>`).join('')}</tbody></table>`;
+  }
+
+  function renderCadAjustes(rows) {
+    const box = cad$("cadAjustes");
+    if (!box) return;
+    if (!rows || rows.length === 0) {
+      box.innerHTML = '<div class="empty">Nenhum ajuste registrado para este colaborador.</div>';
+      return;
+    }
+    box.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead><tr><th style="text-align:left; padding:6px;">Data</th><th style="text-align:left; padding:6px;">Tipo</th><th style="text-align:right; padding:6px;">Dias</th><th style="text-align:left; padding:6px;">Período</th><th style="text-align:left; padding:6px;">Status</th><th style="text-align:left; padding:6px;">Observações</th><th style="padding:6px;"></th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.data_inicio)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(cadTipoLabel(r.saldo_tipo))}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right; font-weight:700;">${Number(r.dias || 0)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.periodo_aquisitivo_origem || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.status)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); max-width:280px; white-space:normal;">${cadEscape(r.observacoes || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);"><button type="button" class="btn btn-secondary" style="padding:5px 8px;" onclick="editarCadAjuste(${Number(r.id)})">Editar</button></td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+
+  function fecharCadSaldoEditor() { cad$("cadSaldoEditor").style.display = "none"; }
+  function fecharCadAjusteEditor() { cad$("cadAjusteEditor").style.display = "none"; }
+
+  function editarCadSaldo(saldoId) {
+    const r = (cadSelecionado?.saldos_periodo || []).find(x => Number(x.saldo_id) === Number(saldoId));
+    if (!r) return;
+    cad$("cadSaldoId").value = r.saldo_id;
+    cad$("cadSaldoTipo").value = cadNorm(r.tipo_saldo).toUpperCase() === "PREMIUM" ? "PREMIUM" : "REGULAR";
+    cad$("cadSaldoPeriodo").value = r.periodo_numero || "";
+    cad$("cadSaldoInicio").value = (r.data_inicio || "").slice(0, 10);
+    cad$("cadSaldoFim").value = (r.data_fim || "").slice(0, 10);
+    cad$("cadSaldoInicial").value = Number(r.dias_direito || 0);
+    cad$("cadSaldoUtilizado").value = Number(r.dias_usados || 0);
+    cad$("cadSaldoReservado").value = Number(r.dias_reservados || 0);
+    cad$("cadSaldoAtual").checked = !!r.is_atual;
+    cad$("cadSaldoEditor").style.display = "block";
+    cad$("cadSaldoEditor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function editarCadAjuste(ajusteId) {
+    const r = (cadSelecionado?.ajustes || []).find(x => Number(x.id) === Number(ajusteId));
+    if (!r) return;
+    const matches = [...String(r.periodo_aquisitivo_origem || "").matchAll(/P\s*(\d+)/gi)];
+    cad$("cadAjusteId").value = r.id;
+    cad$("cadAjusteTipo").value = cadNorm(r.saldo_tipo).toUpperCase() === "PREMIUM" ? "PREMIUM" : "REGULAR";
+    cad$("cadAjusteDias").value = Number(r.dias || 0);
+    cad$("cadAjusteData").value = (r.data_inicio || "").slice(0, 10);
+    const statusAjuste = cadNorm(r.status).toUpperCase().replace("EM ANALISE", "EM ANÁLISE").replace("APROVADO", "APROVADA").replace("CANCELADO", "CANCELADA").replace("REPROVADA", "REPROVADO");
+    cad$("cadAjusteStatus").value = ["APROVADA", "PENDENTE", "EM ANÁLISE", "CANCELADA", "REPROVADO"].includes(statusAjuste) ? statusAjuste : "APROVADA";
+    cad$("cadAjustePeriodo").value = matches.length === 1 ? matches[0][1] : "";
+    cad$("cadAjusteObs").value = r.observacoes || "";
+    cad$("cadAjusteEditor").style.display = "block";
+    cad$("cadAjusteEditor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function salvarCadSaldo() {
+    const colaboradorId = cad$("cadId").value;
+    const saldoId = cad$("cadSaldoId").value;
+    if (!colaboradorId || !saldoId) return;
+    if (!confirm("Salvar esta alteração diretamente na linha de saldo?")) return;
+    const payload = {
+      tipo_saldo: cad$("cadSaldoTipo").value,
+      periodo_numero: Number(cad$("cadSaldoPeriodo").value),
+      data_inicio: cad$("cadSaldoInicio").value,
+      data_fim: cad$("cadSaldoFim").value,
+      saldo_inicial: cad$("cadSaldoInicial").value,
+      saldo_utilizado: cad$("cadSaldoUtilizado").value,
+      saldo_reservado: cad$("cadSaldoReservado").value,
+      is_atual: cad$("cadSaldoAtual").checked,
+    };
+    cadSetMsg("Salvando saldo...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${colaboradorId}/saldo/${saldoId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Erro ao salvar saldo.");
+      preencherCadEditor(data.colaborador);
+      cadSetMsg(data.message || "Saldo atualizado.", "text-success");
+    } catch (e) { cadSetMsg(e.message || "Erro ao salvar saldo.", "text-danger"); }
+  }
+
+  async function excluirCadSaldo() {
+    const colaboradorId = cad$("cadId").value;
+    const saldoId = cad$("cadSaldoId").value;
+    if (!colaboradorId || !saldoId) return;
+    if (!confirm("Excluir definitivamente esta linha P do saldo? O histórico de solicitações não será excluído.")) return;
+    cadSetMsg("Excluindo linha de saldo...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${colaboradorId}/saldo/${saldoId}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Erro ao excluir saldo.");
+      preencherCadEditor(data.colaborador);
+      cadSetMsg(data.message || "Linha excluída.", "text-success");
+    } catch (e) { cadSetMsg(e.message || "Erro ao excluir saldo.", "text-danger"); }
+  }
+
+  async function salvarCadAjuste() {
+    const colaboradorId = cad$("cadId").value;
+    const ajusteId = cad$("cadAjusteId").value;
+    if (!colaboradorId || !ajusteId) return;
+    if (!confirm("Salvar as alterações deste ajuste? Se tipo, dias ou período forem modificados, o efeito anterior será estornado e o novo valor será aplicado ao saldo.")) return;
+    const payload = {
+      saldo_tipo: cad$("cadAjusteTipo").value,
+      dias: cad$("cadAjusteDias").value,
+      data_inicio: cad$("cadAjusteData").value,
+      data_fim: cad$("cadAjusteData").value,
+      status: cad$("cadAjusteStatus").value,
+      periodo_numero: cad$("cadAjustePeriodo").value || null,
+      observacoes: cad$("cadAjusteObs").value,
+    };
+    cadSetMsg("Atualizando ajuste...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${colaboradorId}/ajuste/${ajusteId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Erro ao atualizar ajuste.");
+      preencherCadEditor(data.colaborador);
+      cadSetMsg(data.message || "Ajuste atualizado.", "text-success");
+    } catch (e) { cadSetMsg(e.message || "Erro ao atualizar ajuste.", "text-danger"); }
+  }
+
+  async function excluirCadAjuste() {
+    const colaboradorId = cad$("cadId").value;
+    const ajusteId = cad$("cadAjusteId").value;
+    if (!colaboradorId || !ajusteId) return;
+    if (!confirm("Excluir definitivamente este ajuste? O efeito dele será estornado das linhas de saldo.")) return;
+    cadSetMsg("Excluindo ajuste...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${colaboradorId}/ajuste/${ajusteId}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Erro ao excluir ajuste.");
+      preencherCadEditor(data.colaborador);
+      cadSetMsg(data.message || "Ajuste excluído.", "text-success");
+    } catch (e) { cadSetMsg(e.message || "Erro ao excluir ajuste.", "text-danger"); }
   }
 
   function preencherCadEditor(c) {
@@ -460,6 +643,9 @@
     cad$("cadGestorDireto").value = c.gestor_direto || "";
     cad$("cadGestorSuperior").value = c.gestor_superior || "";
     renderSaldosPeriodo(c.saldos_periodo || []);
+    renderCadAjustes(c.ajustes || []);
+    fecharCadSaldoEditor();
+    fecharCadAjusteEditor();
     cad$("cadEditor").style.display = "block";
   }
 
@@ -620,6 +806,12 @@
   cad$("cadBusca")?.addEventListener("keydown", (e) => { if (e.key === "Enter") buscarCadColaboradores(); });
   cad$("cadBtnSalvar")?.addEventListener("click", salvarCadColaborador);
   cad$("cadBtnCancelar")?.addEventListener("click", cancelarCadEditor);
+  cad$("cadSaldoSalvar")?.addEventListener("click", salvarCadSaldo);
+  cad$("cadSaldoExcluir")?.addEventListener("click", excluirCadSaldo);
+  cad$("cadSaldoCancelar")?.addEventListener("click", fecharCadSaldoEditor);
+  cad$("cadAjusteSalvar")?.addEventListener("click", salvarCadAjuste);
+  cad$("cadAjusteExcluir")?.addEventListener("click", excluirCadAjuste);
+  cad$("cadAjusteCancelar")?.addEventListener("click", fecharCadAjusteEditor);
   cad$("syncBtnCadastro")?.addEventListener("click", sincronizarCadastro);
   cad$("syncBtnStatus")?.addEventListener("click", carregarSyncStatus);
   carregarSyncStatus();

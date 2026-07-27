@@ -195,6 +195,12 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     if not user:
         return {"ok": False, "message": "Não autenticado."}, 401
 
+    if not pg_enabled:
+        return {
+            "ok": False,
+            "message": "PostgreSQL indisponível. A gravação direta no Smartsheet foi desativada; tente novamente quando o banco estiver disponível.",
+        }, 503
+
     gestor_email = safe_lower(user.get("email") or "")
     if not gestor_email:
         return {"ok": False, "message": "Usuário inválido."}, 400

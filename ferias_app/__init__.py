@@ -22,7 +22,7 @@ def create_app(run_db_migrations: bool = False) -> Flask:
 
     try:
         from .logging_config import get_logger as _get_logger
-        _get_logger(__name__).info("Gestao Ferias build V45 carregado")
+        _get_logger(__name__).info("Gestao Ferias build V52 carregado")
     except Exception:
         pass
 
@@ -48,14 +48,10 @@ def create_app(run_db_migrations: bool = False) -> Flask:
     # Contexto global para templates
     app.context_processor(inject_user_context)
 
-    # Sincronizacao diaria em background. Nao bloqueia o startup nem requests.
-    # Scripts manuais usam create_app(run_db_migrations=True) e nao iniciam scheduler.
-    if not run_db_migrations:
-        try:
-            from .services.auto_sync_service import start_auto_sync_scheduler
-            start_auto_sync_scheduler(app)
-        except Exception:
-            log.exception("Falha ao iniciar scheduler de sincronizacao automatica")
+    # V52: não inicia sincronização automática do Smartsheet no Web Service.
+    # A única comunicação com o Smartsheet deve partir explicitamente da aba ADMIN.
+    # Isso também evita que cada processo do Gunicorn abra uma sincronização paralela
+    # e dispute conexões PostgreSQL com as requisições normais do aplicativo.
 
     @app.teardown_appcontext
     def _close_db_session(exception=None):  # noqa: ANN001

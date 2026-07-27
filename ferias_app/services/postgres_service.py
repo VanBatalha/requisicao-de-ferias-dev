@@ -72,13 +72,21 @@ def init_db(run_migrations: bool = False):
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
+        # Falha rapidamente quando o banco não aceita novas conexões. Sem este
+        # limite, o Gunicorn pode encerrar o worker antes de o psycopg2 responder.
+        "connect_timeout": 5,
+        "application_name": "ferias_app_web",
     }
     _ENGINE = create_engine(
         db_url,
         echo=False,
         pool_pre_ping=True,
         pool_recycle=60,
-        pool_timeout=30,
+        # Mantém poucos sockets por processo do Gunicorn. O aplicativo tem
+        # consultas curtas e não precisa de um pool grande por worker.
+        pool_size=3,
+        max_overflow=2,
+        pool_timeout=5,
         pool_reset_on_return="rollback",
         connect_args=connect_args,
     )

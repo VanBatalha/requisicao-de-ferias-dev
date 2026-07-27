@@ -30,7 +30,7 @@ def login():
         # get_session() é um context manager. Na V13 ele estava sendo usado como
         # se fosse uma Session direta, gerando o erro:
         # '_GeneratorContextManager' object has no attribute 'query'.
-        from ..models import Colaborador
+        from ..models import Colaborador, ColaboradorComplemento, PermissaoUsuario
         with get_session() as db:
             colaborador = db.query(Colaborador).filter(
                 func.lower(Colaborador.email) == email,
@@ -43,6 +43,24 @@ def login():
             
             colaborador_id = colaborador.id
             colaborador_matricula = colaborador.matricula
+
+            roles = {
+                str(role or "").strip().upper()
+                for (role,) in db.query(PermissaoUsuario.role).filter(
+                    PermissaoUsuario.colaborador_matricula == colaborador_matricula
+                ).all()
+                if role
+            }
+            if roles.intersection({"ADMIN", "ADMINISTRADOR"}):
+                user_type = "ADMIN"
+            elif roles.intersection({"DP", "RH"}):
+                user_type = "DP"
+            else:
+                complemento = db.query(ColaboradorComplemento.user_type).filter(
+                    ColaboradorComplemento.colaborador_matricula == colaborador_matricula
+                ).first()
+                comp_type = str(complemento[0] if complemento else "USER").strip().upper()
+                user_type = "ADMIN" if comp_type in {"ADMIN", "ADMINISTRADOR"} else ("DP" if comp_type in {"DP", "RH"} else "USER")
         
         # 4. Sessão mínima usada pelo restante do app
         session["user"] = {
@@ -53,6 +71,7 @@ def login():
             "dn": u.dn,
             "groups": u.groups,
             "matricula": colaborador_matricula,
+            "user_type": user_type,
         }
         
         return redirect(url_for("ferias.home"))

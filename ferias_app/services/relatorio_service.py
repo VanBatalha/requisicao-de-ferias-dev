@@ -1,294 +1,418 @@
-"""Serviço para gerar relatórios de lançamento de férias."""
+"""Relatório de solicitações gerado diretamente pelo PostgreSQL.
+
+V52:
+- conexão curta e exclusiva, sem disputar o pool SQLAlchemy das telas;
+- perfil e matrícula lidos da sessão, sem Smartsheet e sem busca por e-mail;
+- limite do PostgreSQL e limite rígido no processo para impedir timeout do Gunicorn;
+- cache local do último resultado por usuário/período como contingência;
+- DP/ADMIN consultam todos; gestores consultam somente sua equipe.
+"""
 from __future__ import annotations
 
-from datetime import datetime, date
-from typing import List, Dict, Any, Optional
+from contextlib import contextmanager
+from datetime import date
+from decimal import Decimal
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import threading
+import time
+import uuid
+from typing import Any, Dict, Optional
 
+import psycopg2
+from psycopg2 import InterfaceError, OperationalError
+from psycopg2.extras import RealDictCursor
+
+from ..config import get_settings
 from ..logging_config import get_logger
-from .solicitacao_query_service import listar_solicitacoes_equipes
 
 log = get_logger(__name__)
 
+_CACHE_DIR = Path(os.getenv("RELATORIO_CACHE_DIR") or "/tmp/ferias_app_relatorios")
+_CACHE_TTL_SECONDS = max(60, int(os.getenv("RELATORIO_CACHE_TTL_SECONDS") or "600"))
+_QUERY_HARD_TIMEOUT_SECONDS = max(3, int(os.getenv("RELATORIO_QUERY_TIMEOUT_SECONDS") or "9"))
 
-def _gerar_relatorio_postgres(
-    identificadores: List[str],
-    mes: Optional[int],
-    ano: Optional[int],
-) -> Optional[Dict[str, Any]]:
-    """Gera o relatório com uma única consulta leve no PostgreSQL.
 
-    Retorna ``None`` quando PostgreSQL não está habilitado, permitindo o fallback
-    legado. A consulta seleciona apenas as colunas usadas pela tela e aplica o
-    período diretamente no banco, evitando carregar objetos ORM completos.
-    """
+class RelatorioAcessoNegado(PermissionError):
+    """Usuário não possui perfil DP/ADMIN nem equipe cadastrada."""
+
+
+class RelatorioTempoExcedido(TimeoutError):
+    """A consulta ultrapassou o limite seguro do request web."""
+
+
+def _schema_name() -> str:
+    schema = (os.getenv("DB_SCHEMA") or "app_ferias").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+        return "app_ferias"
+    return schema
+
+
+def _quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _numero(valor: Any) -> float:
+    if valor is None:
+        return 0.0
+    if isinstance(valor, Decimal):
+        return float(valor)
     try:
-        from calendar import monthrange
-        from sqlalchemy import func
-        from ..models import Colaborador, Solicitacao
-        from .postgres_compat_service import postgres_enabled
-        from .postgres_service import get_db_session
+        return float(valor)
+    except (TypeError, ValueError):
+        return 0.0
 
-        if not postgres_enabled():
-            return None
 
-        matriculas = sorted({
-            str(v or "").strip().upper()
-            for v in (identificadores or [])
-            if str(v or "").strip()
-        })
-        if not matriculas:
-            return {
-                "ok": True, "total": 0, "por_colaborador": {},
-                "resumo_status": {"pendente": 0, "em_analise": 0, "aprovada": 0, "negada": 0, "reservada": 0},
-                "total_dias": 0, "colaboradores_escopo": [],
-                "mes": mes, "ano": ano,
-            }
+def _status_key(status: Any) -> tuple[str, str]:
+    original = str(status or "PENDENTE").strip().upper()
+    normalizado = (
+        original.replace("Á", "A").replace("Ã", "A").replace("Â", "A")
+        .replace("É", "E").replace("Ê", "E").replace("Í", "I")
+        .replace("Ó", "O").replace("Ô", "O").replace("Õ", "O")
+        .replace("Ú", "U").replace("Ç", "C")
+    )
+    if "APROV" in normalizado:
+        return original, "aprovada"
+    if any(valor in normalizado for valor in ("REPROV", "REJEIT", "NEGAD", "CANCEL")):
+        return original, "negada"
+    if "ANALISE" in normalizado:
+        return original, "em_analise"
+    if "RESERV" in normalizado:
+        return original, "reservada"
+    return original, "pendente"
 
-        db = get_db_session()
-        dias_expr = func.coalesce(Solicitacao.dias_solicitados, Solicitacao.dias, 0)
-        query = (
-            db.query(
-                Solicitacao.id,
-                Solicitacao.colaborador_matricula,
-                Colaborador.nome_completo,
-                Solicitacao.data_inicio,
-                Solicitacao.data_fim,
-                dias_expr.label("dias"),
-                Solicitacao.status,
-                func.coalesce(Solicitacao.solicitacao, Solicitacao.tipo_solicitacao, "").label("solicitacao"),
-                func.coalesce(Solicitacao.saldo_tipo, Solicitacao.tipo_ferias, "REGULAR").label("saldo_tipo"),
-                func.coalesce(Solicitacao.observacoes, "").label("observacoes"),
-            )
-            .outerjoin(Colaborador, func.upper(Colaborador.matricula) == func.upper(Solicitacao.colaborador_matricula))
-            .filter(
-                func.upper(Solicitacao.colaborador_matricula).in_(matriculas),
-                Solicitacao.is_ajuste.is_(False),
-            )
+
+def _normalizar_perfil(value: Any) -> str:
+    value = str(value or "").strip().upper()
+    if value in {"ADMIN", "ADMINISTRADOR"}:
+        return "ADMIN"
+    if value in {"DP", "RH"}:
+        return "DP"
+    return "USER"
+
+
+def _resultado_vazio(
+    *, request_id: str, mes: Optional[int], ano: Optional[int], escopo: str,
+    referencia: str, total_colaboradores_escopo: Optional[int],
+) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "request_id": request_id,
+        "total": 0,
+        "por_colaborador": {},
+        "resumo_status": {"pendente": 0, "em_analise": 0, "aprovada": 0, "negada": 0, "reservada": 0},
+        "total_dias": 0,
+        "mes": mes,
+        "ano": ano,
+        "escopo": escopo,
+        "gestor_referencia": referencia,
+        "total_colaboradores_escopo": total_colaboradores_escopo,
+        "total_colaboradores_com_lancamento": 0,
+        "from_cache": False,
+    }
+
+
+def _abrir_conexao():
+    settings = get_settings()
+    if not settings.database_url:
+        raise ValueError("PostgreSQL não configurado para gerar o relatório.")
+    return psycopg2.connect(
+        settings.database_url,
+        connect_timeout=4,
+        application_name="ferias_app_relatorio_v52",
+        options=(
+            "-c statement_timeout=6000 "
+            "-c lock_timeout=1500 "
+            "-c idle_in_transaction_session_timeout=7000"
+        ),
+    )
+
+
+@contextmanager
+def _limite_rigido(segundos: int, etapa: str):
+    """Interrompe chamada bloqueada antes do timeout padrão do Gunicorn.
+
+    Gunicorn síncrono executa o request na thread principal, onde SIGALRM é
+    suportado. Em ambientes sem SIGALRM, o statement_timeout do PostgreSQL
+    continua sendo a proteção disponível.
+    """
+    pode_usar = (
+        hasattr(signal, "SIGALRM")
+        and hasattr(signal, "setitimer")
+        and threading.current_thread() is threading.main_thread()
+    )
+    if not pode_usar:
+        yield
+        return
+
+    def _handler(_signum, _frame):
+        raise RelatorioTempoExcedido(f"Tempo excedido em {etapa}.")
+
+    antigo_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _handler)
+    antigo_timer = signal.setitimer(signal.ITIMER_REAL, float(segundos))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, antigo_handler)
+        if antigo_timer and antigo_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, antigo_timer[0], antigo_timer[1])
+
+
+def _executar(cursor, sql: str, params: list[Any] | tuple[Any, ...], etapa: str) -> None:
+    with _limite_rigido(_QUERY_HARD_TIMEOUT_SECONDS, etapa):
+        cursor.execute(sql, params)
+
+
+def _filtro_periodo(mes: Optional[int], ano: Optional[int]) -> tuple[str, list[Any]]:
+    if ano and mes:
+        data_de = date(int(ano), int(mes), 1)
+        data_ate = date(int(ano) + 1, 1, 1) if int(mes) == 12 else date(int(ano), int(mes) + 1, 1)
+        return " AND s.data_inicio >= %s AND s.data_inicio < %s", [data_de, data_ate]
+    if ano:
+        return " AND s.data_inicio >= %s AND s.data_inicio < %s", [date(int(ano), 1, 1), date(int(ano) + 1, 1, 1)]
+    if mes:
+        return " AND EXTRACT(MONTH FROM s.data_inicio) = %s", [int(mes)]
+    return "", []
+
+
+def _cache_path(matricula: str, perfil: str, mes: Optional[int], ano: Optional[int]) -> Path:
+    chave = f"{matricula}|{perfil}|{mes or 0}|{ano or 0}".encode("utf-8")
+    return _CACHE_DIR / f"{hashlib.sha256(chave).hexdigest()}.json"
+
+
+def _gravar_cache(path: Path, payload: Dict[str, Any]) -> None:
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(f".{os.getpid()}.tmp")
+        temp.write_text(
+            json.dumps({"saved_at": time.time(), "payload": payload}, ensure_ascii=False),
+            encoding="utf-8",
         )
+        os.replace(temp, path)
+    except Exception as exc:  # cache nunca deve impedir o relatório
+        log.warning("Falha ao gravar cache de relatório: %s", exc)
 
-        if ano and mes:
-            inicio = date(int(ano), int(mes), 1)
-            fim = date(int(ano), int(mes), monthrange(int(ano), int(mes)))
-            query = query.filter(Solicitacao.data_inicio.between(inicio, fim))
-        elif ano:
-            query = query.filter(Solicitacao.data_inicio.between(date(int(ano), 1, 1), date(int(ano), 12, 31)))
-        elif mes:
-            query = query.filter(func.extract("month", Solicitacao.data_inicio) == int(mes))
 
-        rows = query.order_by(Solicitacao.data_inicio.desc()).all()
+def _ler_cache(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        idade = time.time() - float(data.get("saved_at") or 0)
+        if idade < 0 or idade > _CACHE_TTL_SECONDS:
+            return None
+        payload = data.get("payload")
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            return None
+        payload = dict(payload)
+        payload["from_cache"] = True
+        payload["cache_age_seconds"] = int(idade)
+        payload["warning"] = (
+            "O PostgreSQL demorou a responder. Foi exibido o último relatório "
+            "gerado para este mesmo usuário e período."
+        )
+        return payload
+    except Exception:
+        return None
 
-        por_colaborador: Dict[str, Any] = {}
-        resumo_status = {"pendente": 0, "em_analise": 0, "aprovada": 0, "negada": 0, "reservada": 0}
-        total_dias = 0.0
 
-        for row in rows:
-            status_norm = str(row.status or "").strip().upper()
-            if "APROV" in status_norm:
-                status_key = "aprovada"
-            elif any(x in status_norm for x in ("REPROV", "REJEIT", "NEGAD")):
-                status_key = "negada"
-            elif "ANALISE" in status_norm or "ANÁLISE" in status_norm:
-                status_key = "em_analise"
-            elif "RESERV" in status_norm:
-                status_key = "reservada"
-            else:
-                status_key = "pendente"
-            resumo_status[status_key] += 1
-
-            matricula = str(row.colaborador_matricula or "SEM MATRÍCULA").strip().upper()
-            nome = str(row.nome_completo or "").strip()
-            chave = f"{nome} ({matricula})" if nome else matricula
-            info = por_colaborador.setdefault(chave, {"solicitacoes": [], "total_dias": 0.0, "total_aprovadas": 0.0})
-            dias = float(row.dias or 0)
-            info["solicitacoes"].append({
-                "inicio": row.data_inicio.strftime("%d/%m/%Y") if row.data_inicio else "",
-                "fim": row.data_fim.strftime("%d/%m/%Y") if row.data_fim else "",
-                "dias": dias, "status": status_norm,
-                "solicitacao": row.solicitacao or "",
-                "saldo_tipo": row.saldo_tipo or "REGULAR",
-                "observacoes": row.observacoes or "",
-            })
-            info["total_dias"] += dias
-            if status_key == "aprovada":
-                info["total_aprovadas"] += dias
-            total_dias += dias
-
-        return {
-            "ok": True, "total": len(rows), "por_colaborador": por_colaborador,
-            "resumo_status": resumo_status, "total_dias": round(total_dias, 2),
-            "mes": mes, "ano": ano, "colaboradores_escopo": matriculas,
-        }
-    except Exception as exc:
-        log.exception("Falha na consulta otimizada do relatório: %s", exc)
-        raise
+def _usar_cache_ou_erro(
+    *, cache_path: Path, request_id: str, etapa: str, exc: Exception,
+    inicio_total: float,
+) -> Dict[str, Any]:
+    log.exception("RELATORIO[%s] falhou em '%s' após %.3fs", request_id, etapa, time.monotonic() - inicio_total)
+    cached = _ler_cache(cache_path)
+    if cached:
+        cached["request_id"] = request_id
+        log.warning("RELATORIO[%s] respondido pelo cache de contingência", request_id)
+        return cached
+    return {
+        "ok": False,
+        "request_id": request_id,
+        "message": (
+            "Não foi possível obter resposta do PostgreSQL a tempo. "
+            f"Etapa: {etapa}. Código: {request_id}."
+        ),
+        "detail": str(exc),
+    }
 
 
 def gerar_relatorio_lancamento(
-    gestor_email: str,
-    subordinados: List[str],
+    usuario_matricula: str,
     mes: Optional[int] = None,
     ano: Optional[int] = None,
+    perfil_sessao: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Gera relatório de lançamentos de férias para um gestor.
-    
-    Args:
-        gestor_email: Email do gestor
-        subordinados: Lista de matrículas de subordinados
-        mes: Mês para filtrar (1-12), ou None para todos
-        ano: Ano para filtrar, ou None para todos
-    
-    Returns:
-        Dicionário com dados do relatório
-    """
+    """Gera o relatório por matrícula usando uma conexão PostgreSQL exclusiva."""
+    request_id = uuid.uuid4().hex[:10]
+    inicio_total = time.monotonic()
+    matricula_usuario = str(usuario_matricula or "").strip().upper()
+    perfil = _normalizar_perfil(perfil_sessao)
+    etapa = "abrindo conexão exclusiva"
+
+    if not matricula_usuario:
+        raise ValueError("Matrícula do usuário não foi identificada na sessão. Saia e entre novamente no sistema.")
+
+    schema_sql = _quote_ident(_schema_name())
+    cache_path = _cache_path(matricula_usuario, perfil, mes, ano)
+    conn = None
     try:
-        # Busca todas as solicitações dos colaboradores dentro do escopo do gestor.
-        # Importante: o relatório deve mostrar os colaboradores que o gestor pode
-        # solicitar/acompanhar, não apenas o e-mail do gestor logado.
-        identificadores = []
-        vistos = set()
-        for valor in (subordinados or []):
-            ident = str(valor or "").strip().upper()
-            if ident and ident not in vistos:
-                vistos.add(ident)
-                identificadores.append(ident)
+        with _limite_rigido(6, etapa):
+            conn = _abrir_conexao()
+        conn.autocommit = True
+        log.info("RELATORIO[%s] conexão exclusiva em %.3fs", request_id, time.monotonic() - inicio_total)
 
-        # Compatibilidade: se for chamada sem lista de subordinados, mantém fallback
-        # para o próprio gestor em vez de quebrar ou retornar erro.
-        if not identificadores and gestor_email:
-            identificadores.append(str(gestor_email or "").strip())
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            is_admin_dp = perfil in {"ADMIN", "DP"}
+            total_colaboradores_escopo: Optional[int] = None
+            escopo = "todos" if is_admin_dp else "equipe_do_gestor"
 
-        relatorio_pg = _gerar_relatorio_postgres(identificadores, mes, ano)
-        if relatorio_pg is not None:
-            return relatorio_pg
+            if not is_admin_dp:
+                etapa = "consultando hierarquia"
+                marco = time.monotonic()
+                _executar(
+                    cursor,
+                    f"""
+                    SELECT count(DISTINCT colaborador_matricula) AS total
+                      FROM {schema_sql}.hierarquia_gestao
+                     WHERE gestor_direto_matricula = %s
+                        OR gestor_superior_matricula = %s
+                    """,
+                    (matricula_usuario, matricula_usuario),
+                    etapa,
+                )
+                count_row = cursor.fetchone() or {}
+                total_colaboradores_escopo = int(count_row.get("total") or 0)
+                log.info("RELATORIO[%s] hierarquia em %.3fs (%d matrícula(s))", request_id, time.monotonic() - marco, total_colaboradores_escopo)
+                if total_colaboradores_escopo <= 0:
+                    raise RelatorioAcessoNegado("Acesso negado: nenhuma equipe foi vinculada à sua matrícula.")
 
-        solicitacoes = listar_solicitacoes_equipes(identificadores)
-        
-        if not solicitacoes:
-            return {
-                "ok": True,
-                "total": 0,
-                "por_colaborador": {},
-                "resumo_status": {
-                    "pendente": 0,
-                    "em_analise": 0,
-                    "aprovada": 0,
-                    "negada": 0,
-                    "reservada": 0,
-                },
-                "total_dias": 0,
-                "colaboradores_escopo": identificadores,
-            }
-        
-        # Filtra por mês e ano se fornecidos
-        solicitacoes_filtradas = []
-        for sol in solicitacoes:
-            try:
-                # sol é uma tupla: (row_id, colab_email, inicio, fim, dias, status, solicitacao, saldo_tipo, obs)
-                if len(sol) < 3:
-                    continue
-                
-                inicio_str = sol[2]  # data de início
-                if not inicio_str:
-                    continue
-                
-                # Parse da data
-                try:
-                    if isinstance(inicio_str, str):
-                        # Tenta formato DD/MM/YYYY
-                        partes = inicio_str.split('/')
-                        if len(partes) == 3:
-                            sol_date = date(int(partes[2]), int(partes[1]), int(partes[0]))
-                        else:
-                            continue
-                    else:
-                        sol_date = inicio_str
-                except Exception:
-                    continue
-                
-                # Filtra por mês/ano se fornecido
-                if mes and sol_date.month != mes:
-                    continue
-                if ano and sol_date.year != ano:
-                    continue
-                
-                solicitacoes_filtradas.append(sol)
-            except Exception as e:
-                log.warning(f"Erro ao processar solicitação: {e}")
-                continue
-        
-        # Agrupa por colaborador e status
+            etapa = "consultando solicitações"
+            marco = time.monotonic()
+            periodo_sql, periodo_params = _filtro_periodo(mes, ano)
+            escopo_sql = ""
+            params: list[Any] = []
+            if not is_admin_dp:
+                escopo_sql = f"""
+                    AND EXISTS (
+                        SELECT 1
+                          FROM {schema_sql}.hierarquia_gestao h
+                         WHERE h.colaborador_matricula = s.colaborador_matricula
+                           AND (h.gestor_direto_matricula = %s OR h.gestor_superior_matricula = %s)
+                    )
+                """
+                params.extend([matricula_usuario, matricula_usuario])
+            params.extend(periodo_params)
+
+            _executar(
+                cursor,
+                f"""
+                SELECT
+                    s.id,
+                    s.colaborador_matricula,
+                    c.nome_completo,
+                    s.data_inicio,
+                    s.data_fim,
+                    COALESCE(s.dias_solicitados, s.dias, 0) AS dias,
+                    s.status,
+                    COALESCE(s.tipo_solicitacao, s.solicitacao, '') AS solicitacao,
+                    COALESCE(s.tipo_ferias, s.saldo_tipo, 'REGULAR') AS saldo_tipo,
+                    COALESCE(s.observacoes, '') AS observacoes
+                  FROM {schema_sql}.solicitacoes_ferias s
+                  LEFT JOIN {schema_sql}.colaboradores c ON c.matricula = s.colaborador_matricula
+                 WHERE COALESCE(s.is_ajuste, FALSE) = FALSE
+                       {escopo_sql}
+                       {periodo_sql}
+                 ORDER BY s.data_inicio DESC NULLS LAST, s.id DESC
+                """,
+                params,
+                etapa,
+            )
+            rows = cursor.fetchall()
+            log.info("RELATORIO[%s] solicitações em %.3fs (%d linha(s))", request_id, time.monotonic() - marco, len(rows))
+
+        if not rows:
+            resultado = _resultado_vazio(
+                request_id=request_id, mes=mes, ano=ano, escopo=escopo,
+                referencia=matricula_usuario, total_colaboradores_escopo=total_colaboradores_escopo,
+            )
+            _gravar_cache(cache_path, resultado)
+            log.info("RELATORIO[%s] concluído vazio em %.3fs", request_id, time.monotonic() - inicio_total)
+            return resultado
+
+        etapa = "montando resposta"
         por_colaborador: Dict[str, Any] = {}
-        resumo_status = {
-            "pendente": 0,
-            "em_analise": 0,
-            "aprovada": 0,
-            "negada": 0,
-            "reservada": 0,
-        }
+        resumo_status = {"pendente": 0, "em_analise": 0, "aprovada": 0, "negada": 0, "reservada": 0}
         total_dias = 0.0
-        
-        for sol in solicitacoes_filtradas:
-            try:
-                row_id, colab_email, inicio, fim, dias, status, solicitacao, saldo_tipo, obs = sol[:9]
-                
-                # Normaliza status
-                status_norm = (status or "").strip().upper()
-                if "APROV" in status_norm:
-                    status_key = "aprovada"
-                elif "REPROV" in status_norm or "REJEIT" in status_norm or "NEGAD" in status_norm:
-                    status_key = "negada"
-                elif "ANALISE" in status_norm:
-                    status_key = "em_analise"
-                elif "RESERV" in status_norm:
-                    status_key = "reservada"
-                else:
-                    status_key = "pendente"
-                
-                resumo_status[status_key] = resumo_status.get(status_key, 0) + 1
-                
-                # Agrupa por colaborador
-                if colab_email not in por_colaborador:
-                    por_colaborador[colab_email] = {
-                        "solicitacoes": [],
-                        "total_dias": 0.0,
-                        "total_aprovadas": 0.0,
-                    }
-                
-                dias_float = float(dias or 0)
-                por_colaborador[colab_email]["solicitacoes"].append({
-                    "inicio": inicio,
-                    "fim": fim,
-                    "dias": dias_float,
-                    "status": status_norm,
-                    "solicitacao": solicitacao,
-                    "saldo_tipo": saldo_tipo,
-                    "observacoes": obs or "",
-                })
-                
-                por_colaborador[colab_email]["total_dias"] += dias_float
-                if status_key == "aprovada":
-                    por_colaborador[colab_email]["total_aprovadas"] += dias_float
-                
-                total_dias += dias_float
-            except Exception as e:
-                log.warning(f"Erro ao agrupar solicitação: {e}")
-                continue
-        
-        return {
+        matriculas_com_lancamento: set[str] = set()
+
+        for row in rows:
+            status_original, status_chave = _status_key(row.get("status"))
+            resumo_status[status_chave] += 1
+            matricula = str(row.get("colaborador_matricula") or "SEM MATRICULA").strip().upper()
+            matriculas_com_lancamento.add(matricula)
+            nome = str(row.get("nome_completo") or "").strip()
+            chave = f"{nome} ({matricula})" if nome else matricula
+            info = por_colaborador.setdefault(
+                chave,
+                {"matricula": matricula, "nome": nome, "solicitacoes": [], "total_dias": 0.0, "total_aprovadas": 0.0},
+            )
+            dias = _numero(row.get("dias"))
+            data_inicio = row.get("data_inicio")
+            data_fim = row.get("data_fim")
+            info["solicitacoes"].append({
+                "id": row.get("id"),
+                "inicio": data_inicio.strftime("%d/%m/%Y") if data_inicio else "",
+                "fim": data_fim.strftime("%d/%m/%Y") if data_fim else "",
+                "dias": dias,
+                "status": status_original,
+                "solicitacao": row.get("solicitacao") or "",
+                "saldo_tipo": row.get("saldo_tipo") or "REGULAR",
+                "observacoes": row.get("observacoes") or "",
+            })
+            info["total_dias"] += dias
+            if status_chave == "aprovada":
+                info["total_aprovadas"] += dias
+            total_dias += dias
+
+        resultado = {
             "ok": True,
-            "total": len(solicitacoes_filtradas),
+            "request_id": request_id,
+            "total": len(rows),
             "por_colaborador": por_colaborador,
             "resumo_status": resumo_status,
             "total_dias": round(total_dias, 2),
             "mes": mes,
             "ano": ano,
-            "colaboradores_escopo": identificadores,
+            "escopo": escopo,
+            "gestor_referencia": matricula_usuario,
+            "total_colaboradores_escopo": total_colaboradores_escopo,
+            "total_colaboradores_com_lancamento": len(matriculas_com_lancamento),
+            "from_cache": False,
         }
-    
-    except Exception as e:
-        log.error(f"Erro ao gerar relatório de lançamento: {e}")
-        return {
-            "ok": False,
-            "message": f"Erro ao gerar relatório: {str(e)}",
-        }
+        _gravar_cache(cache_path, resultado)
+        log.info("RELATORIO[%s] concluído em %.3fs", request_id, time.monotonic() - inicio_total)
+        return resultado
+
+    except RelatorioAcessoNegado:
+        raise
+    except (OperationalError, InterfaceError, RelatorioTempoExcedido) as exc:
+        return _usar_cache_ou_erro(
+            cache_path=cache_path, request_id=request_id, etapa=etapa,
+            exc=exc, inicio_total=inicio_total,
+        )
+    except Exception as exc:
+        return _usar_cache_ou_erro(
+            cache_path=cache_path, request_id=request_id, etapa=etapa,
+            exc=exc, inicio_total=inicio_total,
+        )
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

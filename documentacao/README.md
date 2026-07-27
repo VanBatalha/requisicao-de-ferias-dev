@@ -27,8 +27,10 @@ A sincronização cadastral usa a planilha **CADASTRO DE COLABORADORES** (`17457
 - `ferias_app/models.py` - modelos SQLAlchemy.
 - `ferias_app/services/postgres_service.py` - conexão e estrutura PostgreSQL.
 - `ferias_app/services/smartsheet_sync_service.py` - sincronização Smartsheet -> PostgreSQL.
-- `ferias_app/services/auto_sync_service.py` - sincronização automática diária.
 - `ferias_app/services/postgres_compat_service.py` - consultas operacionais por matrícula.
 - `ferias_app/blueprints/admin_api.py` - APIs do painel admin.
 - `templates/painel_admin.html` - tela administrativa.
 - `templates/ferias.html` - tela de solicitação de férias.
+
+- `CORRECAO_RELATORIO_LANCAMENTO_V51.md`: remoção do auto-sync, controle de conexões e diagnóstico do relatório.
+- `CORRECAO_RELATORIO_ADMIN_SALDOS_V52.md`: cache de contingência do relatório e manutenção ADMIN de saldos/ajustes.
