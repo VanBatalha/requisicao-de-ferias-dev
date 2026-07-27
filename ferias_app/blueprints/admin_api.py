@@ -18,6 +18,8 @@ from ..services.admin_cadastro_service import (
     excluir_saldo_periodo_admin,
     atualizar_ajuste_admin,
     excluir_ajuste_admin,
+    atualizar_solicitacao_admin,
+    excluir_solicitacao_admin,
 )
 from ..services.smartsheet_sync_service import start_sync_cadastro_background, get_sync_states
 
@@ -394,6 +396,73 @@ def api_admin_cadastro_excluir_ajuste(colaborador_id: int, ajuste_id: int):
         except Exception:
             pass
         return jsonify({"ok": False, "message": f"Erro ao excluir ajuste: {str(e)}"}), 500
+
+
+
+@bp.route("/api/admin/cadastro/colaborador/<int:colaborador_id>/solicitacao/<int:solicitacao_id>", methods=["POST", "PUT"])
+def api_admin_cadastro_atualizar_solicitacao(colaborador_id: int, solicitacao_id: int):
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        row = atualizar_solicitacao_admin(
+            colaborador_id,
+            solicitacao_id,
+            payload,
+            actor_email=user.get("email") or "",
+        )
+        return jsonify({
+            "ok": True,
+            "message": "Solicitação atualizada e saldo conciliado.",
+            "colaborador": row,
+        })
+    except ValueError as e:
+        try:
+            from ..services.postgres_service import get_db_session
+            get_db_session().rollback()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "message": str(e)}), 400
+    except Exception as e:
+        try:
+            from ..services.postgres_service import get_db_session
+            get_db_session().rollback()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "message": f"Erro ao atualizar solicitação: {str(e)}"}), 500
+
+
+@bp.route("/api/admin/cadastro/colaborador/<int:colaborador_id>/solicitacao/<int:solicitacao_id>", methods=["DELETE"])
+def api_admin_cadastro_excluir_solicitacao(colaborador_id: int, solicitacao_id: int):
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+    try:
+        row = excluir_solicitacao_admin(
+            colaborador_id,
+            solicitacao_id,
+            actor_email=user.get("email") or "",
+        )
+        return jsonify({
+            "ok": True,
+            "message": "Solicitação excluída e efeito estornado do saldo.",
+            "colaborador": row,
+        })
+    except ValueError as e:
+        try:
+            from ..services.postgres_service import get_db_session
+            get_db_session().rollback()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "message": str(e)}), 400
+    except Exception as e:
+        try:
+            from ..services.postgres_service import get_db_session
+            get_db_session().rollback()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "message": f"Erro ao excluir solicitação: {str(e)}"}), 500
 
 
 # ============================================

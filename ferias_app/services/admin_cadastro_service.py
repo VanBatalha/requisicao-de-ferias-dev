@@ -6,7 +6,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 from ..logging_config import get_logger
 from ..models import Auditoria, Colaborador, ColaboradorComplemento, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo, AuditoriaSaldos, Solicitacao
@@ -243,12 +243,43 @@ def _ajustes_json(session, colab: Colaborador) -> List[Dict[str, Any]]:
     return out
 
 
+
+def _solicitacao_vinculo_expr(colab: Colaborador):
+    condicoes = [
+        Solicitacao.colaborador_matricula == colab.matricula,
+        Solicitacao.colaborador_id == colab.id,
+    ]
+    email = safe_lower(colab.email or "")
+    if email:
+        # Compatibilidade exclusivamente para históricos migrados sem matrícula.
+        condicoes.append(and_(
+            Solicitacao.colaborador_matricula.is_(None),
+            Solicitacao.colaborador_id.is_(None),
+            func.lower(Solicitacao.colaborador_email) == email,
+        ))
+    return or_(*condicoes)
+
+
+def _solicitacoes_json(session, colab: Colaborador) -> List[Dict[str, Any]]:
+    rows = (
+        session.query(Solicitacao)
+        .filter(
+            _solicitacao_vinculo_expr(colab),
+            or_(Solicitacao.is_ajuste.is_(False), Solicitacao.is_ajuste.is_(None)),
+        )
+        .order_by(Solicitacao.data_inicio.desc().nullslast(), Solicitacao.id.desc())
+        .all()
+    )
+    return [_solicitacao_dict(row) for row in rows]
+
+
 def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
     session = get_db_session()
     comp = colab.complemento
     saldos_periodo = _saldos_periodo_json(session, colab)
     saldos_resumo = _resumo_saldos_periodo(session, colab)
     ajustes = _ajustes_json(session, colab)
+    solicitacoes = _solicitacoes_json(session, colab)
     return {
         "id": colab.id,
         "matricula": colab.matricula or "",
@@ -276,6 +307,7 @@ def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
         "saldos_periodo": saldos_periodo,
         "saldos_resumo": saldos_resumo,
         "ajustes": ajustes,
+        "solicitacoes": solicitacoes,
     }
 
 
@@ -905,5 +937,361 @@ def excluir_ajuste_admin(
         context={"origem": "painel_admin", "colaborador_id": colab.id, "matricula": colab.matricula},
     ))
     session.delete(ajuste)
+    session.commit()
+    return obter_colaborador_admin(colab.id)
+
+
+
+def _solicitacao_dict(row: Solicitacao) -> Dict[str, Any]:
+    dias = row.dias if row.dias is not None else row.dias_solicitados
+    return {
+        "id": row.id,
+        "colaborador_matricula": row.colaborador_matricula or "",
+        "solicitante_matricula": row.solicitante_matricula or "",
+        "solicitante": row.criado_por or row.gestor_solicitante_email or "",
+        "tipo_solicitacao": row.tipo_solicitacao or row.solicitacao or "",
+        "solicitacao": row.solicitacao or row.tipo_solicitacao or "",
+        "saldo_tipo": (row.saldo_tipo or row.tipo_ferias or "REGULAR").upper(),
+        "dias": float(dias or 0),
+        "data_inicio": _serialize_date(row.data_inicio),
+        "data_fim": _serialize_date(row.data_fim),
+        "status": row.status or "",
+        "observacoes": row.observacoes or "",
+        "periodo_aquisitivo_origem": row.periodo_aquisitivo_origem or "",
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _normalizar_tipo_saldo(value: Any) -> str:
+    tipo = str(value or "REGULAR").strip().upper()
+    if tipo in {"CERTARIANA", "LICENCA CERTARIANA", "LICENÇA CERTARIANA"}:
+        tipo = "PREMIUM"
+    if tipo not in {"REGULAR", "PREMIUM"}:
+        raise ValueError("Tipo de saldo inválido.")
+    return tipo
+
+
+def _normalizar_status_solicitacao(value: Any) -> str:
+    raw = str(value or "PENDENTE").strip().upper()
+    norm = (
+        raw.replace("Á", "A").replace("Ã", "A").replace("Â", "A")
+        .replace("É", "E").replace("Ê", "E").replace("Í", "I")
+        .replace("Ó", "O").replace("Ô", "O").replace("Õ", "O")
+        .replace("Ú", "U").replace("Ç", "C")
+    )
+    if "APROV" in norm:
+        return "APROVADA"
+    if "ANALISE" in norm:
+        return "EM ANÁLISE"
+    if "RESERV" in norm:
+        return "RESERVADA"
+    if "PEND" in norm:
+        return "PENDENTE"
+    if "CANCEL" in norm:
+        return "CANCELADA"
+    if any(token in norm for token in ("REPROV", "REJEIT", "NEGAD")):
+        return "REPROVADO"
+    raise ValueError("Status da solicitação inválido.")
+
+
+def _impacto_status_solicitacao(status: Any) -> Optional[str]:
+    try:
+        status = _normalizar_status_solicitacao(status)
+    except ValueError:
+        return None
+    if status == "APROVADA":
+        return "utilizado"
+    if status in {"PENDENTE", "EM ANÁLISE", "RESERVADA"}:
+        return "reservado"
+    return None
+
+
+def _is_afastamento_solicitacao(tipo_solicitacao: Any) -> bool:
+    texto = str(tipo_solicitacao or "").strip().upper()
+    texto = texto.replace("Á", "A").replace("Ã", "A").replace("É", "E").replace("Í", "I").replace("Ç", "C")
+    return "LICENCA MATERNIDADE" in texto or "LICENCA PATERNIDADE" in texto
+
+
+def _reverter_efeito_solicitacao(session, colab: Colaborador, solicitacao: Solicitacao) -> List[Dict[str, Any]]:
+    impacto = _impacto_status_solicitacao(solicitacao.status)
+    dias = _as_decimal(
+        solicitacao.dias if solicitacao.dias is not None else solicitacao.dias_solicitados,
+        "dias",
+    )
+    if not impacto or dias <= 0:
+        return []
+
+    alloc = _parse_alloc(solicitacao.periodo_aquisitivo_origem)
+    tipo = _normalizar_tipo_saldo(solicitacao.saldo_tipo or solicitacao.tipo_ferias)
+    campo = "saldo_utilizado" if impacto == "utilizado" else "saldo_reservado"
+    if not alloc:
+        if _is_afastamento_solicitacao(solicitacao.tipo_solicitacao or solicitacao.solicitacao):
+            return []
+        # Alguns registros históricos migrados não possuem P de origem. Nesse
+        # caso, o estorno é inferido a partir do saldo utilizado/reservado atual,
+        # preservando o total e registrando a distribuição encontrada na auditoria.
+        restante = dias
+        movimentos_inferidos: List[Dict[str, Any]] = []
+        saldos = (
+            session.query(SaldoPeriodoNovo)
+            .filter(
+                SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+                SaldoPeriodoNovo.tipo_saldo == tipo,
+            )
+            .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+            .all()
+        )
+        for saldo in saldos:
+            atual = Decimal(str(getattr(saldo, campo) or 0))
+            if atual <= 0:
+                continue
+            qtd = min(atual, restante)
+            setattr(saldo, campo, atual - qtd)
+            saldo.saldo_disponivel = Decimal(str(saldo.saldo_disponivel or 0)) + qtd
+            saldo.ultima_alteracao = dt.datetime.utcnow()
+            saldo.updated_at = dt.datetime.utcnow()
+            movimentos_inferidos.append({"periodo_numero": saldo.periodo_numero, "dias": qtd})
+            restante -= qtd
+            if restante <= 0:
+                break
+        if restante > 0:
+            nome_campo = "utilizado" if campo == "saldo_utilizado" else "reservado"
+            raise ValueError(
+                f"Não foi possível inferir os períodos do histórico: faltam {restante} dia(s) no saldo {nome_campo}."
+            )
+        return movimentos_inferidos
+
+    movimentos: List[Dict[str, Any]] = []
+    for item in alloc:
+        numero = int(item.get("periodo_numero") or 0)
+        qtd = Decimal(str(item.get("dias") or 0))
+        saldo = _saldo_por_periodo(session, colab, tipo, numero)
+        if not saldo:
+            raise ValueError(f"Não foi encontrada a linha {tipo} do período P{numero} para estornar a solicitação.")
+        atual = Decimal(str(getattr(saldo, campo) or 0))
+        if atual < qtd:
+            nome_campo = "utilizado" if campo == "saldo_utilizado" else "reservado"
+            raise ValueError(
+                f"O saldo {nome_campo} de P{numero} é menor que o valor desta solicitação. "
+                "Revise a linha de saldo antes de alterar ou excluir."
+            )
+        setattr(saldo, campo, atual - qtd)
+        saldo.saldo_disponivel = Decimal(str(saldo.saldo_disponivel or 0)) + qtd
+        saldo.ultima_alteracao = dt.datetime.utcnow()
+        saldo.updated_at = dt.datetime.utcnow()
+        movimentos.append({"periodo_numero": numero, "dias": qtd})
+    return movimentos
+
+
+def _aplicar_efeito_solicitacao(
+    session,
+    colab: Colaborador,
+    tipo: str,
+    dias: Decimal,
+    status: str,
+    tipo_solicitacao: str,
+    preferred_alloc: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    impacto = _impacto_status_solicitacao(status)
+    if not impacto or dias <= 0 or _is_afastamento_solicitacao(tipo_solicitacao):
+        return []
+
+    tipo = _normalizar_tipo_saldo(tipo)
+    campo = "saldo_utilizado" if impacto == "utilizado" else "saldo_reservado"
+    movimentos: List[Dict[str, Any]] = []
+
+    preferred = preferred_alloc or []
+    soma_preferred = sum((Decimal(str(item.get("dias") or 0)) for item in preferred), Decimal("0"))
+    if preferred and soma_preferred == dias:
+        saldos_preferred: List[tuple[SaldoPeriodoNovo, Decimal]] = []
+        pode_usar = True
+        for item in preferred:
+            numero = int(item.get("periodo_numero") or 0)
+            qtd = Decimal(str(item.get("dias") or 0))
+            saldo = _saldo_por_periodo(session, colab, tipo, numero)
+            if not saldo or Decimal(str(saldo.saldo_disponivel or 0)) < qtd:
+                pode_usar = False
+                break
+            saldos_preferred.append((saldo, qtd))
+        if pode_usar:
+            for saldo, qtd in saldos_preferred:
+                setattr(saldo, campo, Decimal(str(getattr(saldo, campo) or 0)) + qtd)
+                saldo.saldo_disponivel = Decimal(str(saldo.saldo_disponivel or 0)) - qtd
+                saldo.ultima_alteracao = dt.datetime.utcnow()
+                saldo.updated_at = dt.datetime.utcnow()
+                movimentos.append({"periodo_numero": saldo.periodo_numero, "dias": qtd})
+            return movimentos
+
+    saldos = (
+        session.query(SaldoPeriodoNovo)
+        .filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.tipo_saldo == tipo,
+        )
+        .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+        .all()
+    )
+    restante = dias
+    for saldo in saldos:
+        disponivel = Decimal(str(saldo.saldo_disponivel or 0))
+        if disponivel <= 0:
+            continue
+        consumir = min(disponivel, restante)
+        setattr(saldo, campo, Decimal(str(getattr(saldo, campo) or 0)) + consumir)
+        saldo.saldo_disponivel = disponivel - consumir
+        saldo.ultima_alteracao = dt.datetime.utcnow()
+        saldo.updated_at = dt.datetime.utcnow()
+        movimentos.append({"periodo_numero": saldo.periodo_numero, "dias": consumir})
+        restante -= consumir
+        if restante <= 0:
+            break
+    if restante > 0:
+        raise ValueError(f"Saldo insuficiente para atualizar a solicitação. Faltam {restante} dia(s).")
+    return movimentos
+
+
+def atualizar_solicitacao_admin(
+    colaborador_id: int,
+    solicitacao_id: int,
+    payload: Dict[str, Any],
+    actor_email: str = "",
+) -> Dict[str, Any]:
+    session = get_db_session()
+    colab = session.query(Colaborador).filter(Colaborador.id == int(colaborador_id)).first()
+    if not colab:
+        raise ValueError("Colaborador não encontrado.")
+
+    solicitacao = session.query(Solicitacao).filter(
+        Solicitacao.id == int(solicitacao_id),
+        _solicitacao_vinculo_expr(colab),
+        or_(Solicitacao.is_ajuste.is_(False), Solicitacao.is_ajuste.is_(None)),
+    ).first()
+    if not solicitacao:
+        raise ValueError("Solicitação não encontrada para este colaborador.")
+
+    before = _solicitacao_dict(solicitacao)
+    tipo_antigo = _normalizar_tipo_saldo(solicitacao.saldo_tipo or solicitacao.tipo_ferias)
+    dias_antigos = _as_decimal(
+        solicitacao.dias if solicitacao.dias is not None else solicitacao.dias_solicitados,
+        "dias",
+    )
+    status_antigo = _normalizar_status_solicitacao(solicitacao.status)
+    tipo_solic_antigo = str(solicitacao.tipo_solicitacao or solicitacao.solicitacao or "GOZO").strip().upper()
+    alloc_antiga = _parse_alloc(solicitacao.periodo_aquisitivo_origem)
+
+    tipo = _normalizar_tipo_saldo(payload.get("saldo_tipo", tipo_antigo))
+    dias = _as_decimal(payload.get("dias", dias_antigos), "dias")
+    if dias <= 0:
+        raise ValueError("A quantidade de dias deve ser maior que zero.")
+    if dias != dias.to_integral_value():
+        raise ValueError("A quantidade deve ser informada em dias inteiros.")
+
+    status = _normalizar_status_solicitacao(payload.get("status", status_antigo))
+    tipo_solic = str(payload.get("tipo_solicitacao", tipo_solic_antigo) or "GOZO").strip().upper()
+    if not tipo_solic:
+        raise ValueError("Informe o tipo da solicitação.")
+
+    data_inicio = _as_date(payload.get("data_inicio", solicitacao.data_inicio))
+    data_fim = _as_date(payload.get("data_fim", solicitacao.data_fim))
+    if not data_inicio or not data_fim:
+        raise ValueError("Informe as datas inicial e final.")
+    if data_fim < data_inicio:
+        raise ValueError("A data final não pode ser anterior à data inicial.")
+
+    impacto_antigo = _impacto_status_solicitacao(status_antigo)
+    impacto_novo = _impacto_status_solicitacao(status)
+    afast_antigo = _is_afastamento_solicitacao(tipo_solic_antigo)
+    afast_novo = _is_afastamento_solicitacao(tipo_solic)
+    impacto_mudou = (
+        tipo != tipo_antigo
+        or dias != dias_antigos
+        or impacto_novo != impacto_antigo
+        or afast_novo != afast_antigo
+    )
+
+    movimentos = alloc_antiga
+    saldo_recalculado = False
+    if impacto_mudou:
+        _reverter_efeito_solicitacao(session, colab, solicitacao)
+        preferred = alloc_antiga if tipo == tipo_antigo and dias == dias_antigos else None
+        movimentos = _aplicar_efeito_solicitacao(
+            session,
+            colab,
+            tipo,
+            dias,
+            status,
+            tipo_solic,
+            preferred_alloc=preferred,
+        )
+        saldo_recalculado = bool(impacto_antigo or impacto_novo)
+
+    solicitacao.colaborador_id = colab.id
+    solicitacao.colaborador_matricula = colab.matricula
+    solicitacao.colaborador_email = safe_lower(colab.email or solicitacao.colaborador_email or "") or None
+    solicitacao.tipo_solicitacao = tipo_solic
+    solicitacao.solicitacao = tipo_solic
+    solicitacao.tipo_ferias = tipo
+    solicitacao.saldo_tipo = tipo
+    solicitacao.dias_solicitados = dias
+    solicitacao.dias = int(dias)
+    solicitacao.status = status
+    solicitacao.data_inicio = data_inicio
+    solicitacao.data_fim = data_fim
+    solicitacao.observacoes = str(payload.get("observacoes", solicitacao.observacoes or "")).strip()
+    if impacto_mudou:
+        solicitacao.periodo_aquisitivo_origem = _format_alloc(movimentos) if movimentos else None
+    solicitacao.updated_at = dt.datetime.utcnow()
+    session.flush()
+
+    after = _solicitacao_dict(solicitacao)
+    session.add(Auditoria(
+        actor_email=safe_lower(actor_email or ""),
+        action="UPDATE_SOLICITACAO_ADMIN",
+        entity_type="solicitacao_ferias",
+        entity_id=solicitacao.id,
+        before_data=before,
+        after_data=after,
+        context={
+            "origem": "painel_admin",
+            "colaborador_id": colab.id,
+            "matricula": colab.matricula,
+            "saldo_recalculado": saldo_recalculado,
+        },
+    ))
+    session.commit()
+    return obter_colaborador_admin(colab.id)
+
+
+def excluir_solicitacao_admin(
+    colaborador_id: int,
+    solicitacao_id: int,
+    actor_email: str = "",
+) -> Dict[str, Any]:
+    session = get_db_session()
+    colab = session.query(Colaborador).filter(Colaborador.id == int(colaborador_id)).first()
+    if not colab:
+        raise ValueError("Colaborador não encontrado.")
+
+    solicitacao = session.query(Solicitacao).filter(
+        Solicitacao.id == int(solicitacao_id),
+        _solicitacao_vinculo_expr(colab),
+        or_(Solicitacao.is_ajuste.is_(False), Solicitacao.is_ajuste.is_(None)),
+    ).first()
+    if not solicitacao:
+        raise ValueError("Solicitação não encontrada para este colaborador.")
+
+    before = _solicitacao_dict(solicitacao)
+    _reverter_efeito_solicitacao(session, colab, solicitacao)
+    session.add(Auditoria(
+        actor_email=safe_lower(actor_email or ""),
+        action="DELETE_SOLICITACAO_ADMIN",
+        entity_type="solicitacao_ferias",
+        entity_id=solicitacao.id,
+        before_data=before,
+        after_data=None,
+        context={"origem": "painel_admin", "colaborador_id": colab.id, "matricula": colab.matricula},
+    ))
+    session.delete(solicitacao)
     session.commit()
     return obter_colaborador_admin(colab.id)

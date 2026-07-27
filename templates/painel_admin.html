@@ -233,6 +233,27 @@
       <div class="actions" style="margin-top:12px;"><button class="btn" id="cadSaldoSalvar">Salvar saldo</button><button class="btn btn-danger" id="cadSaldoExcluir">Excluir linha</button><button class="btn btn-secondary" id="cadSaldoCancelar">Cancelar</button></div>
     </div>
 
+    <h3 style="margin:22px 0 8px;">Solicitações do colaborador</h3>
+    <p class="muted" style="margin-top:-4px;">Exibe todo o histórico de solicitações. Alterações em tipo de saldo, dias ou status conciliam automaticamente o valor reservado/utilizado nas linhas P1 até PX.</p>
+    <div id="cadSolicitacoes" class="muted" style="overflow:auto; margin-bottom:12px;"></div>
+
+    <div id="cadSolicitacaoEditor" style="display:none; margin:12px 0; padding:14px; border:1px solid rgba(148,163,184,.35); border-radius:10px;">
+      <h4 style="margin:0 0 10px;">Editar solicitação</h4>
+      <input type="hidden" id="cadSolicitacaoId" />
+      <div class="grid-2">
+        <div><label class="muted">Solicitação</label><input id="cadSolicitacaoTipo" class="input" placeholder="Ex.: GOZO, VENDA ou LICENÇA MATERNIDADE" /></div>
+        <div><label class="muted">Tipo de saldo</label><select id="cadSolicitacaoSaldoTipo" class="input"><option value="REGULAR">Férias regulares</option><option value="PREMIUM">Licença Certariana</option></select></div>
+        <div><label class="muted">Data inicial</label><input id="cadSolicitacaoInicio" class="input" type="date" /></div>
+        <div><label class="muted">Data final</label><input id="cadSolicitacaoFim" class="input" type="date" /></div>
+        <div><label class="muted">Dias</label><input id="cadSolicitacaoDias" class="input" type="number" step="1" min="1" /></div>
+        <div><label class="muted">Status</label><select id="cadSolicitacaoStatus" class="input"><option value="PENDENTE">PENDENTE</option><option value="EM ANÁLISE">EM ANÁLISE</option><option value="RESERVADA">RESERVADA</option><option value="APROVADA">APROVADA</option><option value="CANCELADA">CANCELADA</option><option value="REPROVADO">REPROVADO</option></select></div>
+      </div>
+      <div style="margin-top:10px;"><label class="muted">Períodos de saldo vinculados</label><input id="cadSolicitacaoPeriodo" class="input" readonly /></div>
+      <div style="margin-top:10px;"><label class="muted">Solicitante</label><input id="cadSolicitacaoSolicitante" class="input" readonly /></div>
+      <div style="margin-top:10px;"><label class="muted">Observações</label><textarea id="cadSolicitacaoObs" class="input" style="height:90px; resize:vertical;"></textarea></div>
+      <div class="actions" style="margin-top:12px;"><button class="btn" id="cadSolicitacaoSalvar">Salvar solicitação</button><button class="btn btn-danger" id="cadSolicitacaoExcluir">Excluir solicitação</button><button class="btn btn-secondary" id="cadSolicitacaoCancelar">Cancelar</button></div>
+    </div>
+
     <h3 style="margin:22px 0 8px;">Ajustes realizados</h3>
     <p class="muted" style="margin-top:-4px;">Ao editar ou excluir um ajuste aprovado, o sistema estorna o efeito anterior e atualiza as linhas de saldo na mesma transação.</p>
     <div id="cadAjustes" class="muted" style="overflow:auto; margin-bottom:12px;"></div>
@@ -492,6 +513,27 @@
       </tr>`).join('')}</tbody></table>`;
   }
 
+  function renderCadSolicitacoes(rows) {
+    const box = cad$("cadSolicitacoes");
+    if (!box) return;
+    if (!rows || rows.length === 0) {
+      box.innerHTML = '<div class="empty">Nenhuma solicitação registrada para este colaborador.</div>';
+      return;
+    }
+    box.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead><tr><th style="text-align:left; padding:6px;">Período</th><th style="text-align:left; padding:6px;">Solicitação</th><th style="text-align:left; padding:6px;">Saldo</th><th style="text-align:right; padding:6px;">Dias</th><th style="text-align:left; padding:6px;">P vinculados</th><th style="text-align:left; padding:6px;">Status</th><th style="text-align:left; padding:6px;">Observações</th><th style="padding:6px;"></th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); white-space:nowrap;">${cadEscape(r.data_inicio || '—')} a ${cadEscape(r.data_fim || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.tipo_solicitacao || r.solicitacao || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(cadTipoLabel(r.saldo_tipo))}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right; font-weight:700;">${Number(r.dias || 0)}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.periodo_aquisitivo_origem || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.status || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); max-width:260px; white-space:normal;">${cadEscape(r.observacoes || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);"><button type="button" class="btn btn-secondary" style="padding:5px 8px;" onclick="editarCadSolicitacao(${Number(r.id)})">Editar</button></td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+
   function renderCadAjustes(rows) {
     const box = cad$("cadAjustes");
     if (!box) return;
@@ -513,6 +555,7 @@
   }
 
   function fecharCadSaldoEditor() { cad$("cadSaldoEditor").style.display = "none"; }
+  function fecharCadSolicitacaoEditor() { cad$("cadSolicitacaoEditor").style.display = "none"; }
   function fecharCadAjusteEditor() { cad$("cadAjusteEditor").style.display = "none"; }
 
   function editarCadSaldo(saldoId) {
@@ -529,6 +572,33 @@
     cad$("cadSaldoAtual").checked = !!r.is_atual;
     cad$("cadSaldoEditor").style.display = "block";
     cad$("cadSaldoEditor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function cadStatusSolicitacaoNormalizado(value) {
+    const raw = cadNorm(value).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (raw.includes('APROV')) return 'APROVADA';
+    if (raw.includes('ANALISE')) return 'EM ANÁLISE';
+    if (raw.includes('RESERV')) return 'RESERVADA';
+    if (raw.includes('CANCEL')) return 'CANCELADA';
+    if (raw.includes('REPROV') || raw.includes('REJEIT') || raw.includes('NEGAD')) return 'REPROVADO';
+    return 'PENDENTE';
+  }
+
+  function editarCadSolicitacao(solicitacaoId) {
+    const r = (cadSelecionado?.solicitacoes || []).find(x => Number(x.id) === Number(solicitacaoId));
+    if (!r) return;
+    cad$("cadSolicitacaoId").value = r.id;
+    cad$("cadSolicitacaoTipo").value = r.tipo_solicitacao || r.solicitacao || "GOZO";
+    cad$("cadSolicitacaoSaldoTipo").value = cadNorm(r.saldo_tipo).toUpperCase() === "PREMIUM" ? "PREMIUM" : "REGULAR";
+    cad$("cadSolicitacaoInicio").value = (r.data_inicio || "").slice(0, 10);
+    cad$("cadSolicitacaoFim").value = (r.data_fim || "").slice(0, 10);
+    cad$("cadSolicitacaoDias").value = Number(r.dias || 0);
+    cad$("cadSolicitacaoStatus").value = cadStatusSolicitacaoNormalizado(r.status);
+    cad$("cadSolicitacaoPeriodo").value = r.periodo_aquisitivo_origem || "Sem vínculo de período";
+    cad$("cadSolicitacaoSolicitante").value = r.solicitante_matricula || r.solicitante || "Não informado";
+    cad$("cadSolicitacaoObs").value = r.observacoes || "";
+    cad$("cadSolicitacaoEditor").style.display = "block";
+    cad$("cadSolicitacaoEditor").scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function editarCadAjuste(ajusteId) {
@@ -587,6 +657,53 @@
     } catch (e) { cadSetMsg(e.message || "Erro ao excluir saldo.", "text-danger"); }
   }
 
+  async function salvarCadSolicitacao() {
+    const colaboradorId = cad$("cadId").value;
+    const solicitacaoId = cad$("cadSolicitacaoId").value;
+    if (!colaboradorId || !solicitacaoId) return;
+    if (!confirm("Salvar as alterações desta solicitação? Mudanças em dias, tipo de saldo ou status serão conciliadas automaticamente nas linhas P do colaborador.")) return;
+    const payload = {
+      tipo_solicitacao: cadNorm(cad$("cadSolicitacaoTipo").value).toUpperCase(),
+      saldo_tipo: cad$("cadSolicitacaoSaldoTipo").value,
+      data_inicio: cad$("cadSolicitacaoInicio").value,
+      data_fim: cad$("cadSolicitacaoFim").value,
+      dias: cad$("cadSolicitacaoDias").value,
+      status: cad$("cadSolicitacaoStatus").value,
+      observacoes: cad$("cadSolicitacaoObs").value,
+    };
+    cadSetMsg("Atualizando solicitação...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${colaboradorId}/solicitacao/${solicitacaoId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Erro ao atualizar solicitação.");
+      preencherCadEditor(data.colaborador);
+      cadSetMsg(data.message || "Solicitação atualizada.", "text-success");
+    } catch (e) {
+      cadSetMsg(e.message || "Erro ao atualizar solicitação.", "text-danger");
+    }
+  }
+
+  async function excluirCadSolicitacao() {
+    const colaboradorId = cad$("cadId").value;
+    const solicitacaoId = cad$("cadSolicitacaoId").value;
+    if (!colaboradorId || !solicitacaoId) return;
+    if (!confirm("Excluir definitivamente esta solicitação? O valor reservado ou utilizado será estornado das linhas de saldo antes da exclusão.")) return;
+    cadSetMsg("Excluindo solicitação...", "muted");
+    try {
+      const resp = await fetch(`/api/admin/cadastro/colaborador/${colaboradorId}/solicitacao/${solicitacaoId}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Erro ao excluir solicitação.");
+      preencherCadEditor(data.colaborador);
+      cadSetMsg(data.message || "Solicitação excluída.", "text-success");
+    } catch (e) {
+      cadSetMsg(e.message || "Erro ao excluir solicitação.", "text-danger");
+    }
+  }
+
   async function salvarCadAjuste() {
     const colaboradorId = cad$("cadId").value;
     const ajusteId = cad$("cadAjusteId").value;
@@ -643,8 +760,10 @@
     cad$("cadGestorDireto").value = c.gestor_direto || "";
     cad$("cadGestorSuperior").value = c.gestor_superior || "";
     renderSaldosPeriodo(c.saldos_periodo || []);
+    renderCadSolicitacoes(c.solicitacoes || []);
     renderCadAjustes(c.ajustes || []);
     fecharCadSaldoEditor();
+    fecharCadSolicitacaoEditor();
     fecharCadAjusteEditor();
     cad$("cadEditor").style.display = "block";
   }
@@ -809,6 +928,9 @@
   cad$("cadSaldoSalvar")?.addEventListener("click", salvarCadSaldo);
   cad$("cadSaldoExcluir")?.addEventListener("click", excluirCadSaldo);
   cad$("cadSaldoCancelar")?.addEventListener("click", fecharCadSaldoEditor);
+  cad$("cadSolicitacaoSalvar")?.addEventListener("click", salvarCadSolicitacao);
+  cad$("cadSolicitacaoExcluir")?.addEventListener("click", excluirCadSolicitacao);
+  cad$("cadSolicitacaoCancelar")?.addEventListener("click", fecharCadSolicitacaoEditor);
   cad$("cadAjusteSalvar")?.addEventListener("click", salvarCadAjuste);
   cad$("cadAjusteExcluir")?.addEventListener("click", excluirCadAjuste);
   cad$("cadAjusteCancelar")?.addEventListener("click", fecharCadAjusteEditor);

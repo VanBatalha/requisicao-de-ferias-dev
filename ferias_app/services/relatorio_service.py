@@ -10,9 +10,10 @@ V52:
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,10 @@ import threading
 import time
 import uuid
 from typing import Any, Dict, Optional
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 import psycopg2
 from psycopg2 import InterfaceError, OperationalError
@@ -416,3 +421,193 @@ def gerar_relatorio_lancamento(
                 conn.close()
             except Exception:
                 pass
+
+
+_MESES_PT = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
+}
+
+
+def obter_relatorio_para_exportacao(
+    usuario_matricula: str,
+    mes: Optional[int] = None,
+    ano: Optional[int] = None,
+    perfil_sessao: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Obtém o mesmo relatório da tela, priorizando o cache já gerado.
+
+    O download costuma ocorrer logo após a visualização. Reutilizar o cache evita
+    uma segunda consulta ao PostgreSQL e reduz o risco de falha intermitente.
+    """
+    matricula = str(usuario_matricula or "").strip().upper()
+    perfil = _normalizar_perfil(perfil_sessao)
+    if not matricula:
+        raise ValueError("Matrícula do usuário não foi identificada na sessão.")
+
+    cached = _ler_cache(_cache_path(matricula, perfil, mes, ano))
+    if cached:
+        cached["warning"] = "Relatório exportado a partir do resultado exibido na tela."
+        return cached
+    return gerar_relatorio_lancamento(matricula, mes, ano, perfil_sessao=perfil)
+
+
+def _parse_data_br(value: Any):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%d/%m/%Y").date()
+    except ValueError:
+        return text
+
+
+def _auto_width(ws, min_width: int = 10, max_width: int = 48) -> None:
+    for idx, column_cells in enumerate(ws.columns, start=1):
+        maior = 0
+        for cell in column_cells:
+            value = cell.value
+            if value is None:
+                continue
+            maior = max(maior, len(str(value)))
+        ws.column_dimensions[get_column_letter(idx)].width = min(max(maior + 2, min_width), max_width)
+
+
+def criar_relatorio_lancamento_xlsx(relatorio: Dict[str, Any]) -> bytes:
+    """Cria o arquivo XLSX do relatório visualizado na tela."""
+    if not relatorio or not relatorio.get("ok"):
+        raise ValueError((relatorio or {}).get("message") or "Relatório indisponível para exportação.")
+
+    wb = Workbook()
+    # Garante que Excel/LibreOffice recalculem os indicadores ao abrir.
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+    except Exception:
+        pass
+    ws_resumo = wb.active
+    ws_resumo.title = "Resumo"
+    ws_detalhes = wb.create_sheet("Solicitações")
+
+    fill_titulo = PatternFill("solid", fgColor="1F4E78")
+    fill_secao = PatternFill("solid", fgColor="D9EAF7")
+    fill_cabecalho = PatternFill("solid", fgColor="5B9BD5")
+    font_branca = Font(color="FFFFFF", bold=True)
+    font_titulo = Font(color="FFFFFF", bold=True, size=14)
+    font_negrito = Font(bold=True)
+    borda_fina = Border(bottom=Side(style="thin", color="D9E1F2"))
+
+    ws_resumo.merge_cells("A1:D1")
+    ws_resumo["A1"] = "Relatório de Solicitações de Férias"
+    ws_resumo["A1"].fill = fill_titulo
+    ws_resumo["A1"].font = font_titulo
+    ws_resumo["A1"].alignment = Alignment(horizontal="center")
+    ws_resumo.row_dimensions[1].height = 24
+
+    mes = relatorio.get("mes")
+    ano = relatorio.get("ano")
+    periodo = "Todos os períodos"
+    if mes and ano:
+        periodo = f"{_MESES_PT.get(int(mes), mes)} de {ano}"
+    elif ano:
+        periodo = f"Ano de {ano}"
+    elif mes:
+        periodo = f"Mês de {_MESES_PT.get(int(mes), mes)} (todos os anos)"
+
+    metadados = [
+        ("Período", periodo),
+        ("Escopo", "Todos os colaboradores" if relatorio.get("escopo") == "todos" else "Equipe do gestor"),
+        ("Matrícula de referência", relatorio.get("gestor_referencia") or ""),
+        ("Gerado em", datetime.now().strftime("%d/%m/%Y %H:%M")),
+    ]
+    for row_idx, (label, value) in enumerate(metadados, start=3):
+        ws_resumo.cell(row=row_idx, column=1, value=label).font = font_negrito
+        ws_resumo.cell(row=row_idx, column=2, value=value)
+
+    ws_resumo["A8"] = "Indicadores"
+    ws_resumo["A8"].fill = fill_secao
+    ws_resumo["A8"].font = font_negrito
+    ws_resumo.merge_cells("A8:B8")
+
+    indicadores = [
+        ("Total de solicitações", "=MAX(COUNTA('Solicitações'!A:A)-1,0)"),
+        ("Total de dias", "=SUM('Solicitações'!F:F)"),
+        ("Colaboradores com lançamentos", int(relatorio.get("total_colaboradores_com_lancamento") or 0)),
+        ("Aprovadas", '=COUNTIF(\'Solicitações\'!G:G,"*APROV*")'),
+        ("Em análise", '=COUNTIF(\'Solicitações\'!G:G,"*ANÁLISE*")+COUNTIF(\'Solicitações\'!G:G,"*ANALISE*")'),
+        ("Pendentes", '=COUNTIF(\'Solicitações\'!G:G,"PENDENTE")'),
+        ("Reservadas", '=COUNTIF(\'Solicitações\'!G:G,"*RESERV*")'),
+        ("Negadas/canceladas", '=COUNTIF(\'Solicitações\'!G:G,"*REPROV*")+COUNTIF(\'Solicitações\'!G:G,"*CANCEL*")+COUNTIF(\'Solicitações\'!G:G,"*NEGAD*")'),
+    ]
+    for row_idx, (label, value) in enumerate(indicadores, start=9):
+        ws_resumo.cell(row=row_idx, column=1, value=label)
+        ws_resumo.cell(row=row_idx, column=2, value=value)
+        ws_resumo.cell(row=row_idx, column=1).border = borda_fina
+        ws_resumo.cell(row=row_idx, column=2).border = borda_fina
+
+    resumo_start = 19
+    headers_resumo = ["Matrícula", "Colaborador", "Solicitações", "Total de dias", "Dias aprovados"]
+    for col, header in enumerate(headers_resumo, start=1):
+        cell = ws_resumo.cell(row=resumo_start, column=col, value=header)
+        cell.fill = fill_cabecalho
+        cell.font = font_branca
+        cell.alignment = Alignment(horizontal="center")
+
+    colaboradores = sorted(
+        (relatorio.get("por_colaborador") or {}).values(),
+        key=lambda item: (str(item.get("nome") or "").casefold(), str(item.get("matricula") or "")),
+    )
+    for row_idx, info in enumerate(colaboradores, start=resumo_start + 1):
+        ws_resumo.cell(row=row_idx, column=1, value=info.get("matricula") or "")
+        ws_resumo.cell(row=row_idx, column=2, value=info.get("nome") or "")
+        ws_resumo.cell(row=row_idx, column=3, value=len(info.get("solicitacoes") or []))
+        ws_resumo.cell(row=row_idx, column=4, value=float(info.get("total_dias") or 0))
+        ws_resumo.cell(row=row_idx, column=5, value=float(info.get("total_aprovadas") or 0))
+        ws_resumo.cell(row=row_idx, column=4).number_format = '0.00'
+        ws_resumo.cell(row=row_idx, column=5).number_format = '0.00'
+
+    headers = [
+        "ID", "Matrícula", "Colaborador", "Data inicial", "Data final",
+        "Dias", "Status", "Solicitação", "Tipo de saldo", "Observações",
+    ]
+    for col, header in enumerate(headers, start=1):
+        cell = ws_detalhes.cell(row=1, column=col, value=header)
+        cell.fill = fill_cabecalho
+        cell.font = font_branca
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    detalhe_row = 2
+    for info in colaboradores:
+        for sol in info.get("solicitacoes") or []:
+            valores = [
+                sol.get("id"), info.get("matricula") or "", info.get("nome") or "",
+                _parse_data_br(sol.get("inicio")), _parse_data_br(sol.get("fim")),
+                float(sol.get("dias") or 0), sol.get("status") or "",
+                sol.get("solicitacao") or "", sol.get("saldo_tipo") or "",
+                sol.get("observacoes") or "",
+            ]
+            for col, value in enumerate(valores, start=1):
+                ws_detalhes.cell(row=detalhe_row, column=col, value=value)
+            ws_detalhes.cell(row=detalhe_row, column=4).number_format = "dd/mm/yyyy"
+            ws_detalhes.cell(row=detalhe_row, column=5).number_format = "dd/mm/yyyy"
+            ws_detalhes.cell(row=detalhe_row, column=6).number_format = "0.00"
+            ws_detalhes.cell(row=detalhe_row, column=10).alignment = Alignment(wrap_text=True, vertical="top")
+            detalhe_row += 1
+
+    ws_resumo.freeze_panes = f"A{resumo_start + 1}"
+    ws_resumo.auto_filter.ref = f"A{resumo_start}:E{max(resumo_start, resumo_start + len(colaboradores))}"
+    ws_detalhes.freeze_panes = "A2"
+    ws_detalhes.auto_filter.ref = f"A1:J{max(1, detalhe_row - 1)}"
+    ws_detalhes.sheet_view.showGridLines = False
+    ws_resumo.sheet_view.showGridLines = False
+    ws_detalhes.row_dimensions[1].height = 26
+
+    _auto_width(ws_resumo, max_width=42)
+    _auto_width(ws_detalhes, max_width=55)
+    ws_detalhes.column_dimensions["J"].width = 55
+
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()

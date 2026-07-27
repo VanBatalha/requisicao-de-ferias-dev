@@ -582,6 +582,11 @@
         <label>&nbsp;</label>
         <button type="button" class="btn btn-primary" id="btn-gerar-relatorio" style="width: 100%; min-width: 0; margin: 0;">Gerar Relatório</button>
       </div>
+
+      <div class="form-group-inline">
+        <label>&nbsp;</label>
+        <button type="button" class="btn btn-secondary" id="btn-baixar-relatorio-xlsx" style="width: 100%; min-width: 0; margin: 0;" disabled>Baixar XLSX</button>
+      </div>
     </div>
     
     <div id="rel-resultado" style="margin-top: 14px;"></div>
@@ -945,6 +950,8 @@ _applyTipoFerias();
   const relResultado = document.getElementById('rel-resultado');
   const relMes = document.getElementById('rel-mes');
   const relAno = document.getElementById('rel-ano');
+  const btnBaixarRelatorioXlsx = document.getElementById('btn-baixar-relatorio-xlsx');
+  let ultimoRelatorioParams = '';
 
   function escaparHtml(valor) {
     return String(valor ?? '')
@@ -966,6 +973,8 @@ _applyTipoFerias();
     if (ano) params.append('ano', ano);
 
     btnGerarRelatorio.disabled = true;
+    if (btnBaixarRelatorioXlsx) btnBaixarRelatorioXlsx.disabled = true;
+    ultimoRelatorioParams = '';
     btnGerarRelatorio.textContent = 'Gerando...';
     relResultado.innerHTML = '<div class="muted">Gerando relatório...</div>';
 
@@ -1050,6 +1059,8 @@ _applyTipoFerias();
 
       html += '</div>';
       relResultado.innerHTML = html;
+      ultimoRelatorioParams = params.toString();
+      if (btnBaixarRelatorioXlsx) btnBaixarRelatorioXlsx.disabled = false;
     } catch (e) {
       relResultado.innerHTML = '<div class="text-danger">Não foi possível comunicar com o servidor para gerar o relatório.</div>';
       console.error(e);
@@ -1060,6 +1071,11 @@ _applyTipoFerias();
   }
 
   btnGerarRelatorio?.addEventListener('click', gerarRelatorio);
+  btnBaixarRelatorioXlsx?.addEventListener('click', () => {
+    if (btnBaixarRelatorioXlsx.disabled) return;
+    const base = '{{ url_for("ferias.api_relatorio_lancamento_xlsx") }}';
+    window.location.assign(ultimoRelatorioParams ? `${base}?${ultimoRelatorioParams}` : base);
+  });
 </script>
 
 {% endblock %}
