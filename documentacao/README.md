@@ -25,3 +25,7 @@
 - `deploy/scripts/periodos_diarios.sh`
 - `deploy/scripts/backup_postgres.sh`
 - `deploy/scripts/update_app.sh`
+
+## V56
+
+Correção definitiva da criação de períodos e normalização dos saldos. Consulte `CORRECAO_PERIODOS_SALDOS_V56.md`.

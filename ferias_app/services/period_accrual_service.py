@@ -4,6 +4,7 @@ import calendar
 import datetime as dt
 import threading
 import time
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -12,13 +13,13 @@ from sqlalchemy import func, text
 
 from ..config import get_settings
 from ..logging_config import get_logger
-from ..models import Auditoria, Colaborador, PeriodoAquisitivo, SaldoPeriodoNovo, SyncState
+from ..models import Auditoria, Colaborador, PeriodoAquisitivo, SaldoPeriodoNovo, Solicitacao, SyncState
 from .postgres_service import get_session
 
 log = get_logger(__name__)
 
-_SYNC_NAME = "ciclos_saldos_v55"
-_ADVISORY_LOCK_KEY = 5500728
+_SYNC_NAME = "ciclos_saldos_v56"
+_ADVISORY_LOCK_KEY = 5600728
 _LOCAL_CHECK_INTERVAL_SECONDS = 1800
 _local_lock = threading.Lock()
 _last_local_check = 0.0
@@ -232,94 +233,152 @@ def _zero_historical(row: SaldoPeriodoNovo) -> bool:
     return True
 
 
-def _ensure_balance_cycles(
+def _normalize_status(value: object) -> str:
+    raw = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(ch for ch in raw if not unicodedata.combining(ch)).strip().upper()
+
+
+def _premium_usage_from_requests(session, matricula: str, cycle: Cycle) -> tuple[float, float]:
+    """Reconstroi utilizado/reservado do ciclo Premium atual.
+
+    A reconstrução é usada somente quando a base ainda possui a estrutura anual
+    legada ou quando um novo ciclo Premium acaba de nascer. Ajustes Premium
+    antigos ficam no histórico e não são reaplicados automaticamente.
+    """
+    rows = session.query(Solicitacao).filter(
+        func.upper(func.trim(Solicitacao.colaborador_matricula)) == matricula,
+        func.upper(func.trim(func.coalesce(Solicitacao.saldo_tipo, Solicitacao.tipo_ferias, "REGULAR"))) == "PREMIUM",
+        Solicitacao.data_inicio >= cycle.credito_em,
+        Solicitacao.data_inicio < cycle.proximo_credito_em,
+    ).all()
+
+    used = 0.0
+    reserved = 0.0
+    for row in rows:
+        tipo = _normalize_status(getattr(row, "tipo_solicitacao", None))
+        solicitacao = _normalize_status(getattr(row, "solicitacao", None))
+        if bool(getattr(row, "is_ajuste", False)) or tipo == "AJUSTE" or "AJUSTE" in solicitacao:
+            continue
+        try:
+            days = abs(float(row.dias if row.dias is not None else (row.dias_solicitados or 0)))
+        except (TypeError, ValueError):
+            days = 0.0
+        status = _normalize_status(getattr(row, "status", None))
+        if status in {"APROVADO", "APROVADA"}:
+            used += days
+        elif status in {"PENDENTE", "EM ANALISE", "ANALISE", "RESERVA", "RESERVADO", "RESERVADA"}:
+            reserved += days
+    return used, reserved
+
+
+def _ensure_regular_balance_cycles(
     session,
     colab: Colaborador,
     cycles: list[Cycle],
-    tipo: str,
 ) -> dict[str, int]:
-    """Normaliza as linhas P1..PX e preserva saldo apenas no período vigente.
+    """Mantém saldo REGULAR somente no último período adquirido.
 
-    REGULAR não carrega saldo de P anteriores: ao fechar um novo ciclo anual,
-    o novo P começa com 30 dias e todo o histórico permanece zerado.
-
-    PREMIUM também não é cumulativo: ao nascer um novo ciclo, o saldo anterior
-    expira e o novo P começa somente com a base da regra (30 dias no P1;
-    15 dias nos demais).
+    Todo o valor REGULAR já existente é consolidado no P vigente. Assim, uma
+    base antiga com P1..PX preenchidos é normalizada sem perder os ajustes e
+    movimentos já aplicados. Quando um novo ciclo anual nasce em uma base já
+    normalizada, acrescenta 30 dias ao saldo consolidado anterior.
     """
     mat = str(colab.matricula).strip().upper()
     existing = session.query(SaldoPeriodoNovo).filter(
-        func.upper(SaldoPeriodoNovo.colaborador_matricula) == mat,
-        func.upper(SaldoPeriodoNovo.tipo_saldo) == tipo,
-    ).all()
+        func.upper(func.trim(SaldoPeriodoNovo.colaborador_matricula)) == mat,
+        func.upper(func.trim(SaldoPeriodoNovo.tipo_saldo)) == "REGULAR",
+    ).order_by(SaldoPeriodoNovo.periodo_numero, SaldoPeriodoNovo.id).all()
 
-    expected_numbers = {c.numero for c in cycles}
+    total_initial = sum(float(row.saldo_inicial or 0) for row in existing)
+    total_used = sum(float(row.saldo_utilizado or 0) for row in existing)
+    total_reserved = sum(float(row.saldo_reservado or 0) for row in existing)
+    expected_numbers = {cycle.numero for cycle in cycles}
+    invalid_rows = [row for row in existing if int(row.periodo_numero or 0) not in expected_numbers]
+
     deleted = 0
-    for row in list(existing):
-        if int(row.periodo_numero or 0) not in expected_numbers:
-            session.delete(row)
-            existing.remove(row)
-            deleted += 1
+    for row in invalid_rows:
+        session.delete(row)
+        deleted += 1
+    valid_existing = [row for row in existing if row not in invalid_rows]
 
     if not cycles:
-        return {"current_created": 0, "historical_created": 0, "deleted": deleted, "zeroed": 0, "consolidated": 0}
+        return {
+            "current_created": 0,
+            "historical_created": 0,
+            "deleted": deleted,
+            "zeroed": 0,
+            "consolidated": 0,
+            "recalculated": 0,
+        }
 
-    by_number = {int(r.periodo_numero or 0): r for r in existing}
+    by_number = {int(row.periodo_numero or 0): row for row in valid_existing}
     current_cycle = cycles[-1]
     current_row = by_number.get(current_cycle.numero)
     current_created = historical_created = zeroed = consolidated = 0
 
-    # Um novo período nunca herda valores do histórico. A correção inicial da
-    # base é feita pelo SQL V55; depois disso, cada ciclo novo começa apenas com
-    # a base prevista na regra.
-    new_current_values: tuple[float, float, float, float] | None = None
     if current_row is None:
-        new_current_values = (current_cycle.base, 0.0, 0.0, current_cycle.base)
+        if existing:
+            # Estrutura legada com período futuro: o crédito/ajustes já estavam
+            # distribuídos nela, portanto apenas consolidamos sem somar 30.
+            if invalid_rows:
+                new_initial = total_initial
+            else:
+                # Virada normal de um ciclo em base já corrigida.
+                new_initial = total_initial + current_cycle.base
+            new_used = total_used
+            new_reserved = total_reserved
+        else:
+            # Cadastro antigo sem qualquer linha: reconhece todos os ciclos já
+            # adquiridos na primeira normalização.
+            new_initial = current_cycle.base * len(cycles)
+            new_used = 0.0
+            new_reserved = 0.0
+        current_row = _create_balance_row(
+            session,
+            colab,
+            current_cycle,
+            initial=new_initial,
+            used=new_used,
+            reserved=new_reserved,
+            available=new_initial - new_used - new_reserved,
+            is_current=True,
+        )
+        by_number[current_cycle.numero] = current_row
+        current_created += 1
+        consolidated += 1
+    else:
+        # Se há qualquer valor histórico, concentra tudo no P vigente.
+        current_row.saldo_inicial = total_initial
+        current_row.saldo_utilizado = total_used
+        current_row.saldo_reservado = total_reserved
+        current_row.saldo_disponivel = total_initial - total_used - total_reserved
+        current_row.ultima_alteracao = dt.datetime.utcnow()
+        current_row.updated_at = dt.datetime.utcnow()
+        current_row.is_atual = True
+        consolidated += 1
 
     for cycle in cycles:
         row = by_number.get(cycle.numero)
         is_current = cycle.numero == current_cycle.numero
         if row is None:
-            if is_current:
-                initial, used, reserved, available = new_current_values or (cycle.base, 0.0, 0.0, cycle.base)
-                row = _create_balance_row(
-                    session,
-                    colab,
-                    cycle,
-                    initial=initial,
-                    used=used,
-                    reserved=reserved,
-                    available=available,
-                    is_current=True,
-                )
-                current_created += 1
-            else:
-                row = _create_balance_row(
-                    session,
-                    colab,
-                    cycle,
-                    initial=0,
-                    used=0,
-                    reserved=0,
-                    available=0,
-                    is_current=False,
-                )
-                historical_created += 1
+            row = _create_balance_row(
+                session,
+                colab,
+                cycle,
+                initial=0,
+                used=0,
+                reserved=0,
+                available=0,
+                is_current=False,
+            )
             by_number[cycle.numero] = row
-        else:
-            row.colaborador_id = colab.id
-            row.colaborador_matricula = mat
-            row.tipo_saldo = tipo
-            row.data_inicio = cycle.data_inicio
-            row.data_fim = cycle.data_fim
-            if is_current:
-                row.is_atual = True
-            elif _zero_historical(row):
-                zeroed += 1
-
-    # Garante uma única linha vigente e zera integralmente todo o histórico.
-    for numero, row in by_number.items():
-        if numero == current_cycle.numero:
+            historical_created += 1
+        row.colaborador_id = colab.id
+        row.colaborador_matricula = mat
+        row.tipo_saldo = "REGULAR"
+        row.data_inicio = cycle.data_inicio
+        row.data_fim = cycle.data_fim
+        if is_current:
             row.is_atual = True
         elif _zero_historical(row):
             zeroed += 1
@@ -330,8 +389,111 @@ def _ensure_balance_cycles(
         "deleted": deleted,
         "zeroed": zeroed,
         "consolidated": consolidated,
+        "recalculated": 0,
     }
 
+
+def _ensure_premium_balance_cycles(
+    session,
+    colab: Colaborador,
+    cycles: list[Cycle],
+) -> dict[str, int]:
+    """Aplica os ciclos Premium 5 anos + 30 meses.
+
+    Linhas anuais Premium são excluídas. Ao detectar a estrutura legada, o
+    ciclo vigente é reconstruído com a base fixa da regra e somente com
+    solicitações não-ajuste pertencentes à janela atual.
+    """
+    mat = str(colab.matricula).strip().upper()
+    existing = session.query(SaldoPeriodoNovo).filter(
+        func.upper(func.trim(SaldoPeriodoNovo.colaborador_matricula)) == mat,
+        func.upper(func.trim(SaldoPeriodoNovo.tipo_saldo)) == "PREMIUM",
+    ).order_by(SaldoPeriodoNovo.periodo_numero, SaldoPeriodoNovo.id).all()
+
+    expected_numbers = {cycle.numero for cycle in cycles}
+    invalid_rows = [row for row in existing if int(row.periodo_numero or 0) not in expected_numbers]
+    legacy_structure = bool(invalid_rows)
+    deleted = 0
+    for row in invalid_rows:
+        session.delete(row)
+        deleted += 1
+    valid_existing = [row for row in existing if row not in invalid_rows]
+
+    if not cycles:
+        return {
+            "current_created": 0,
+            "historical_created": 0,
+            "deleted": deleted,
+            "zeroed": 0,
+            "consolidated": 0,
+            "recalculated": 0,
+        }
+
+    by_number = {int(row.periodo_numero or 0): row for row in valid_existing}
+    current_cycle = cycles[-1]
+    current_row = by_number.get(current_cycle.numero)
+    current_created = historical_created = zeroed = recalculated = 0
+
+    if current_row is None or legacy_structure:
+        used, reserved = _premium_usage_from_requests(session, mat, current_cycle)
+        initial = current_cycle.base
+        if current_row is None:
+            current_row = _create_balance_row(
+                session,
+                colab,
+                current_cycle,
+                initial=initial,
+                used=used,
+                reserved=reserved,
+                available=initial - used - reserved,
+                is_current=True,
+            )
+            by_number[current_cycle.numero] = current_row
+            current_created += 1
+        else:
+            current_row.saldo_inicial = initial
+            current_row.saldo_utilizado = used
+            current_row.saldo_reservado = reserved
+            current_row.saldo_disponivel = initial - used - reserved
+            current_row.ultima_alteracao = dt.datetime.utcnow()
+            current_row.updated_at = dt.datetime.utcnow()
+            current_row.is_atual = True
+        recalculated += 1
+
+    for cycle in cycles:
+        row = by_number.get(cycle.numero)
+        is_current = cycle.numero == current_cycle.numero
+        if row is None:
+            row = _create_balance_row(
+                session,
+                colab,
+                cycle,
+                initial=0,
+                used=0,
+                reserved=0,
+                available=0,
+                is_current=False,
+            )
+            by_number[cycle.numero] = row
+            historical_created += 1
+        row.colaborador_id = colab.id
+        row.colaborador_matricula = mat
+        row.tipo_saldo = "PREMIUM"
+        row.data_inicio = cycle.data_inicio
+        row.data_fim = cycle.data_fim
+        if is_current:
+            row.is_atual = True
+        elif _zero_historical(row):
+            zeroed += 1
+
+    return {
+        "current_created": current_created,
+        "historical_created": historical_created,
+        "deleted": deleted,
+        "zeroed": zeroed,
+        "consolidated": 0,
+        "recalculated": recalculated,
+    }
 
 def ensure_due_periods(
     reference_date: dt.date | None = None,
@@ -342,12 +504,12 @@ def ensure_due_periods(
 ) -> dict:
     """Cria somente ciclos adquiridos e normaliza a linha vigente.
 
-    - REGULAR: cria 30 dias apenas no fechamento anual; saldo de P anterior
-      expira e todas as linhas históricas ficam zeradas.
-    - PREMIUM: P1=30 dias após cinco anos; P2+=15 dias a cada 30 meses; saldo
-      anterior também expira.
-    - Ciclo vigente já existente não é recalculado, preservando edições e
-      movimentações feitas pelo aplicativo.
+    - REGULAR: cria 30 dias apenas no fechamento anual, consolida todo o saldo
+      no último P adquirido e mantém as linhas históricas zeradas.
+    - PREMIUM: P1=30 dias após cinco anos; P2+=15 dias a cada 30 meses; o saldo
+      anterior expira quando nasce um novo ciclo.
+    - Ciclos vigentes já corrigidos preservam edições e movimentações feitas
+      pelo aplicativo.
     """
     reference_date = reference_date or business_today()
     with get_session() as session:
@@ -409,12 +571,11 @@ def ensure_due_periods(
                 session.delete(row)
                 counters["future_period_rows_removed"] += 1
 
-            reg_result = _ensure_balance_cycles(session, colab, reg_cycles, "REGULAR")
-            prem_result = _ensure_balance_cycles(
+            reg_result = _ensure_regular_balance_cycles(session, colab, reg_cycles)
+            prem_result = _ensure_premium_balance_cycles(
                 session,
                 colab,
                 premium_cycles(colab.data_admissao, reference_date),
-                "PREMIUM",
             )
             counters["regular_current_created"] += reg_result["current_created"]
             counters["premium_current_created"] += prem_result["current_created"]
@@ -422,6 +583,7 @@ def ensure_due_periods(
             counters["invalid_balance_rows_removed"] += reg_result["deleted"] + prem_result["deleted"]
             counters["historical_balance_rows_zeroed"] += reg_result["zeroed"] + prem_result["zeroed"]
             counters["regular_rows_consolidated"] += reg_result["consolidated"]
+            counters["premium_rows_recalculated"] += prem_result["recalculated"]
 
         now = dt.datetime.utcnow()
         extra = {
@@ -433,7 +595,8 @@ def ensure_due_periods(
             "regular_created": int(counters["regular_current_created"]),
             "premium_created": int(counters["premium_current_created"]),
             "future_rows_removed": int(counters["future_period_rows_removed"] + counters["invalid_balance_rows_removed"]),
-            "rule": "regular_12m_30d_non_cumulative; premium_5y_30d_then_30m_15d_non_cumulative",
+            "rule": "regular_12m_consolidated_in_current_period; premium_5y_30d_then_30m_15d_non_cumulative",
+            "version": "v56",
         }
         if not state:
             state = SyncState(sync_name=_SYNC_NAME)
@@ -447,7 +610,7 @@ def ensure_due_periods(
         state.updated_at = now
         session.add(Auditoria(
             actor_email=actor_email,
-            action="DAILY_PERIOD_ACCRUAL_V55",
+            action="DAILY_PERIOD_ACCRUAL_V56",
             entity_type="saldo_periodo",
             entity_id=0,
             before_data=None,
@@ -477,9 +640,9 @@ def _daily_worker() -> None:
             if last_business_date and last_business_date >= today:
                 return
         result = ensure_due_periods(today, force=False, wait_for_lock=False)
-        log.info("Verificacao diaria de periodos V55: %s", result)
+        log.info("Verificacao diaria de periodos V56: %s", result)
     except Exception:
-        log.exception("Falha na verificacao diaria de periodos V55")
+        log.exception("Falha na verificacao diaria de periodos V56")
     finally:
         with _local_lock:
             _thread_running = False
@@ -494,4 +657,4 @@ def trigger_daily_check_async() -> None:
             return
         _last_local_check = now
         _thread_running = True
-    threading.Thread(target=_daily_worker, name="period-accrual-v55", daemon=True).start()
+    threading.Thread(target=_daily_worker, name="period-accrual-v56", daemon=True).start()

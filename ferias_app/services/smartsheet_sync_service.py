@@ -1447,7 +1447,7 @@ def _sync_solicitacoes(session, solicitacoes: SheetMaps, solicitacoes_sheet_id: 
     }
 
 def _recalculate_complemento(session) -> dict:
-    """Compatibilidade V54.
+    """Compatibilidade V56.
 
     O recálculo cumulativo antigo foi desativado porque criava o período em
     formação e uma linha PREMIUM para cada período anual. A criação diária dos
@@ -1457,7 +1457,7 @@ def _recalculate_complemento(session) -> dict:
         "recalculated": 0,
         "periodos_synced": 0,
         "saldo_periodo_synced": 0,
-        "message": "Recálculo cumulativo legado desativado na V54.",
+        "message": "Recálculo cumulativo legado desativado na V56.",
     }
 
 def recalcular_saldo_periodo_from_db() -> dict:
