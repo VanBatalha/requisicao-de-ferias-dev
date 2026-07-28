@@ -312,21 +312,24 @@ def validate_licenca_certariana(
         win_start, win_end = dt.date.min, dt.date.max
     else:
         # _janela_licenca_certariana retorna (dias_base, win_start, win_end)
-        dias_base, win_start, win_end = _janela_licenca_certariana(adm, hoje=dt_inicio or None)
+        dias_base, win_start, win_end = _janela_licenca_certariana(adm)
         try:
-            direito_total = int(dias_base or 0)
+            direito_base = int(dias_base or 0)
         except Exception:
-            direito_total = 0
+            direito_base = 0
+        direito_total = resumo_premium_direito if resumo_premium_direito > 0 else direito_base
 
-        # Se a janela base não estiver vigente, mas existir direito via ajuste manual aprovado,
-        # a validação deve respeitar o total efetivamente exibido no painel.
-        if direito_total <= 0 and resumo_premium_direito > 0:
-            direito_total = resumo_premium_direito
-            win_start = win_start or dt.date.min
-            win_end = win_end or dt.date.max
+        if direito_total <= 0 or not (win_start and win_end):
+            raise RuleError("Licença Certariana ainda não foi adquirida para o ciclo vigente.")
 
-        if direito_total <= 0:
-            raise RuleError("Licença Certariana indisponível (direito total = 0).")
+        fim_validacao = dt_fim
+        if dt_inicio and not fim_validacao:
+            fim_validacao = dt_inicio + dt.timedelta(days=int(round(dias)) - 1)
+        if dt_inicio and fim_validacao and not (win_start <= dt_inicio < win_end and win_start <= fim_validacao < win_end):
+            raise RuleError(
+                f"A Licença Certariana vigente só pode ser usada entre {win_start.strftime('%d/%m/%Y')} "
+                f"e {(win_end - dt.timedelta(days=1)).strftime('%d/%m/%Y')}. O saldo anterior expira na abertura do próximo ciclo."
+            )
 
     existentes = _listar_periodos_premium(
         email,

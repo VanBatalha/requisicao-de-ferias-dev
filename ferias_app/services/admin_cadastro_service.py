@@ -190,7 +190,10 @@ def _saldos_periodo_json(session, colab: Colaborador):
 def _resumo_saldos_periodo(session, colab: Colaborador) -> Dict[str, Any]:
     rows = (
         session.query(SaldoPeriodoNovo)
-        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
+        .filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.is_atual.is_(True),
+        )
         .all()
     )
 
@@ -568,11 +571,26 @@ def atualizar_saldo_periodo_admin(
 
     is_atual = _as_bool(payload.get("is_atual", saldo.is_atual))
     if is_atual:
+        # A V54 permite saldo somente na linha vigente. Ao trocar o P atual,
+        # todo o histórico do mesmo tipo permanece visível, mas zerado.
         session.query(SaldoPeriodoNovo).filter(
             SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
             SaldoPeriodoNovo.tipo_saldo == tipo,
             SaldoPeriodoNovo.id != saldo.id,
-        ).update({SaldoPeriodoNovo.is_atual: False}, synchronize_session=False)
+        ).update({
+            SaldoPeriodoNovo.is_atual: False,
+            SaldoPeriodoNovo.saldo_inicial: 0,
+            SaldoPeriodoNovo.saldo_utilizado: 0,
+            SaldoPeriodoNovo.saldo_reservado: 0,
+            SaldoPeriodoNovo.saldo_disponivel: 0,
+            SaldoPeriodoNovo.ultima_alteracao: dt.datetime.utcnow(),
+            SaldoPeriodoNovo.updated_at: dt.datetime.utcnow(),
+        }, synchronize_session=False)
+    else:
+        inicial = Decimal("0.00")
+        utilizado = Decimal("0.00")
+        reservado = Decimal("0.00")
+        disponivel = Decimal("0.00")
 
     saldo.periodo_numero = periodo_numero
     saldo.data_inicio = data_inicio
@@ -632,8 +650,14 @@ def excluir_saldo_periodo_admin(
     return obter_colaborador_admin(colab.id)
 
 
+def _ajuste_v54_ignorado(row: Solicitacao) -> bool:
+    metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+    return bool(metadata.get("v54_premium_adjustment_ignored"))
+
+
 def _ajuste_dict(row: Solicitacao) -> Dict[str, Any]:
     dias = row.dias if row.dias is not None else row.dias_solicitados
+    metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
     return {
         "id": row.id,
         "colaborador_matricula": row.colaborador_matricula,
@@ -645,6 +669,8 @@ def _ajuste_dict(row: Solicitacao) -> Dict[str, Any]:
         "solicitacao": row.solicitacao or row.tipo_solicitacao or "AJUSTE",
         "observacoes": row.observacoes or "",
         "periodo_aquisitivo_origem": row.periodo_aquisitivo_origem or "",
+        "v54_ignorado_no_saldo": bool(metadata.get("v54_premium_adjustment_ignored")),
+        "v54_motivo_ignorado": str(metadata.get("v54_reason") or ""),
     }
 
 
@@ -672,11 +698,24 @@ def _format_alloc(items: List[Dict[str, Any]]) -> str:
 
 
 def _saldo_por_periodo(session, colab: Colaborador, tipo: str, numero: int) -> Optional[SaldoPeriodoNovo]:
+    """Retorna exclusivamente a linha vigente.
+
+    ``numero`` e mantido na assinatura porque os registros historicos guardam o
+    P de origem, mas nenhuma edicao pode reativar saldo em uma linha antiga.
+    """
     return session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
-        SaldoPeriodoNovo.periodo_numero == int(numero),
-    ).first()
+        SaldoPeriodoNovo.is_atual.is_(True),
+    ).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
+
+
+def _premium_event_affects_current(colab: Colaborador, event_date: Any) -> bool:
+    try:
+        from .period_accrual_service import premium_event_in_current_cycle
+        return premium_event_in_current_cycle(colab.data_admissao, _as_date(event_date))
+    except Exception:
+        return False
 
 
 def _status_ajuste_aprovado(status: Any) -> bool:
@@ -688,12 +727,19 @@ def _ajuste_aprovado(row: Solicitacao) -> bool:
 
 
 def _reverter_efeito_ajuste(session, colab: Colaborador, ajuste: Solicitacao) -> None:
+    # Ajustes Premium legados da estrutura anual foram preservados apenas como
+    # histórico na correção V54. Como não compuseram o saldo atual, não podem
+    # ser estornados ao editar/excluir enquanto mantiverem esta marcação.
+    if _ajuste_v54_ignorado(ajuste):
+        return
     if not _ajuste_aprovado(ajuste):
         return
     dias = _as_decimal(ajuste.dias if ajuste.dias is not None else ajuste.dias_solicitados, "dias")
     if dias == 0:
         return
     tipo = str(ajuste.saldo_tipo or ajuste.tipo_ferias or "REGULAR").strip().upper()
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, ajuste.data_inicio):
+        return
     alloc = _parse_alloc(ajuste.periodo_aquisitivo_origem)
     if not alloc:
         raise ValueError(
@@ -731,13 +777,17 @@ def _aplicar_efeito_ajuste(
     tipo: str,
     dias: Decimal,
     periodo_numero: Optional[int] = None,
+    data_inicio: Any = None,
 ) -> List[Dict[str, Any]]:
     if dias == 0:
         raise ValueError("O ajuste deve ser diferente de zero.")
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, data_inicio):
+        return []
 
     query = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
+        SaldoPeriodoNovo.is_atual.is_(True),
     )
     if periodo_numero:
         query = query.filter(SaldoPeriodoNovo.periodo_numero == int(periodo_numero))
@@ -800,6 +850,7 @@ def atualizar_ajuste_admin(
         raise ValueError("Ajuste não encontrado para este colaborador.")
 
     before = _ajuste_dict(ajuste)
+    legado_v54_ignorado = _ajuste_v54_ignorado(ajuste)
     tipo_antigo = str(ajuste.saldo_tipo or ajuste.tipo_ferias or "REGULAR").strip().upper()
     if tipo_antigo in {"CERTARIANA", "LICENCA CERTARIANA", "LICENÇA CERTARIANA"}:
         tipo_antigo = "PREMIUM"
@@ -858,7 +909,12 @@ def atualizar_ajuste_admin(
             len(alloc_antiga) == 1
             and int(alloc_antiga[0].get("periodo_numero") or 0) == periodo_numero
         )
-    impacto_mudou = tipo != tipo_antigo or dias != dias_antigos or periodo_mudou
+    impacto_mudou = (
+        tipo != tipo_antigo
+        or dias != dias_antigos
+        or periodo_mudou
+        or data_inicio != ajuste.data_inicio
+    )
 
     movimentos = alloc_antiga
     saldo_recalculado = False
@@ -869,7 +925,9 @@ def atualizar_ajuste_admin(
 
     # Entrou em aprovado ou mudou o impacto mantendo-se aprovado: aplica o novo efeito.
     if aprovado_depois and (impacto_mudou or not aprovado_antes):
-        movimentos = _aplicar_efeito_ajuste(session, colab, tipo, dias, periodo_numero)
+        movimentos = _aplicar_efeito_ajuste(
+            session, colab, tipo, dias, periodo_numero, data_inicio=data_inicio
+        )
         saldo_recalculado = True
     elif impacto_mudou and not aprovado_depois:
         movimentos = ([{"periodo_numero": periodo_numero, "dias": abs(dias)}] if periodo_numero else alloc_antiga)
@@ -887,6 +945,17 @@ def atualizar_ajuste_admin(
     ajuste.observacoes = str(payload.get("observacoes", ajuste.observacoes or "")).strip()
     if impacto_mudou or aprovado_antes != aprovado_depois:
         ajuste.periodo_aquisitivo_origem = _format_alloc(movimentos)
+
+    # Ao editar materialmente um ajuste legado e aplicá-lo pela regra nova,
+    # remove a marca de "somente histórico". Excluir sem editar continua sem
+    # movimentar saldo, pois o lançamento nunca integrou o saldo V54.
+    if legado_v54_ignorado and aprovado_depois and (impacto_mudou or not aprovado_antes) and movimentos:
+        metadata = dict(ajuste.metadata_json or {})
+        metadata.pop("v54_premium_adjustment_ignored", None)
+        metadata.pop("v54_reason", None)
+        metadata["v54_reapplied_at"] = dt.datetime.utcnow().isoformat()
+        ajuste.metadata_json = metadata
+
     ajuste.updated_at = dt.datetime.utcnow()
     session.flush()
 
@@ -1024,6 +1093,8 @@ def _reverter_efeito_solicitacao(session, colab: Colaborador, solicitacao: Solic
 
     alloc = _parse_alloc(solicitacao.periodo_aquisitivo_origem)
     tipo = _normalizar_tipo_saldo(solicitacao.saldo_tipo or solicitacao.tipo_ferias)
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, solicitacao.data_inicio):
+        return []
     campo = "saldo_utilizado" if impacto == "utilizado" else "saldo_reservado"
     if not alloc:
         if _is_afastamento_solicitacao(solicitacao.tipo_solicitacao or solicitacao.solicitacao):
@@ -1038,8 +1109,9 @@ def _reverter_efeito_solicitacao(session, colab: Colaborador, solicitacao: Solic
             .filter(
                 SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
                 SaldoPeriodoNovo.tipo_saldo == tipo,
+                SaldoPeriodoNovo.is_atual.is_(True),
             )
-            .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+            .order_by(SaldoPeriodoNovo.periodo_numero.desc())
             .all()
         )
         for saldo in saldos:
@@ -1092,12 +1164,15 @@ def _aplicar_efeito_solicitacao(
     status: str,
     tipo_solicitacao: str,
     preferred_alloc: Optional[List[Dict[str, Any]]] = None,
+    data_inicio: Any = None,
 ) -> List[Dict[str, Any]]:
     impacto = _impacto_status_solicitacao(status)
     if not impacto or dias <= 0 or _is_afastamento_solicitacao(tipo_solicitacao):
         return []
 
     tipo = _normalizar_tipo_saldo(tipo)
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, data_inicio):
+        return []
     campo = "saldo_utilizado" if impacto == "utilizado" else "saldo_reservado"
     movimentos: List[Dict[str, Any]] = []
 
@@ -1128,8 +1203,9 @@ def _aplicar_efeito_solicitacao(
         .filter(
             SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
             SaldoPeriodoNovo.tipo_saldo == tipo,
+            SaldoPeriodoNovo.is_atual.is_(True),
         )
-        .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+        .order_by(SaldoPeriodoNovo.periodo_numero.desc())
         .all()
     )
     restante = dias
@@ -1208,6 +1284,7 @@ def atualizar_solicitacao_admin(
         or dias != dias_antigos
         or impacto_novo != impacto_antigo
         or afast_novo != afast_antigo
+        or data_inicio != solicitacao.data_inicio
     )
 
     movimentos = alloc_antiga
@@ -1223,6 +1300,7 @@ def atualizar_solicitacao_admin(
             status,
             tipo_solic,
             preferred_alloc=preferred,
+            data_inicio=data_inicio,
         )
         saldo_recalculado = bool(impacto_antigo or impacto_novo)
 

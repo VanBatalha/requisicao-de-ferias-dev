@@ -422,7 +422,10 @@ def listar_colaboradores_com_saldos(status_filter: Optional[str] = None) -> List
                     func.coalesce(func.sum(SaldoPeriodoNovo.saldo_reservado), 0),
                     func.coalesce(func.sum(SaldoPeriodoNovo.saldo_disponivel), 0),
                 )
-                .filter(func.upper(SaldoPeriodoNovo.colaborador_matricula).in_(mats))
+                .filter(
+                    func.upper(SaldoPeriodoNovo.colaborador_matricula).in_(mats),
+                    SaldoPeriodoNovo.is_atual.is_(True),
+                )
                 .group_by(SaldoPeriodoNovo.colaborador_matricula, SaldoPeriodoNovo.tipo_saldo)
                 .all()
             )
@@ -501,7 +504,10 @@ def get_saldos_colaborador(identificador: str) -> Dict[str, Any]:
 
         rows = (
             session.query(SaldoPeriodoNovo)
-            .filter(func.upper(SaldoPeriodoNovo.colaborador_matricula) == str(colab.matricula).upper())
+            .filter(
+                func.upper(SaldoPeriodoNovo.colaborador_matricula) == str(colab.matricula).upper(),
+                SaldoPeriodoNovo.is_atual.is_(True),
+            )
             .all()
         )
 
@@ -583,19 +589,36 @@ def _parse_periodo_alloc_v29(value: Any) -> List[Dict[str, Any]]:
 
 
 def _saldo_periodo_por_numero_v29(session, colab: Colaborador, tipo_saldo: str, numero: int):
+    """Movimentacoes operacionais sempre atingem o saldo vigente.
+
+    O numero antigo continua no historico da solicitacao, mas uma alteracao ou
+    cancelamento nao pode voltar a deixar saldo em P encerrado.
+    """
     return (
         session.query(SaldoPeriodoNovo)
         .filter(
             SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
             SaldoPeriodoNovo.tipo_saldo == (tipo_saldo or 'REGULAR').upper(),
-            SaldoPeriodoNovo.periodo_numero == int(numero or 0),
+            SaldoPeriodoNovo.is_atual.is_(True),
         )
+        .order_by(SaldoPeriodoNovo.periodo_numero.desc())
         .first()
     )
 
 
 def _mover_saldo_status_v29(session, colab: Colaborador, solicitacao: Solicitacao, old_status: str, new_status: str):
     saldo_tipo = (solicitacao.saldo_tipo or solicitacao.tipo_ferias or 'REGULAR').upper()
+    if saldo_tipo == 'PREMIUM':
+        try:
+            from .period_accrual_service import premium_event_in_current_cycle
+            if not premium_event_in_current_cycle(colab.data_admissao, solicitacao.data_inicio):
+                # O evento pertence a um ciclo Premium expirado. Mantém o
+                # histórico, mas não credita/estorna o saldo vigente.
+                _atualizar_complemento_cache(session, colab)
+                return
+        except Exception:
+            _atualizar_complemento_cache(session, colab)
+            return
     dias = _to_int_days(solicitacao.dias or solicitacao.dias_solicitados or 0)
     if dias <= 0 or saldo_tipo not in {'REGULAR', 'PREMIUM'}:
         _atualizar_complemento_cache(session, colab)
@@ -651,34 +674,21 @@ def _saldo_periodo_destino_ajuste_v29(session, colab: Colaborador, saldo_tipo: s
     saldo_tipo = (saldo_tipo or 'REGULAR').upper()
     saldo = (
         session.query(SaldoPeriodoNovo)
-        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
-        .order_by(SaldoPeriodoNovo.is_atual.desc(), SaldoPeriodoNovo.data_inicio.desc(), SaldoPeriodoNovo.periodo_numero.desc())
+        .filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
+            SaldoPeriodoNovo.is_atual.is_(True),
+        )
+        .order_by(SaldoPeriodoNovo.periodo_numero.desc())
         .first()
     )
     if saldo:
         return saldo
-    hoje = date.today()
-    adm = colab.data_admissao or hoje
-    saldo = SaldoPeriodoNovo(
-        colaborador_id=colab.id,
-        colaborador_matricula=colab.matricula,
-        periodo_numero=1,
-        data_inicio=adm,
-        data_fim=adm + dt.timedelta(days=364),
-        is_atual=True,
-        tipo_saldo=saldo_tipo,
-        saldo_inicial=0,
-        saldo_utilizado=0,
-        saldo_reservado=0,
-        saldo_disponivel=0,
-        ultima_alteracao=datetime.utcnow(),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+    nome = 'Licença Certariana' if saldo_tipo == 'PREMIUM' else 'férias regulares'
+    raise ValueError(
+        f'O colaborador ainda não possui período vigente adquirido para {nome}. '
+        'O saldo só é criado após o fechamento do ciclo correspondente.'
     )
-    session.add(saldo)
-    session.flush()
-    return saldo
-
 
 def _atualizar_complemento_cache(session, colab: Colaborador):
     """Mantém apenas metadados operacionais em colaborador_complemento.
@@ -709,8 +719,12 @@ def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias:
         return []
     saldos = (
         session.query(SaldoPeriodoNovo)
-        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
-        .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+        .filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
+            SaldoPeriodoNovo.is_atual.is_(True),
+        )
+        .order_by(SaldoPeriodoNovo.periodo_numero.asc())
         .all()
     )
     movimentos = []
@@ -739,25 +753,16 @@ def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias:
 def _periodo_destino_ajuste(session, colab: Colaborador):
     periodo = (
         session.query(PeriodoAquisitivo)
-        .filter(PeriodoAquisitivo.colaborador_matricula == colab.matricula)
-        .order_by(PeriodoAquisitivo.is_atual.desc(), PeriodoAquisitivo.data_inicio.desc(), PeriodoAquisitivo.periodo_numero.desc())
+        .filter(
+            PeriodoAquisitivo.colaborador_matricula == colab.matricula,
+            PeriodoAquisitivo.is_atual.is_(True),
+        )
+        .order_by(PeriodoAquisitivo.periodo_numero.desc())
         .first()
     )
     if periodo:
         return periodo
-    hoje = date.today()
-    periodo = PeriodoAquisitivo(
-        colaborador_id=colab.id,
-        colaborador_matricula=colab.matricula,
-        periodo_numero=1,
-        data_inicio=colab.data_admissao or hoje,
-        data_fim=hoje + dt.timedelta(days=364),
-        is_atual=True,
-    )
-    session.add(periodo)
-    session.flush()
-    return periodo
-
+    raise ValueError('O colaborador ainda não possui período aquisitivo concluído.')
 
 def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: int, solicitacao_id: int | None, actor: Colaborador | None = None):
     saldo_tipo = (saldo_tipo or 'REGULAR').upper()
@@ -776,8 +781,12 @@ def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: in
         restante = abs(dias)
         saldos = (
             session.query(SaldoPeriodoNovo)
-            .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula, SaldoPeriodoNovo.tipo_saldo == saldo_tipo)
-            .order_by(SaldoPeriodoNovo.data_inicio.asc(), SaldoPeriodoNovo.periodo_numero.asc())
+            .filter(
+                SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+                SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
+                SaldoPeriodoNovo.is_atual.is_(True),
+            )
+            .order_by(SaldoPeriodoNovo.periodo_numero.asc())
             .all()
         )
         for saldo in saldos:

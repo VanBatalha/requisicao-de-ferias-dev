@@ -34,3 +34,7 @@ A sincronização cadastral usa a planilha **CADASTRO DE COLABORADORES** (`17457
 
 - `CORRECAO_RELATORIO_LANCAMENTO_V51.md`: remoção do auto-sync, controle de conexões e diagnóstico do relatório.
 - `CORRECAO_RELATORIO_ADMIN_SALDOS_V52.md`: cache de contingência do relatório e manutenção ADMIN de saldos/ajustes.
+
+## V54 — ciclos adquiridos e Licença Certariana
+
+Consulte `PERIODOS_E_SALDOS_V54.md`. Antes de publicar a V54 em produção, execute o SQL de correção inicial em `migracao/sql/correcao_periodos_saldos_v54_pgadmin.sql`. Depois, configure o Render Cron Job com `python daily_balance_accrual.py` e mantenha `APP_TIMEZONE=America/Fortaleza`.

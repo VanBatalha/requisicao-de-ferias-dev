@@ -201,6 +201,14 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             "message": "PostgreSQL indisponível. A gravação direta no Smartsheet foi desativada; tente novamente quando o banco estiver disponível.",
         }, 503
 
+    # Antes de ler/reservar saldo, conclui eventual virada de ciclo do dia.
+    # Isso evita que uma solicitação no aniversário de admissão consuma o P antigo.
+    try:
+        from .period_accrual_service import ensure_daily_periods_current
+        ensure_daily_periods_current(actor_email=str((user or {}).get("email") or "solicitacao"))
+    except Exception as exc:
+        return {"ok": False, "message": f"Não foi possível atualizar os períodos adquiridos: {exc}"}, 503
+
     gestor_email = safe_lower(user.get("email") or "")
     if not gestor_email:
         return {"ok": False, "message": "Usuário inválido."}, 400
@@ -346,20 +354,6 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     except Exception as e:
         return {"ok": False, "message": f"Erro ao montar resumo/validações: {e}"}, 500
 
-    if saldo_tipo_final == "PREMIUM" and not is_dp_or_admin:
-        try:
-            adm_c = (pg_get_admissao(colaborador_matricula or colaborador_email) if pg_enabled and pg_get_admissao else _colaborador_admissao(colaborador_email))
-            if not adm_c and prem_saldo <= 0:
-                return {"ok": False, "message": "Licença Certariana ainda não está disponível para este colaborador."}, 400
-            dias_base, win_start, win_end = _janela_licenca_certariana(adm_c, hoje=dt_inicio) if adm_c else (0, None, None)
-            _ = dias_base
-            if not (win_start and win_end):
-                if prem_saldo <= 0:
-                    return {"ok": False, "message": "Licença Certariana ainda não está disponível para este colaborador."}, 400
-            elif not (win_start <= dt_inicio < win_end and win_start <= dt_fim < win_end):
-                return {"ok": False, "message": f"Licença Certariana só pode ser utilizada entre {win_start.strftime('%d/%m/%Y')} e {(win_end - dt.timedelta(days=1)).strftime('%d/%m/%Y')} (não cumulativa e válida por 2 anos após a conquista)."}, 400
-        except Exception:
-            pass
 
     marker = f"Saldo: {saldo_tipo_final}"
     if marker.lower() not in observacoes.lower():

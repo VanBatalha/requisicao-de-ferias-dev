@@ -209,33 +209,18 @@ def calcular_dias_ferias(data_admissao_str):
         return 0
 
 def calcular_licenca_premium(data_admissao_str):
-    """Calcula dias de licenca premium (5 anos + 30 dias a cada 2 anos)"""
+    """Retorna a base vigente da Licença Certariana pela regra V54.
+
+    P1 nasce no dia seguinte aos cinco anos (30 dias). Os ciclos seguintes
+    nascem a cada 30 meses (15 dias) e não acumulam o saldo anterior.
+    """
     if not data_admissao_str:
         return 0
     try:
         s = str(data_admissao_str).strip()[:10]
         data_admissao = dt.datetime.strptime(s, "%Y-%m-%d").date()
-        hoje = dt.date.today()
-        
-        if data_admissao > hoje:
-            return 0
-        
-        dias_trabalhados = (hoje - data_admissao).days
-        anos = dias_trabalhados / 365.25
-        
-        # Premium comeca aos 5 anos
-        if anos < 5:
-            return 0
-        
-        # 30 dias aos 5 anos
-        dias_premium = 30
-        
-        # +30 dias a cada 2 anos apos 5 anos
-        anos_apos_5 = anos - 5
-        ciclos_2_anos = int(anos_apos_5 / 2)
-        dias_premium += ciclos_2_anos * 30
-        
-        return dias_premium
+        dias, _, _ = _janela_licenca_certariana(data_admissao)
+        return int(dias or 0)
     except Exception as e:
         print(f"ERRO em calcular_licenca_premium: {e}")
         return 0
@@ -571,44 +556,38 @@ def _add_years(d: dt.date, years: int) -> dt.date:
 
 
 def _janela_licenca_certariana(admissao: dt.date, hoje: dt.date | None = None):
-    """Calcula a janela vigente da Licença Certariana.
+    """Calcula o ciclo vigente da Licença Certariana/Premium (regra V54).
 
-    Regras:
-      - Conquista 30 dias ao completar 5 anos de empresa
-      - Nova conquista de 30 dias a cada 5 anos (10, 15, 20, ...)
-      - NÃO cumulativa (não soma ciclos)
-      - Uso permitido somente dentro da janela de 2 anos após a conquista vigente
-      - Se não utilizar dentro da janela, o direito vence (não acumula para o próximo ciclo)
+    - P1: 30 dias no dia seguinte ao fechamento de cinco anos;
+    - P2 em diante: 15 dias a cada 30 meses;
+    - não cumulativa: o ciclo anterior expira quando o próximo nasce.
 
-    Retorna: (dias_base, inicio_janela, fim_janela_exclusivo)
+    Retorna ``(dias_base, inicio_vigencia, fim_vigencia_exclusivo)``.
     """
     if not admissao:
         return 0, None, None
 
-    hoje = hoje or dt.date.today()
+    if hoje is None:
+        try:
+            from .period_accrual_service import business_today
+            hoje = business_today()
+        except Exception:
+            hoje = dt.date.today()
 
-    # anos completos de empresa
-    years = hoje.year - admissao.year
-    if (hoje.month, hoje.day) < (admissao.month, admissao.day):
-        years -= 1
-
-    # ainda não conquistou
-    if years < 5:
+    primeiro_credito = _add_months(admissao, 60) + dt.timedelta(days=1)
+    if hoje < primeiro_credito:
         return 0, None, None
 
-    # última conquista em múltiplos de 5: 5, 10, 15, ...
-    anos_da_conquista = (years // 5) * 5
-    if anos_da_conquista < 5:
-        return 0, None, None
+    numero = 1
+    inicio = primeiro_credito
+    fim_exclusivo = _add_months(primeiro_credito, 30)
+    while hoje >= fim_exclusivo:
+        numero += 1
+        inicio = fim_exclusivo
+        fim_exclusivo = _add_months(primeiro_credito, numero * 30)
 
-    inicio = _add_years(admissao, anos_da_conquista)
-    fim_excl = _add_years(inicio, 2)  # janela de 2 anos
+    return (30 if numero == 1 else 15), inicio, fim_exclusivo
 
-    # fora da janela vigente -> sem direito base (pode haver saldo apenas por ajustes)
-    if hoje >= fim_excl:
-        return 0, None, None
-
-    return 30, inicio, fim_excl
 def _calcular_premium_por_tempo(admissao: dt.date, hoje: dt.date | None = None) -> int:
     """Compat: retorna o direito base vigente da Licença Certariana (não cumulativa)."""
     dias, _, _ = _janela_licenca_certariana(admissao, hoje=hoje)
@@ -655,76 +634,8 @@ def _norm_status(s: str) -> str:
 def _canonical_status(s: str) -> str:
     from .normalization_service import canonical_status
     return canonical_status(s)
-def _listar_segmentos_premium(
-    email: str,
-    win_start: dt.date,
-    win_end: dt.date,
-    exclude_row_id: int | None = None,
-    include_statuses: set[str] | None = None,
-):
-    """Lista segmentos (dias) já lançados/pendentes de LICENÇA CERTARIANA (PREMIUM) dentro da janela atual."""
-    sheet = _get_sheet_solicitacoes(force_refresh=False)
-
-    # Usa o helper local (legacy) para resolver IDs de colunas por nome.
-    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
-    col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
-    col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
-    col_status = _col_id_by_name(sheet, "STATUS")
-    col_ini = _col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
-    col_sol = _col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
-
-    target = _norm_email(email)
-    out = []
-
-    for row in getattr(sheet, "rows", []) or []:
-        if exclude_row_id and getattr(row, 'id', None) == exclude_row_id:
-            continue
-        em = _norm_email(_cell_value(row, col_email))
-        if not em or em != target:
-            continue
-
-        saldo = str(_cell_value(row, col_saldo) or "")
-        saldo_n = _norm(saldo)
-        # Aceita variações históricas do campo SALDO TIPO
-        if not (saldo_n == "premium" or "certar" in saldo_n):
-            continue
-        sol = str(_cell_value(row, col_sol) or "")
-        # No DEV, a Licença Certariana é identificada principalmente pelo SALDO TIPO = PREMIUM.
-        # A coluna "SOLICITAÇÃO" costuma vir como "Gozo".
-        # Mantemos apenas o bloqueio para linhas de ajuste.
-        if "ajuste" in _norm(sol):
-            continue
-
-        st = _canonical_status(str(_cell_value(row, col_status) or ""))
-        stn = _norm_status(st)
-
-        # Se o chamador especificar quais status considerar, respeita.
-        # Caso contrário, mantém o padrão: aprovadas + reservas.
-        if include_statuses is not None:
-            if stn not in include_statuses:
-                continue
-        else:
-            if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
-                continue
-
-        dt_ini = _parse_date_value(_cell_value(row, col_ini))
-        if not dt_ini:
-            continue
-        d = dt_ini.date()
-        if d < win_start or d > win_end:
-            continue
-
-        try:
-            dias = float(str(_cell_value(row, col_dias) or "").replace(",", "."))
-        except Exception:
-            dias = 0
-        if dias:
-            out.append(int(round(dias)))
-    return out
-
-
 def _listar_periodos_premium(
-    email: str,
+    identificador: str,
     win_start: dt.date,
     win_end: dt.date,
     exclude_row_id: int | None = None,
@@ -732,87 +643,87 @@ def _listar_periodos_premium(
     *,
     force_refresh: bool = False,
 ):
-    """Lista períodos (ini/fim/dias) já lançados/pendentes de Licença Certariana (PREMIUM) na janela.
-    Retorna lista de dicts: {ini: date, fim: date, dias: int, row_id: int|None, status: str, solicitacao: str}
+    """Lista solicitações Premium diretamente no PostgreSQL.
+
+    Não existe fallback para Smartsheet: fora da sincronização manual do ADMIN,
+    o banco PostgreSQL é a única fonte operacional do aplicativo.
     """
-    sheet = _get_sheet_solicitacoes(force_refresh=False)
-    
-    col_email = _col_id_by_name(sheet, "COLABORADOR", "EMAIL", "EMAIL DO COLABORADOR", "EMAIL DA EMPRESA")
-    col_saldo = _col_id_by_name(sheet, "SALDO TIPO", "SALDO", "TIPO SALDO")
-    col_dias = _col_id_by_name(sheet, "DIAS", "DIAS (GOZO)", "DIAS GOZO")
-    col_status = _col_id_by_name(sheet, "STATUS")
-    col_ini = _col_id_by_name(sheet, "DATA INICIO", "DATA INÍCIO", "INICIO", "INÍCIO")
-    col_fim = _col_id_by_name(sheet, "DATA FIM", "DATA FINAL", "FIM")
-    col_sol = _col_id_by_name(sheet, "SOLICITAÇÃO", "SOLICITACAO", "TIPO", "TIPO SOLICITACAO")
+    _ = force_refresh
+    try:
+        from sqlalchemy import func as sa_func, or_ as sa_or
+        from ..models import Colaborador, Solicitacao
+        from .postgres_service import get_db_session
 
-    target = _norm_email(email)
-    out: list[dict] = []
+        session_db = get_db_session()
+        ident = str(identificador or '').strip()
+        colab = None
+        if ident and '@' not in ident:
+            colab = session_db.query(Colaborador).filter(sa_func.upper(Colaborador.matricula) == ident.upper()).first()
+        if not colab and ident:
+            colab = session_db.query(Colaborador).filter(sa_func.lower(Colaborador.email) == ident.lower()).order_by(Colaborador.id.desc()).first()
+        if not colab or not colab.matricula:
+            return []
 
-    for row in getattr(sheet, "rows", []) or []:
-        if exclude_row_id and getattr(row, "id", None) == exclude_row_id:
-            continue
+        rows = session_db.query(Solicitacao).filter(
+            sa_func.upper(Solicitacao.colaborador_matricula) == str(colab.matricula).strip().upper(),
+            sa_func.upper(sa_func.coalesce(Solicitacao.saldo_tipo, Solicitacao.tipo_ferias, 'REGULAR')) == 'PREMIUM',
+            sa_or(Solicitacao.is_ajuste.is_(False), Solicitacao.is_ajuste.is_(None)),
+            Solicitacao.data_inicio >= win_start,
+            Solicitacao.data_inicio < win_end,
+        ).order_by(Solicitacao.data_inicio, Solicitacao.id).all()
 
-        em = _norm_email(_cell_value(row, col_email))
-        if not em or em != target:
-            continue
-
-        saldo = str(_cell_value(row, col_saldo) or "")
-        saldo_n = _norm(saldo)
-        if not (saldo_n == "premium" or "certar" in saldo_n):
-            continue
-
-        sol = str(_cell_value(row, col_sol) or "")
-        if "ajuste" in _norm(sol):
-            continue
-
-        st = _canonical_status(str(_cell_value(row, col_status) or ""))
-        stn = _norm_status(st)
-
-        if include_statuses is not None:
-            if stn not in include_statuses:
+        out = []
+        for row in rows:
+            if exclude_row_id and int(row.id or 0) == int(exclude_row_id):
                 continue
-        else:
-            if stn not in STATUS_APROVADA and stn not in STATUS_RESERVA:
+            status_canon = _canonical_status(str(row.status or ''))
+            status_norm = _norm_status(status_canon)
+            if include_statuses is not None:
+                if status_norm not in include_statuses:
+                    continue
+            elif status_norm not in STATUS_APROVADA and status_norm not in STATUS_RESERVA:
                 continue
 
-        dt_ini = _parse_date_value(_cell_value(row, col_ini))
-        if not dt_ini:
-            continue
-        ini_d = dt_ini.date()
-        if win_start and ini_d < win_start:
-            continue
-        if win_end and ini_d > win_end:
-            continue
+            dias_value = row.dias if row.dias is not None else row.dias_solicitados
+            try:
+                dias = int(round(float(dias_value or 0)))
+            except Exception:
+                dias = 0
+            inicio = row.data_inicio
+            fim = row.data_fim or (inicio + dt.timedelta(days=max(dias, 1) - 1) if inicio else None)
+            if not inicio or not fim:
+                continue
+            out.append({
+                'ini': inicio,
+                'fim': fim,
+                'dias': dias,
+                'row_id': row.id,
+                'status': status_canon,
+                'solicitacao': row.solicitacao or row.tipo_solicitacao or '',
+            })
+        return out
+    except Exception:
+        return []
 
-        # dias
-        try:
-            dias = float(str(_cell_value(row, col_dias) or "").replace(",", "."))
-        except Exception:
-            dias = 0.0
-        dias_i = int(round(dias)) if dias else 0
 
-        # fim
-        dt_fim = _parse_date_value(_cell_value(row, col_fim))
-        if dt_fim:
-            fim_d = dt_fim.date()
-        elif dias_i > 0:
-            fim_d = ini_d + dt.timedelta(days=dias_i - 1)
-        else:
-            fim_d = ini_d
-
-        out.append(
-            {
-                "ini": ini_d,
-                "fim": fim_d,
-                "dias": dias_i,
-                "row_id": getattr(row, "id", None),
-                "status": st,
-                "solicitacao": sol,
-            }
+def _listar_segmentos_premium(
+    identificador: str,
+    win_start: dt.date,
+    win_end: dt.date,
+    exclude_row_id: int | None = None,
+    include_statuses: set[str] | None = None,
+):
+    return [
+        int(item.get('dias') or 0)
+        for item in _listar_periodos_premium(
+            identificador,
+            win_start,
+            win_end,
+            exclude_row_id=exclude_row_id,
+            include_statuses=include_statuses,
         )
-
-    out.sort(key=lambda x: x["ini"])
-    return out
+        if int(item.get('dias') or 0) > 0
+    ]
 
 def _validar_fracionamento_certariana(email: str, dias_solicitados: float, dt_inicio: datetime.datetime | None = None):
     """
@@ -937,44 +848,26 @@ def _value_by_normalized_key(row: dict, *candidate_titles: str):
     return None
 
 
-def _colaborador_regime(email: str) -> str:
-    c = _colaborador_por_email(email) or {}
-    regime = _value_by_normalized_key(
-        c,
-        "REGIME DE CONTRATAÇÃO",
-        "REGIME DE CONTRATACAO",
-        "REGIME",
-    )
-    return str(regime or "").strip()
+def _colaborador_regime(identificador: str) -> str:
+    try:
+        from .postgres_service import get_colaborador
+        c = get_colaborador(identificador) or {}
+        return str(c.get('regime') or c.get('REGIME') or '').strip()
+    except Exception:
+        return ''
 
 
-def _colaborador_admissao(email: str):
-    c = _colaborador_por_email(email) or {}
-    if not c:
-        return None
-
-    # Primeiro tenta nomes conhecidos/normalizados.
-    value = _value_by_normalized_key(
-        c,
-        "DATA DE ADMISSÃO",
-        "DATA DE ADMISSAO",
-        "DATA ADMISSÃO",
-        "DATA ADMISSAO",
-        "ADMISSÃO",
-        "ADMISSAO",
-        "DATA ADMISSÃO COLABORADOR",
-        "DATA ADMISSAO COLABORADOR",
-    )
-    parsed = _parse_date_value(value)
-    if parsed:
-        return parsed
-
-    # Fallback: qualquer coluna cujo título contenha 'admiss'.
-    for k, v in c.items():
-        if v and "admiss" in _norm_title(k):
-            parsed = _parse_date_value(v)
-            if parsed:
-                return parsed
+def _colaborador_admissao(identificador: str):
+    """Obtém a admissão somente no PostgreSQL, por matrícula ou e-mail."""
+    try:
+        from .postgres_service import get_colaborador
+        c = get_colaborador(identificador) or {}
+        value = c.get('data_admissao') or c.get('DATA DE ADMISSÃO') or c.get('DATA DE ADMISSAO')
+        parsed = _parse_date_value(value)
+        if parsed:
+            return parsed.date() if isinstance(parsed, dt.datetime) else parsed
+    except Exception:
+        pass
     return None
 
 def calcular_dias_ferias_real_time(admissao: dt.date, hoje=None) -> int:
@@ -1009,19 +902,20 @@ def _periodo_bounds(admissao: dt.date, numero_periodo: int) -> tuple[dt.date, dt
 
 
 def _current_partial_period(admissao: dt.date | None, hoje: dt.date | None = None):
+    """Retorna o ultimo periodo adquirido, nunca o ciclo ainda em formacao."""
     if not admissao:
         return None
     hoje = hoje or dt.date.today()
     completos = _completed_aquisitive_periods(admissao, hoje)
-    ini = _add_months(admissao, completos * 12)
-    prox = _add_months(admissao, (completos + 1) * 12)
-    if hoje < ini:
+    if completos <= 0:
         return None
+    ini = _add_months(admissao, (completos - 1) * 12)
+    fim = _add_months(admissao, completos * 12) - dt.timedelta(days=1)
     return {
-        "numero": completos + 1,
+        "numero": completos,
         "inicio": ini,
-        "fim": prox - dt.timedelta(days=1),
-        "completo": False,
+        "fim": fim,
+        "completo": True,
     }
 
 

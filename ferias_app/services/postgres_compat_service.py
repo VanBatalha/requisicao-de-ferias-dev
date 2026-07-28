@@ -505,10 +505,12 @@ def get_resumo_ferias_postgres(email: str) -> Dict[str, Any]:
     reg_periodos = _saldos_por_periodo(colab, 'REGULAR')
     prem_periodos = _saldos_por_periodo(colab, 'PREMIUM')
     def totals(periodos):
-        direito = sum(int(p.get('direito') or 0) for p in periodos)
-        usados = sum(int(p.get('usados') or 0) for p in periodos)
-        reservados = sum(int(p.get('reservados') or 0) for p in periodos)
-        saldo = sum(int(p.get('saldo') or 0) for p in periodos)
+        vigentes = [p for p in periodos if p.get('atual')]
+        base = vigentes or []
+        direito = sum(int(p.get('direito') or 0) for p in base)
+        usados = sum(int(p.get('usados') or 0) for p in base)
+        reservados = sum(int(p.get('reservados') or 0) for p in base)
+        saldo = sum(int(p.get('saldo') or 0) for p in base)
         return direito, usados, reservados, saldo
     rd, ru, rr, rs = totals(reg_periodos)
     pd, pu, pr, ps = totals(prem_periodos)
@@ -860,11 +862,12 @@ def get_resumo_ferias_por_matricula_postgres(matricula: str) -> Dict[str, Any]:
         })
 
     def totals(periodos: List[Dict[str, Any]]):
+        vigentes = [p for p in periodos if p.get('atual')]
         return {
-            'direito': sum(_num_int(p.get('direito')) for p in periodos),
-            'usados': sum(_num_int(p.get('usados')) for p in periodos),
-            'reservados': sum(_num_int(p.get('reservados')) for p in periodos),
-            'saldo': sum(_num_int(p.get('saldo')) for p in periodos),
+            'direito': sum(_num_int(p.get('direito')) for p in vigentes),
+            'usados': sum(_num_int(p.get('usados')) for p in vigentes),
+            'reservados': sum(_num_int(p.get('reservados')) for p in vigentes),
+            'saldo': sum(_num_int(p.get('saldo')) for p in vigentes),
             'ajustes': 0,
             'periodos': periodos,
             'periodo_atual': next((p for p in periodos if p.get('atual')), None),

@@ -22,7 +22,7 @@ def create_app(run_db_migrations: bool = False) -> Flask:
 
     try:
         from .logging_config import get_logger as _get_logger
-        _get_logger(__name__).info("Gestao Ferias build V52 carregado")
+        _get_logger(__name__).info("Gestao Ferias build V54 carregado")
     except Exception:
         pass
 
@@ -47,6 +47,17 @@ def create_app(run_db_migrations: bool = False) -> Flask:
 
     # Contexto global para templates
     app.context_processor(inject_user_context)
+
+    # V54: verificação diária somente no PostgreSQL. Ela não acessa o Smartsheet
+    # e usa trava consultiva para que apenas um worker faça a criação dos ciclos.
+    @app.before_request
+    def _trigger_daily_period_check():
+        try:
+            if not request.path.startswith("/static/"):
+                from .services.period_accrual_service import trigger_daily_check_async
+                trigger_daily_check_async()
+        except Exception:
+            log.exception("Falha ao disparar verificação diária de períodos")
 
     # V52: não inicia sincronização automática do Smartsheet no Web Service.
     # A única comunicação com o Smartsheet deve partir explicitamente da aba ADMIN.

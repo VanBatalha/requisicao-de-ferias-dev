@@ -281,6 +281,17 @@
 </div>
 
 <div class="card" style="margin-top:16px;">
+  <h2>Períodos e saldos</h2>
+  <p class="muted">
+    Verificação exclusiva no PostgreSQL. Cria férias regulares somente após o fechamento do ciclo anual, transfere o saldo regular consolidado para o novo P e cria a Licença Certariana após 5 anos, com novos créditos de 15 dias a cada 30 meses. O saldo anterior da Licença Certariana expira quando o novo ciclo é criado.
+  </p>
+  <div class="actions" style="margin-top:14px;">
+    <button class="btn" id="periodosBtnVerificar">Verificar períodos agora</button>
+  </div>
+  <div id="periodosMsg" class="muted" style="margin-top:10px;"></div>
+</div>
+
+<div class="card" style="margin-top:16px;">
   <h2>Sincronização com Smartsheet</h2>
   <p class="muted">
     Lê a planilha principal <strong>CADASTRO DE COLABORADORES</strong> (<strong>1745799836133252</strong>). A coluna <strong>MATRÍCULA</strong> é usada como ID oficial. A sincronização atualiza dados cadastrais e hierarquia; <strong>permissões</strong> permanecem no PostgreSQL e matrícula nova recebe USER por padrão.
@@ -548,8 +559,8 @@
         <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(cadTipoLabel(r.saldo_tipo))}</td>
         <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); text-align:right; font-weight:700;">${Number(r.dias || 0)}</td>
         <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.periodo_aquisitivo_origem || '—')}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.status)}</td>
-        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); max-width:280px; white-space:normal;">${cadEscape(r.observacoes || '—')}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);">${cadEscape(r.status)}${r.v54_ignorado_no_saldo ? '<div style="margin-top:4px; padding:3px 6px; border-radius:6px; background:rgba(245,158,11,.16); color:#b45309; font-size:10px; font-weight:700;">LEGADO V54 — NÃO APLICADO AO SALDO</div>' : ''}</td>
+        <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25); max-width:280px; white-space:normal;">${cadEscape(r.observacoes || '—')}${r.v54_motivo_ignorado ? `<div style="margin-top:4px; font-size:10px; color:#92400e;">${cadEscape(r.v54_motivo_ignorado)}</div>` : ''}</td>
         <td style="padding:6px; border-top:1px solid rgba(148,163,184,.25);"><button type="button" class="btn btn-secondary" style="padding:5px 8px;" onclick="editarCadAjuste(${Number(r.id)})">Editar</button></td>
       </tr>`).join('')}</tbody></table>`;
   }
@@ -921,6 +932,27 @@
     }
   }
 
+
+  async function verificarPeriodosSaldos() {
+    const btn = cad$("periodosBtnVerificar");
+    const msg = cad$("periodosMsg");
+    if (btn) btn.disabled = true;
+    if (msg) { msg.textContent = "Verificando ciclos adquiridos..."; msg.className = "muted"; }
+    try {
+      const resp = await fetch(`/api/admin/verificar-periodos-saldos`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.message || "Falha na verificação");
+      if (msg) {
+        msg.textContent = `Concluído: ${data.regular_created || 0} período(s) regular(es) criado(s), ${data.premium_created || 0} período(s) de Licença Certariana criado(s) e ${data.future_rows_removed || 0} linha(s) futura(s) removida(s).`;
+        msg.className = "text-success";
+      }
+    } catch (e) {
+      if (msg) { msg.textContent = e.message || "Erro ao verificar períodos."; msg.className = "text-danger"; }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   cad$("cadBtnBuscar")?.addEventListener("click", buscarCadColaboradores);
   cad$("cadBusca")?.addEventListener("keydown", (e) => { if (e.key === "Enter") buscarCadColaboradores(); });
   cad$("cadBtnSalvar")?.addEventListener("click", salvarCadColaborador);
@@ -934,6 +966,7 @@
   cad$("cadAjusteSalvar")?.addEventListener("click", salvarCadAjuste);
   cad$("cadAjusteExcluir")?.addEventListener("click", excluirCadAjuste);
   cad$("cadAjusteCancelar")?.addEventListener("click", fecharCadAjusteEditor);
+  cad$("periodosBtnVerificar")?.addEventListener("click", verificarPeriodosSaldos);
   cad$("syncBtnCadastro")?.addEventListener("click", sincronizarCadastro);
   cad$("syncBtnStatus")?.addEventListener("click", carregarSyncStatus);
   carregarSyncStatus();

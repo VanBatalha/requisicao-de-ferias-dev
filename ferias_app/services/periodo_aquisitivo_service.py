@@ -29,19 +29,20 @@ def periodo_bounds(admissao: dt.date, numero_periodo: int) -> tuple[dt.date, dt.
 
 
 def current_partial_period(admissao: dt.date | None, hoje: dt.date | None = None):
+    """Retorna o ultimo periodo adquirido, nunca o ciclo ainda em formacao."""
     if not admissao:
         return None
     hoje = hoje or dt.date.today()
     completos = completed_aquisitive_periods(admissao, hoje)
-    ini = _add_months(admissao, completos * 12)
-    prox = _add_months(admissao, (completos + 1) * 12)
-    if hoje < ini:
+    if completos <= 0:
         return None
+    ini = _add_months(admissao, (completos - 1) * 12)
+    fim = _add_months(admissao, completos * 12) - dt.timedelta(days=1)
     return {
-        "numero": completos + 1,
+        "numero": completos,
         "inicio": ini,
-        "fim": prox - dt.timedelta(days=1),
-        "completo": False,
+        "fim": fim,
+        "completo": True,
     }
 
 

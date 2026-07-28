@@ -303,39 +303,39 @@ def completed_aquisitive_periods(admissao: Optional[dt.date], hoje: Optional[dt.
 
 
 def current_partial_period(admissao: Optional[dt.date], hoje: Optional[dt.date] = None) -> Optional[dict]:
+    """Compatibilidade: devolve somente o ultimo periodo anual concluido."""
     if not admissao:
         return None
     hoje = hoje or dt.date.today()
     completos = completed_aquisitive_periods(admissao, hoje)
-    inicio = add_months(admissao, completos * 12)
-    fim = add_months(admissao, (completos + 1) * 12) - dt.timedelta(days=1)
-    if hoje < inicio:
+    if completos <= 0:
         return None
+    inicio = add_months(admissao, (completos - 1) * 12)
+    fim = add_months(admissao, completos * 12) - dt.timedelta(days=1)
     return {
-        "numero": completos + 1,
+        "numero": completos,
         "inicio": inicio.isoformat(),
         "fim": fim.isoformat(),
-        "label": f"Período {completos + 1} — {inicio.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}",
+        "label": f"Período {completos} — {inicio.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}",
     }
 
 
 def premium_window(admissao: Optional[dt.date], hoje: Optional[dt.date] = None) -> tuple[int, Optional[dt.date], Optional[dt.date]]:
+    """Compatibilidade com a regra V54: 30 dias em P1 e 15 a cada 30 meses."""
     if not admissao:
         return 0, None, None
     hoje = hoje or dt.date.today()
-    years = hoje.year - admissao.year
-    if (hoje.month, hoje.day) < (admissao.month, admissao.day):
-        years -= 1
-    if years < 5:
+    primeiro_credito = add_months(admissao, 60) + dt.timedelta(days=1)
+    if hoje < primeiro_credito:
         return 0, None, None
-    anos_da_conquista = (years // 5) * 5
-    if anos_da_conquista < 5:
-        return 0, None, None
-    inicio = dt.date(admissao.year + anos_da_conquista, admissao.month, admissao.day)
-    fim_exclusivo = dt.date(inicio.year + 2, inicio.month, inicio.day)
-    if hoje >= fim_exclusivo:
-        return 0, None, None
-    return 30, inicio, fim_exclusivo
+    numero = 1
+    credito = primeiro_credito
+    proximo = add_months(primeiro_credito, 30)
+    while hoje >= proximo:
+        numero += 1
+        credito = proximo
+        proximo = add_months(primeiro_credito, numero * 30)
+    return (30 if numero == 1 else 15), credito, proximo
 
 
 def col_id(columns: Dict[str, int], *names: str) -> Optional[int]:
@@ -1036,18 +1036,17 @@ def _reference_date() -> dt.date:
 
 
 def _iter_periodos_aquisitivos(admissao: Optional[dt.date], ref_date: Optional[dt.date] = None):
+    """Compatibilidade: gera somente periodos anuais efetivamente concluidos."""
     if not admissao:
         return
     ref_date = ref_date or _reference_date()
     if ref_date < admissao:
         return
-    numero = 1
-    inicio = admissao
-    while inicio <= ref_date:
-        fim = add_months(admissao, numero * 12) - dt.timedelta(days=1)
-        yield numero, inicio, fim, inicio <= ref_date <= fim
-        numero += 1
+    completos = completed_aquisitive_periods(admissao, ref_date)
+    for numero in range(1, completos + 1):
         inicio = add_months(admissao, (numero - 1) * 12)
+        fim = add_months(admissao, numero * 12) - dt.timedelta(days=1)
+        yield numero, inicio, fim, numero == completos
 
 
 def _find_periodo_for_date(periodos: list[PeriodoAquisitivo], data_ref: Optional[dt.date]) -> Optional[PeriodoAquisitivo]:
@@ -1448,167 +1447,27 @@ def _sync_solicitacoes(session, solicitacoes: SheetMaps, solicitacoes_sheet_id: 
     }
 
 def _recalculate_complemento(session) -> dict:
-    """Recalcula saldo_periodo e preenche periodo_aquisitivo_origem.
+    """Compatibilidade V54.
 
-    V29: solicitacoes_ferias é a fonte oficial dos eventos. A tabela
-    saldo_periodo é a fonte oficial do saldo vivo por matrícula/período/tipo.
-    auditoria_saldos não é alimentada por esta rotina para evitar duplicidade.
+    O recálculo cumulativo antigo foi desativado porque criava o período em
+    formação e uma linha PREMIUM para cada período anual. A criação diária dos
+    ciclos agora é feita pelo period_accrual_service, exclusivamente no BD.
     """
-    ref_date = _reference_date()
-    colaboradores = session.query(Colaborador).order_by(Colaborador.id).all()
-    solicitacoes = session.query(Solicitacao).order_by(Solicitacao.data_inicio.asc(), Solicitacao.id.asc()).all()
-
-    by_matricula: dict[str, list[Solicitacao]] = {}
-    by_email: dict[str, list[Solicitacao]] = {}
-    for sol in solicitacoes:
-        if sol.colaborador_matricula:
-            by_matricula.setdefault(normalize_matricula(sol.colaborador_matricula), []).append(sol)
-        if sol.colaborador_email:
-            by_email.setdefault(safe_lower(sol.colaborador_email), []).append(sol)
-
-    recalculated = periodos_synced = saldo_periodo_synced = origem_preenchida = 0
-    started_progress = time.monotonic()
-    total = len(colaboradores)
-    batch_size = int(os.getenv("SYNC_RECALC_BATCH_SIZE", "25") or "25")
-    _log_progress("saldos", 0, total, started_progress, f"recalculando saldo_periodo ate {ref_date.isoformat()}")
-
-    for idx, colab in enumerate(colaboradores, start=1):
-        if idx == 1 or idx % batch_size == 0 or idx == total:
-            _log_progress("saldos", idx, total, started_progress, "saldo_periodo e origem das solicitacoes")
-
-        admissao = colab.data_admissao if isinstance(colab.data_admissao, dt.date) else parse_date(colab.data_admissao)
-        periodos = _ensure_periodos_colaborador(session, colab, ref_date)
-        periodos_synced += len(periodos)
-
-        completed_count = sum(1 for p in periodos if p.data_fim <= ref_date)
-        regular_base_total = completed_count * 30 if admissao else int(colab.dias_direito or 0)
-        premium_base_total, premium_ini, premium_fim_excl = premium_window(admissao, ref_date)
-
-        colab.dias_direito = int(regular_base_total or 0)
-        colab.updated_at = dt.datetime.utcnow()
-
-        saldos_regular: list[SaldoPeriodoNovo] = []
-        saldos_premium: list[SaldoPeriodoNovo] = []
-        saldos_regular_by_num: dict[int, SaldoPeriodoNovo] = {}
-        saldos_premium_by_num: dict[int, SaldoPeriodoNovo] = {}
-
-        for periodo in periodos:
-            numero = int(periodo.periodo_numero or 0)
-            regular = _get_or_create_saldo_periodo_novo(session, colab, periodo, "REGULAR")
-            regular.saldo_inicial = 30 if periodo.data_fim <= ref_date else 0
-            regular.saldo_utilizado = 0
-            regular.saldo_reservado = 0
-            regular.saldo_disponivel = float(regular.saldo_inicial or 0)
-            regular.ultima_alteracao = dt.datetime.utcnow()
-            regular.updated_at = dt.datetime.utcnow()
-            saldos_regular.append(regular)
-            saldos_regular_by_num[numero] = regular
-            saldo_periodo_synced += 1
-
-            premium = _get_or_create_saldo_periodo_novo(session, colab, periodo, "PREMIUM")
-            premium.saldo_inicial = 0
-            if premium_base_total and premium_ini and periodo.data_inicio <= premium_ini <= periodo.data_fim:
-                premium.saldo_inicial = premium_base_total
-            premium.saldo_utilizado = 0
-            premium.saldo_reservado = 0
-            premium.saldo_disponivel = float(premium.saldo_inicial or 0)
-            premium.ultima_alteracao = dt.datetime.utcnow()
-            premium.updated_at = dt.datetime.utcnow()
-            saldos_premium.append(premium)
-            saldos_premium_by_num[numero] = premium
-            saldo_periodo_synced += 1
-
-        rows = list(by_matricula.get(normalize_matricula(colab.matricula), []))
-        if not rows and colab.email:
-            rows = list(by_email.get(safe_lower(colab.email), []))
-
-        # Ajustes primeiro: eles representam créditos/correções de base.
-        ajustes = [r for r in rows if bool(r.is_ajuste)]
-        movimentos = [r for r in rows if not bool(r.is_ajuste)]
-        rows_ordenadas = sorted(ajustes, key=lambda x: (x.data_inicio or dt.date.min, x.id or 0)) + sorted(movimentos, key=lambda x: (x.data_inicio or dt.date.min, x.id or 0))
-
-        for sol in rows_ordenadas:
-            dias = float(sol.dias if sol.dias is not None else (sol.dias_solicitados or 0))
-            if abs(dias) <= 0.0001:
-                continue
-            saldo_tipo = (sol.saldo_tipo or sol.tipo_ferias or "REGULAR").upper()
-            status = _canonical_status(sol.status)
-            solicitacao_norm = normalize_text(sol.solicitacao or sol.tipo_solicitacao)
-            data_inicio = sol.data_inicio if isinstance(sol.data_inicio, dt.date) else parse_date(sol.data_inicio)
-
-            if "LICENCA MATERNIDADE" in solicitacao_norm or "LICENCA PATERNIDADE" in solicitacao_norm:
-                continue
-
-            # Origem pré-existente do Smartsheet/metadata tem prioridade para preservar histórico.
-            origem_atual = (getattr(sol, "periodo_aquisitivo_origem", None) or "").strip()
-            metadata = sol.metadata_json if isinstance(sol.metadata_json, dict) else {}
-            origem_meta = str(metadata.get("periodo_aquisitivo") or "").strip()
-            explicit_alloc = _parse_periodo_aquisitivo_origem(origem_atual or origem_meta)
-
-            saldos = saldos_premium if saldo_tipo == "PREMIUM" else saldos_regular
-            saldos_by_num = saldos_premium_by_num if saldo_tipo == "PREMIUM" else saldos_regular_by_num
-            alloc: list[dict] = []
-
-            if bool(sol.is_ajuste):
-                if status in {"APROVADA", "APROVADO"}:
-                    alloc = _apply_adjustment_saldo_periodo(saldos_by_num, periodos, data_inicio, dias, explicit_alloc)
-                else:
-                    alloc = explicit_alloc
-            else:
-                dias = abs(dias)
-                if saldo_tipo == "PREMIUM" and premium_ini and premium_fim_excl and data_inicio and not (premium_ini <= data_inicio < premium_fim_excl):
-                    # Fora da janela premium: preserva origem se existir, mas não impacta saldo premium.
-                    alloc = explicit_alloc
-                elif status in {"APROVADA", "APROVADO"}:
-                    alloc = _apply_explicit_alloc_saldo_periodo(saldos_by_num, explicit_alloc, "saldo_utilizado") if explicit_alloc else _allocate_from_saldo_periodo(saldos, dias, "saldo_utilizado")
-                elif status in {"RESERVA", "RESERVADO", "PENDENTE"}:
-                    alloc = _apply_explicit_alloc_saldo_periodo(saldos_by_num, explicit_alloc, "saldo_reservado") if explicit_alloc else _allocate_from_saldo_periodo(saldos, dias, "saldo_reservado")
-                else:
-                    alloc = explicit_alloc
-
-            origem_formatada = _format_periodo_aquisitivo_origem(alloc)
-            if origem_formatada and origem_formatada != origem_atual:
-                sol.periodo_aquisitivo_origem = origem_formatada
-                sol.updated_at = dt.datetime.utcnow()
-                origem_preenchida += 1
-            elif not origem_atual and origem_meta:
-                sol.periodo_aquisitivo_origem = origem_meta
-                sol.updated_at = dt.datetime.utcnow()
-                origem_preenchida += 1
-
-        comp = colab.complemento
-        if not comp:
-            comp = ColaboradorComplemento(colaborador_id=colab.id, colaborador_matricula=colab.matricula, user_type="USER", ativo_no_app=True)
-            session.add(comp)
-        comp.colaborador_matricula = colab.matricula
-        # V43: saldos consolidados e total de solicitações não são mais gravados
-        # em colaborador_complemento. A fonte oficial é saldo_periodo.
-        comp.calculated_at = dt.datetime.utcnow()
-        comp.updated_at = dt.datetime.utcnow()
-        recalculated += 1
-
-        if idx % batch_size == 0 or idx == total:
-            try:
-                session.commit()
-                _log_progress("saldos", idx, total, started_progress, "lote gravado")
-            except Exception:
-                session.rollback()
-                raise
-
     return {
-        "recalculated": recalculated,
-        "periodos_synced": periodos_synced,
-        "saldo_periodo_synced": saldo_periodo_synced,
-        "periodo_aquisitivo_origem_preenchido": origem_preenchida,
-        "saldo_reference_date": ref_date.isoformat(),
+        "recalculated": 0,
+        "periodos_synced": 0,
+        "saldo_periodo_synced": 0,
+        "message": "Recálculo cumulativo legado desativado na V54.",
     }
 
-
 def recalcular_saldo_periodo_from_db() -> dict:
-    """Recalcula somente saldo_periodo e periodo_aquisitivo_origem usando o BD atual."""
-    with get_session() as session:
-        return _recalculate_complemento(session)
-
+    """Executa somente a verificação de ciclos adquiridos no PostgreSQL."""
+    from .period_accrual_service import ensure_due_periods
+    return ensure_due_periods(
+        actor_email="manual-db-recalc",
+        force=True,
+        wait_for_lock=True,
+    )
 
 def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str = "", recalculate: bool = False, include_solicitacoes: bool = False) -> dict:
     settings = get_settings()

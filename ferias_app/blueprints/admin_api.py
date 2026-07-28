@@ -466,6 +466,27 @@ def api_admin_cadastro_excluir_solicitacao(colaborador_id: int, solicitacao_id: 
 
 
 # ============================================
+# API: ADMIN - CICLOS E SALDOS (SOMENTE POSTGRESQL)
+# ============================================
+
+@bp.route("/api/admin/verificar-periodos-saldos", methods=["POST"])
+def api_admin_verificar_periodos_saldos():
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+    try:
+        from ..services.period_accrual_service import ensure_due_periods
+        result = ensure_due_periods(
+            actor_email=user.get("email") or "admin",
+            force=True,
+            wait_for_lock=True,
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao verificar períodos e saldos: {str(e)}"}), 500
+
+
+# ============================================
 # API: ADMIN - SINCRONIZAÇÃO SMARTSHEET -> POSTGRESQL
 # ============================================
 
