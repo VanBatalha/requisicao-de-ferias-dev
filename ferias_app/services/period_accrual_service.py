@@ -17,8 +17,8 @@ from .postgres_service import get_session
 
 log = get_logger(__name__)
 
-_SYNC_NAME = "ciclos_saldos_v54"
-_ADVISORY_LOCK_KEY = 5400728
+_SYNC_NAME = "ciclos_saldos_v55"
+_ADVISORY_LOCK_KEY = 5500728
 _LOCAL_CHECK_INTERVAL_SECONDS = 1800
 _local_lock = threading.Lock()
 _last_local_check = 0.0
@@ -99,7 +99,7 @@ def regular_cycles(admissao: dt.date | None, reference_date: dt.date) -> list[Cy
 def premium_cycles(admissao: dt.date | None, reference_date: dt.date) -> list[Cycle]:
     """Ciclos independentes da Licenca Certariana/Premium.
 
-    Regra V54:
+    Regra V55:
     - P1: 30 dias no dia seguinte ao fechamento de cinco anos;
     - P2 em diante: 15 dias a cada 30 meses;
     - o saldo disponivel anterior expira quando nasce o novo ciclo.
@@ -238,15 +238,14 @@ def _ensure_balance_cycles(
     cycles: list[Cycle],
     tipo: str,
 ) -> dict[str, int]:
-    """Normaliza as linhas P1..PX e preserva somente o período vigente.
+    """Normaliza as linhas P1..PX e preserva saldo apenas no período vigente.
 
-    REGULAR é cumulativo: quando nasce um novo P, todo o estado consolidado do
-    período vigente anterior é transferido e são acrescentados 30 dias por
-    ciclo anual ainda não registrado. Isso preserva utilizado/reservado e evita
-    descontar novamente solicitações futuras já lançadas.
+    REGULAR não carrega saldo de P anteriores: ao fechar um novo ciclo anual,
+    o novo P começa com 30 dias e todo o histórico permanece zerado.
 
-    PREMIUM não é cumulativo: ao nascer um novo ciclo, o saldo anterior expira
-    e o novo P começa somente com a base da regra (30 dias no P1; 15 nos demais).
+    PREMIUM também não é cumulativo: ao nascer um novo ciclo, o saldo anterior
+    expira e o novo P começa somente com a base da regra (30 dias no P1;
+    15 dias nos demais).
     """
     mat = str(colab.matricula).strip().upper()
     existing = session.query(SaldoPeriodoNovo).filter(
@@ -268,47 +267,14 @@ def _ensure_balance_cycles(
     by_number = {int(r.periodo_numero or 0): r for r in existing}
     current_cycle = cycles[-1]
     current_row = by_number.get(current_cycle.numero)
-    existing_numbers = sorted(n for n in by_number if n in expected_numbers)
-    max_existing_number = max(existing_numbers, default=0)
-
     current_created = historical_created = zeroed = consolidated = 0
 
-    # Calcula o estado do novo período antes de zerar as linhas históricas.
+    # Um novo período nunca herda valores do histórico. A correção inicial da
+    # base é feita pelo SQL V55; depois disso, cada ciclo novo começa apenas com
+    # a base prevista na regra.
     new_current_values: tuple[float, float, float, float] | None = None
     if current_row is None:
-        if tipo == "REGULAR":
-            total_initial = sum(float(r.saldo_inicial or 0) for r in existing)
-            total_used = sum(float(r.saldo_utilizado or 0) for r in existing)
-            total_reserved = sum(float(r.saldo_reservado or 0) for r in existing)
-            missing_cycles = max(current_cycle.numero - max_existing_number, 1)
-            initial = total_initial + (30.0 * missing_cycles)
-            used = total_used
-            reserved = total_reserved
-            available = initial - used - reserved
-            new_current_values = (initial, used, reserved, available)
-        else:
-            new_current_values = (current_cycle.base, 0.0, 0.0, current_cycle.base)
-    elif tipo == "REGULAR":
-        # Compatibilidade com bancos ainda no formato antigo: se houver valores
-        # espalhados em P históricos, consolida tudo no P vigente antes de zerar.
-        historical_nonzero = any(
-            int(r.periodo_numero or 0) != current_cycle.numero
-            and any(float(v or 0) != 0 for v in (
-                r.saldo_inicial, r.saldo_utilizado, r.saldo_reservado, r.saldo_disponivel
-            ))
-            for r in existing
-        )
-        if historical_nonzero:
-            initial = sum(float(r.saldo_inicial or 0) for r in existing)
-            used = sum(float(r.saldo_utilizado or 0) for r in existing)
-            reserved = sum(float(r.saldo_reservado or 0) for r in existing)
-            current_row.saldo_inicial = initial
-            current_row.saldo_utilizado = used
-            current_row.saldo_reservado = reserved
-            current_row.saldo_disponivel = initial - used - reserved
-            current_row.ultima_alteracao = dt.datetime.utcnow()
-            current_row.updated_at = dt.datetime.utcnow()
-            consolidated += 1
+        new_current_values = (current_cycle.base, 0.0, 0.0, current_cycle.base)
 
     for cycle in cycles:
         row = by_number.get(cycle.numero)
@@ -376,13 +342,12 @@ def ensure_due_periods(
 ) -> dict:
     """Cria somente ciclos adquiridos e normaliza a linha vigente.
 
-    - REGULAR: cria 30 dias apenas no fechamento anual e transfere o estado
-      consolidado (inicial, utilizado e reservado) para o novo P; todas as
-      linhas antigas ficam zeradas.
-    - PREMIUM: P1=30 dias apos cinco anos; P2+=15 dias a cada 30 meses; o saldo
-      anterior nao e carregado.
-    - Ciclo vigente ja existente nao e recalculado, preservando edicoes e
-      movimentacoes feitas pelo aplicativo.
+    - REGULAR: cria 30 dias apenas no fechamento anual; saldo de P anterior
+      expira e todas as linhas históricas ficam zeradas.
+    - PREMIUM: P1=30 dias após cinco anos; P2+=15 dias a cada 30 meses; saldo
+      anterior também expira.
+    - Ciclo vigente já existente não é recalculado, preservando edições e
+      movimentações feitas pelo aplicativo.
     """
     reference_date = reference_date or business_today()
     with get_session() as session:
@@ -464,11 +429,11 @@ def ensure_due_periods(
             "timezone": str(get_settings().app_timezone or "America/Fortaleza"),
             "active_collaborators": len(collaborators),
             **dict(counters),
-            # Compatibilidade com o texto da tela ADMIN da V54.
+            # Compatibilidade com os campos exibidos na tela ADMIN.
             "regular_created": int(counters["regular_current_created"]),
             "premium_created": int(counters["premium_current_created"]),
             "future_rows_removed": int(counters["future_period_rows_removed"] + counters["invalid_balance_rows_removed"]),
-            "rule": "regular_12m_after_close_with_carry; premium_5y_30d_then_30m_15d_expiring",
+            "rule": "regular_12m_30d_non_cumulative; premium_5y_30d_then_30m_15d_non_cumulative",
         }
         if not state:
             state = SyncState(sync_name=_SYNC_NAME)
@@ -482,7 +447,7 @@ def ensure_due_periods(
         state.updated_at = now
         session.add(Auditoria(
             actor_email=actor_email,
-            action="DAILY_PERIOD_ACCRUAL_V54",
+            action="DAILY_PERIOD_ACCRUAL_V55",
             entity_type="saldo_periodo",
             entity_id=0,
             before_data=None,
@@ -512,9 +477,9 @@ def _daily_worker() -> None:
             if last_business_date and last_business_date >= today:
                 return
         result = ensure_due_periods(today, force=False, wait_for_lock=False)
-        log.info("Verificacao diaria de periodos V54: %s", result)
+        log.info("Verificacao diaria de periodos V55: %s", result)
     except Exception:
-        log.exception("Falha na verificacao diaria de periodos V54")
+        log.exception("Falha na verificacao diaria de periodos V55")
     finally:
         with _local_lock:
             _thread_running = False
@@ -529,4 +494,4 @@ def trigger_daily_check_async() -> None:
             return
         _last_local_check = now
         _thread_running = True
-    threading.Thread(target=_daily_worker, name="period-accrual-v54", daemon=True).start()
+    threading.Thread(target=_daily_worker, name="period-accrual-v55", daemon=True).start()

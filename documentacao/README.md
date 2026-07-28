@@ -1,40 +1,27 @@
-# Gestão de Férias - Documentação
+# Gestão de Férias — documentação da V55
 
-## Documentos principais
+## Alterações principais
 
-- `CONFIGURACAO_AMBIENTES.md` - variáveis de ambiente, banco oficial/teste e Render.
-- `SINCRONIZACAO_CADASTRO_SMARTSHEET.md` - origem atual do cadastro, regras de matrícula, permissões e status inválido.
-- `HIERARQUIA_MATRICULA.md` - regra de visibilidade por gestor direto, gestor superior, DP e ADMIN.
-- `SALDOS_MATRICULA.md` - fonte oficial dos saldos em `saldo_periodo`.
-- `ROTAS_PERFORMANCE.md` - rotas principais e pontos de performance.
-- `SINCRONIZACAO_MIGRACAO.md` - rotinas manuais e automáticas de sincronização.
+- Saldo somente no último período vigente, tanto REGULAR quanto PREMIUM.
+- Períodos históricos permanecem visíveis, mas zerados.
+- REGULAR deixa de carregar saldo entre ciclos anuais.
+- PREMIUM mantém P1 de 30 dias após cinco anos e P2+ de 15 dias a cada 30 meses, sem carregamento.
+- Backups PostgreSQL passam a usar prefixo `z_backup_`.
+- Exportador XLSX ordena por `id` ou chave primária.
+- Pacote preparado para implantação em servidor Contabo com Docker Compose.
+- Agendamento diário por cron do próprio servidor.
 
-## Fonte de cadastro atual
+## Arquivos da V55
 
-A sincronização cadastral usa a planilha **CADASTRO DE COLABORADORES** (`1745799836133252`). A antiga **CONTROLE_DP** (`3609445264215940`) não é mais fonte para permissões, saldos ou cadastro principal.
-
-## Fonte operacional no PostgreSQL
-
-- colaboradores: `app_ferias.colaboradores`
-- permissões: `app_ferias.permissoes_usuario`
-- hierarquia: `app_ferias.hierarquia_gestao` e cache em `app_ferias.colaborador_complemento`
-- saldo vivo: `app_ferias.saldo_periodo`
-- histórico/eventos: `app_ferias.solicitacoes_ferias`
-
-## Arquivos principais do app
-
-- `app.py` e `wsgi.py` - entrada do app.
-- `ferias_app/models.py` - modelos SQLAlchemy.
-- `ferias_app/services/postgres_service.py` - conexão e estrutura PostgreSQL.
-- `ferias_app/services/smartsheet_sync_service.py` - sincronização Smartsheet -> PostgreSQL.
-- `ferias_app/services/postgres_compat_service.py` - consultas operacionais por matrícula.
-- `ferias_app/blueprints/admin_api.py` - APIs do painel admin.
-- `templates/painel_admin.html` - tela administrativa.
-- `templates/ferias.html` - tela de solicitação de férias.
-
-- `CORRECAO_RELATORIO_LANCAMENTO_V51.md`: remoção do auto-sync, controle de conexões e diagnóstico do relatório.
-- `CORRECAO_RELATORIO_ADMIN_SALDOS_V52.md`: cache de contingência do relatório e manutenção ADMIN de saldos/ajustes.
-
-## V54 — ciclos adquiridos e Licença Certariana
-
-Consulte `PERIODOS_E_SALDOS_V54.md`. Antes de publicar a V54 em produção, execute o SQL de correção inicial em `migracao/sql/correcao_periodos_saldos_v54_pgadmin.sql`. Depois, configure o Render Cron Job com `python daily_balance_accrual.py` e mantenha `APP_TIMEZONE=America/Fortaleza`.
+- `migracao/sql/correcao_saldos_v55_apenas_periodo_vigente.sql`
+- `export_database_xlsx.py`
+- `documentacao/SALDOS_SOMENTE_PERIODO_VIGENTE_V55.md`
+- `documentacao/EXPORTACAO_BANCO_ORDENADA_V55.md`
+- `documentacao/IMPLANTACAO_CONTABO_DOCKER_V55.md`
+- `Dockerfile`
+- `compose.yaml`
+- `.env.example`
+- `deploy/Caddyfile`
+- `deploy/scripts/periodos_diarios.sh`
+- `deploy/scripts/backup_postgres.sh`
+- `deploy/scripts/update_app.sh`
