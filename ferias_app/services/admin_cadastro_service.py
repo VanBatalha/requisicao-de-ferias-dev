@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, func, or_
 
 from ..logging_config import get_logger
-from ..models import Auditoria, Colaborador, ColaboradorComplemento, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo, AuditoriaSaldos, Solicitacao
+from ..models import Auditoria, Colaborador, ColaboradorComplemento, PermissaoUsuario, HierarquiaGestao, SaldoPeriodoNovo, Solicitacao
 from ..utils import safe_lower
 from .postgres_service import get_db_session
 
@@ -157,7 +157,7 @@ def _sincronizar_comp_com_tabelas_novas(session, colab: Colaborador, comp: Colab
     h.gestor_superior_email = safe_lower(gs.email) if gs and gs.email else None
 
 
-def _saldos_periodo_json(session, colab: Colaborador):
+def _saldo_periodo_json(session, colab: Colaborador):
     rows = (
         session.query(SaldoPeriodoNovo)
         .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
@@ -187,7 +187,7 @@ def _saldos_periodo_json(session, colab: Colaborador):
 
 
 
-def _resumo_saldos_periodo(session, colab: Colaborador) -> Dict[str, Any]:
+def _resumo_saldo_periodo(session, colab: Colaborador) -> Dict[str, Any]:
     rows = (
         session.query(SaldoPeriodoNovo)
         .filter(
@@ -279,8 +279,8 @@ def _solicitacoes_json(session, colab: Colaborador) -> List[Dict[str, Any]]:
 def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
     session = get_db_session()
     comp = colab.complemento
-    saldos_periodo = _saldos_periodo_json(session, colab)
-    saldos_resumo = _resumo_saldos_periodo(session, colab)
+    saldo_periodo = _saldo_periodo_json(session, colab)
+    saldos_resumo = _resumo_saldo_periodo(session, colab)
     ajustes = _ajustes_json(session, colab)
     solicitacoes = _solicitacoes_json(session, colab)
     return {
@@ -307,7 +307,7 @@ def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
         "created_at": colab.created_at.isoformat() if colab.created_at else None,
         "updated_at": colab.updated_at.isoformat() if colab.updated_at else None,
         "complemento_updated_at": comp.updated_at.isoformat() if comp and comp.updated_at else None,
-        "saldos_periodo": saldos_periodo,
+        "saldo_periodo": saldo_periodo,
         "saldos_resumo": saldos_resumo,
         "ajustes": ajustes,
         "solicitacoes": solicitacoes,
@@ -456,6 +456,11 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
 
     _sincronizar_comp_com_tabelas_novas(session, colab, comp)
     session.flush()
+
+    # V58: a mudança futura para INATIVO preserva o histórico já existente
+    # em saldo_periodo. A rotina diária considera somente ATIVOS para criar novos
+    # ciclos, portanto o inativo não recebe novos períodos após o desligamento.
+
     after = _jsonable_colab(colab)
 
     try:
@@ -628,6 +633,8 @@ def excluir_saldo_periodo_admin(
     colab = session.query(Colaborador).filter(Colaborador.id == int(colaborador_id)).first()
     if not colab:
         raise ValueError("Colaborador não encontrado.")
+    if str(colab.status or "").strip().upper() not in {"ATIVO", "ACTIVE"} or colab.data_admissao is None:
+        raise ValueError("Colaborador inativo ou sem data de admissão não pode possuir saldo.")
     saldo = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.id == int(saldo_id),
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,

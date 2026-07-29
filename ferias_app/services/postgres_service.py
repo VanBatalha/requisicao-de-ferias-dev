@@ -14,7 +14,7 @@ from flask import g
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..models import (
-    Base, Colaborador, ColaboradorComplemento, Solicitacao, AdminConfig, Auditoria, SyncState, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo, AuditoriaSaldos, PermissaoUsuario, HierarquiaGestao
+    Base, Colaborador, ColaboradorComplemento, Solicitacao, AdminConfig, Auditoria, SyncState, SaldoPeriodoNovo, PermissaoUsuario, HierarquiaGestao
 )
 
 log = get_logger(__name__)
@@ -207,20 +207,17 @@ def init_db(run_migrations: bool = False):
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS metadata JSONB"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS periodo_aquisitivo_origem TEXT"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.solicitacoes_ferias ADD COLUMN IF NOT EXISTS raw_payload JSONB"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.periodos_aquisitivos ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.permissoes_usuario ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS colaborador_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_direto_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_direto_email VARCHAR(255)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_superior_matricula VARCHAR(50)"))
         conn.execute(text(f"ALTER TABLE {schema_sql}.hierarquia_gestao ADD COLUMN IF NOT EXISTS gestor_superior_email VARCHAR(255)"))
-        conn.execute(text(f"ALTER TABLE {schema_sql}.auditoria_saldos ADD COLUMN IF NOT EXISTS usuario_alterou_matricula VARCHAR(50)"))
 
-        # Hotfix V16: bancos criados manualmente/por dumps parciais podem ter as tabelas
-        # canônicas, mas não todas as colunas que os modelos SQLAlchemy selecionam.
+        # Hotfix V58: garante somente a tabela canônica saldo_periodo e as colunas
+        # que os modelos SQLAlchemy selecionam.
         # Como o SQLAlchemy seleciona todas as colunas mapeadas, a ausência de apenas
         # uma delas derruba a rota /ferias com 500. Estes ALTERs são idempotentes.
-        conn.execute(text(f"ALTER TABLE {schema_sql}.saldos_periodo ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
         conn.execute(text(f"""
         CREATE TABLE IF NOT EXISTS {schema_sql}.saldo_periodo (
             id SERIAL PRIMARY KEY,
@@ -749,20 +746,6 @@ def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias:
     return movimentos
 
 
-
-def _periodo_destino_ajuste(session, colab: Colaborador):
-    periodo = (
-        session.query(PeriodoAquisitivo)
-        .filter(
-            PeriodoAquisitivo.colaborador_matricula == colab.matricula,
-            PeriodoAquisitivo.is_atual.is_(True),
-        )
-        .order_by(PeriodoAquisitivo.periodo_numero.desc())
-        .first()
-    )
-    if periodo:
-        return periodo
-    raise ValueError('O colaborador ainda não possui período aquisitivo concluído.')
 
 def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: int, solicitacao_id: int | None, actor: Colaborador | None = None):
     saldo_tipo = (saldo_tipo or 'REGULAR').upper()

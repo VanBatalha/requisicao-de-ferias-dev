@@ -13,7 +13,7 @@ from sqlalchemy import func, or_
 from ..config import get_settings
 from ..logging_config import get_logger
 from ..utils import safe_lower
-from ..models import Colaborador, ColaboradorComplemento, Solicitacao, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo
+from ..models import Colaborador, ColaboradorComplemento, Solicitacao, PermissaoUsuario, HierarquiaGestao, SaldoPeriodoNovo
 from .postgres_service import get_db_session
 from .normalization_service import canonical_status, is_ajuste, infer_saldo_tipo, norm_status
 

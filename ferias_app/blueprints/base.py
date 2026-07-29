@@ -10,4 +10,4 @@ bp = Blueprint("ferias", __name__)
 @bp.get("/healthz")
 def healthz():
     """Health check leve para Docker/Caddy, sem ocupar conexao PostgreSQL."""
-    return jsonify({"ok": True, "service": "gestao-ferias", "build": "v56"})
+    return jsonify({"ok": True, "service": "gestao-ferias", "build": "v58"})

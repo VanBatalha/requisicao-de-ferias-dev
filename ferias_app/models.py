@@ -1,9 +1,9 @@
 """Modelos SQLAlchemy para o novo banco PostgreSQL do App de Férias.
 
 A estrutura canônica usa a matrícula como identificador externo do colaborador.
-Para compatibilidade com trechos estáveis do app, algumas colunas/tabelas
-legadas continuam existindo como cache/compatibilidade, mas todas as novas
-solicitações gravam também colaborador_matricula/solicitante_matricula.
+A tabela ``saldo_periodo`` é a única fonte de períodos e saldos. As tabelas
+legadas ``periodos_aquisitivos`` e ``saldos_periodo`` foram removidas na V58.
+Todas as solicitações usam matrícula como identificador operacional.
 """
 from __future__ import annotations
 
@@ -71,12 +71,6 @@ class Colaborador(Base):
         foreign_keys="ColaboradorComplemento.colaborador_id",
     )
     solicitacoes = relationship("Solicitacao", back_populates="colaborador", foreign_keys="Solicitacao.colaborador_id")
-    periodos = relationship(
-        "PeriodoAquisitivo",
-        back_populates="colaborador",
-        cascade="all, delete-orphan",
-        foreign_keys="PeriodoAquisitivo.colaborador_id",
-    )
 
     def to_dict(self):
         return {
@@ -121,47 +115,6 @@ class HierarquiaGestao(Base):
     # Pode ser uma matricula real (ex.: MAT00801) ou marcador operacional DP/GESTOR.
     gestor_superior_matricula = Column(String(50), nullable=True, index=True)
     gestor_superior_email = Column(String(255), nullable=True)
-
-
-class PeriodoAquisitivo(Base):
-    __tablename__ = "periodos_aquisitivos"
-    __table_args__ = (
-        UniqueConstraint("colaborador_matricula", "periodo_numero", name="uq_periodos_matricula_numero"),
-        {"schema": _MODEL_SCHEMA},
-    )
-
-    id = Column(Integer, primary_key=True)
-    colaborador_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=True)
-    colaborador_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=True, index=True)
-    periodo_numero = Column(Integer, nullable=False)
-    data_inicio = Column(Date, nullable=False)
-    data_fim = Column(Date, nullable=False)
-    is_atual = Column(Boolean, default=False)
-
-    colaborador = relationship("Colaborador", back_populates="periodos", foreign_keys=[colaborador_id])
-    saldos = relationship("SaldoPeriodo", back_populates="periodo", cascade="all, delete-orphan")
-
-
-class SaldoPeriodo(Base):
-    __tablename__ = "saldos_periodo"
-    __table_args__ = (
-        UniqueConstraint("periodo_id", "tipo_saldo", name="uq_saldos_periodo_tipo"),
-        {"schema": _MODEL_SCHEMA},
-    )
-
-    id = Column(Integer, primary_key=True)
-    periodo_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.periodos_aquisitivos.id", ondelete="CASCADE"), nullable=False, index=True)
-    tipo_saldo = Column(String(20), nullable=False, default="REGULAR")
-    dias_direito = Column(Numeric(6, 2), default=0)
-    dias_reservados = Column(Numeric(6, 2), default=0)
-    dias_usados = Column(Numeric(6, 2), default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    periodo = relationship("PeriodoAquisitivo", back_populates="saldos")
-
-    @property
-    def disponivel(self) -> float:
-        return float((self.dias_direito or 0) - (self.dias_reservados or 0) - (self.dias_usados or 0))
 
 
 class SaldoPeriodoNovo(Base):
@@ -268,7 +221,7 @@ class AuditoriaSaldos(Base):
     __table_args__ = {"schema": _MODEL_SCHEMA}
 
     id = Column(Integer, primary_key=True)
-    saldo_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.saldos_periodo.id"), nullable=True)
+    saldo_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.saldo_periodo.id", ondelete="SET NULL"), nullable=True)
     usuario_alterou_id = Column(Integer, ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.id"), nullable=True)
     usuario_alterou_matricula = Column(String(50), ForeignKey(f"{_MODEL_SCHEMA}.colaboradores.matricula"), nullable=True)
     data_movimento = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 
 import smartsheet
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 
 from ..config import get_settings
 from ..logging_config import get_logger
-from ..models import Auditoria, Colaborador, ColaboradorComplemento, Solicitacao, SyncState, PermissaoUsuario, HierarquiaGestao, PeriodoAquisitivo, SaldoPeriodo, SaldoPeriodoNovo
+from ..models import Auditoria, Colaborador, ColaboradorComplemento, Solicitacao, SyncState, PermissaoUsuario, HierarquiaGestao, SaldoPeriodoNovo
 from .postgres_service import get_session, dispose_engine
 
 log = get_logger(__name__)
@@ -998,8 +998,15 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
                 })
                 continue
 
+    # V58: a sincronização cadastral não apaga saldo_periodo quando alguém passa
+    # a INATIVO. O histórico permanece; a rotina de ciclos consulta somente ATIVOS,
+    # portanto nenhuma nova linha será criada enquanto o cadastro estiver inativo.
+    saldos_inativos_removidos = 0  # mantido na resposta por compatibilidade
+    session.commit()
+
     return {
-        "mode": "sync_by_matricula_cadastro_colaboradores_v46",
+        "mode": "sync_by_matricula_cadastro_colaboradores_v58",
+        "saldos_inativos_removidos": int(saldos_inativos_removidos or 0),
         "records": len(records),
         "inserted": inserted,
         "updated": existing_updated,
@@ -1025,270 +1032,7 @@ def _sync_colaboradores(session, cadastro: SheetMaps, cadastro_sheet_id: int, pr
     }
 
 
-def _reference_date() -> dt.date:
-    """Data base para cálculo de saldos/períodos.
 
-    Por padrão usa a data atual do ambiente. Para reproduzir uma fotografia
-    específica, defina SYNC_REFERENCE_DATE=YYYY-MM-DD ou DD/MM/YYYY.
-    """
-    ref = parse_date(os.getenv("SYNC_REFERENCE_DATE"))
-    return ref or dt.date.today()
-
-
-def _iter_periodos_aquisitivos(admissao: Optional[dt.date], ref_date: Optional[dt.date] = None):
-    """Compatibilidade: gera somente periodos anuais efetivamente concluidos."""
-    if not admissao:
-        return
-    ref_date = ref_date or _reference_date()
-    if ref_date < admissao:
-        return
-    completos = completed_aquisitive_periods(admissao, ref_date)
-    for numero in range(1, completos + 1):
-        inicio = add_months(admissao, (numero - 1) * 12)
-        fim = add_months(admissao, numero * 12) - dt.timedelta(days=1)
-        yield numero, inicio, fim, numero == completos
-
-
-def _find_periodo_for_date(periodos: list[PeriodoAquisitivo], data_ref: Optional[dt.date]) -> Optional[PeriodoAquisitivo]:
-    if not periodos:
-        return None
-    if data_ref:
-        for periodo in periodos:
-            if periodo.data_inicio <= data_ref <= periodo.data_fim:
-                return periodo
-    atuais = [p for p in periodos if p.is_atual]
-    if atuais:
-        return atuais[0]
-    return periodos[-1]
-
-
-def _get_or_create_saldo_periodo(session, periodo: PeriodoAquisitivo, tipo_saldo: str) -> SaldoPeriodo:
-    tipo = (tipo_saldo or "REGULAR").upper()
-    saldo = session.query(SaldoPeriodo).filter(
-        SaldoPeriodo.periodo_id == periodo.id,
-        SaldoPeriodo.tipo_saldo == tipo,
-    ).first()
-    if not saldo:
-        saldo = SaldoPeriodo(periodo_id=periodo.id, tipo_saldo=tipo)
-        session.add(saldo)
-        session.flush()
-    return saldo
-
-
-def _get_or_create_saldo_periodo_novo(session, colab: Colaborador, periodo: PeriodoAquisitivo, tipo_saldo: str) -> SaldoPeriodoNovo:
-    tipo = (tipo_saldo or "REGULAR").upper()
-    saldo = session.query(SaldoPeriodoNovo).filter(
-        SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-        SaldoPeriodoNovo.periodo_numero == int(periodo.periodo_numero or 0),
-        SaldoPeriodoNovo.tipo_saldo == tipo,
-    ).first()
-    if not saldo:
-        saldo = SaldoPeriodoNovo(
-            colaborador_id=colab.id,
-            colaborador_matricula=colab.matricula,
-            periodo_numero=int(periodo.periodo_numero or 0),
-            data_inicio=periodo.data_inicio,
-            data_fim=periodo.data_fim,
-            is_atual=bool(periodo.is_atual),
-            tipo_saldo=tipo,
-            saldo_inicial=0,
-            saldo_utilizado=0,
-            saldo_reservado=0,
-            saldo_disponivel=0,
-            ultima_alteracao=dt.datetime.utcnow(),
-            created_at=dt.datetime.utcnow(),
-            updated_at=dt.datetime.utcnow(),
-        )
-        session.add(saldo)
-        session.flush()
-    else:
-        saldo.colaborador_id = colab.id
-        saldo.colaborador_matricula = colab.matricula
-        saldo.data_inicio = periodo.data_inicio
-        saldo.data_fim = periodo.data_fim
-        saldo.is_atual = bool(periodo.is_atual)
-        saldo.updated_at = dt.datetime.utcnow()
-    return saldo
-
-
-def _format_periodo_aquisitivo_origem(alloc: list[dict]) -> str:
-    partes: list[str] = []
-    for item in alloc or []:
-        numero = int(item.get("periodo_numero") or item.get("numero") or 0)
-        dias = float(item.get("dias") or 0)
-        if numero <= 0 or dias <= 0:
-            continue
-        dias_txt = str(int(dias)) if dias.is_integer() else str(round(dias, 2)).rstrip("0").rstrip(".")
-        partes.append(f"P{numero}:{dias_txt}")
-    return " | ".join(partes)
-
-
-def _parse_periodo_aquisitivo_origem(value: Any) -> list[dict]:
-    """Lê textos como 'P4:10 | P5:10' e devolve alocações."""
-    text = str(value or "").strip()
-    if not text:
-        return []
-    found = re.findall(r"P\s*(\d+)\s*[:=]\s*([+-]?\d+(?:[\.,]\d+)?)", text, flags=re.IGNORECASE)
-    out: list[dict] = []
-    for numero, dias in found:
-        try:
-            out.append({"periodo_numero": int(numero), "dias": float(str(dias).replace(",", "."))})
-        except Exception:
-            continue
-    return out
-
-
-def _allocate_from_saldo_periodo(saldos: list[SaldoPeriodoNovo], dias: float, field: str) -> list[dict]:
-    """Consome/reserva saldo do período mais antigo para o mais novo.
-
-    V31: se a solicitação ultrapassar o saldo disponível, o restante fica no
-    último período elegível, permitindo saldo negativo de forma controlada.
-    """
-    restante = abs(float(dias or 0))
-    alloc: list[dict] = []
-    if restante <= 0:
-        return alloc
-
-    elegiveis = [s for s in saldos if float(s.saldo_inicial or 0) != 0 or bool(s.is_atual)] or list(saldos)
-    ultimo_elegivel = elegiveis[-1] if elegiveis else (saldos[-1] if saldos else None)
-
-    for saldo in elegiveis:
-        disponivel = float(saldo.saldo_disponivel or 0)
-        if disponivel <= 0:
-            continue
-        consumir = min(disponivel, restante)
-        if consumir <= 0:
-            continue
-        if field == "saldo_reservado":
-            saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + consumir
-        else:
-            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + consumir
-        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) - consumir
-        saldo.ultima_alteracao = dt.datetime.utcnow()
-        saldo.updated_at = dt.datetime.utcnow()
-        alloc.append({"periodo_numero": int(saldo.periodo_numero or 0), "dias": consumir})
-        restante -= consumir
-        if restante <= 0.0001:
-            break
-
-    if restante > 0.0001 and ultimo_elegivel is not None:
-        saldo = ultimo_elegivel
-        if field == "saldo_reservado":
-            saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + restante
-        else:
-            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + restante
-        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) - restante
-        saldo.ultima_alteracao = dt.datetime.utcnow()
-        saldo.updated_at = dt.datetime.utcnow()
-        alloc.append({"periodo_numero": int(saldo.periodo_numero or 0), "dias": restante})
-
-    return alloc
-
-
-def _apply_explicit_alloc_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNovo], alloc: list[dict], field: str) -> list[dict]:
-    aplicado: list[dict] = []
-    for item in alloc or []:
-        numero = int(item.get("periodo_numero") or item.get("numero") or 0)
-        dias = abs(float(item.get("dias") or 0))
-        saldo = saldos_by_num.get(numero)
-        if not saldo or dias <= 0:
-            continue
-        if field == "saldo_reservado":
-            saldo.saldo_reservado = float(saldo.saldo_reservado or 0) + dias
-        else:
-            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + dias
-        saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) - dias
-        saldo.ultima_alteracao = dt.datetime.utcnow()
-        saldo.updated_at = dt.datetime.utcnow()
-        aplicado.append({"periodo_numero": numero, "dias": dias})
-    return aplicado
-
-
-def _apply_adjustment_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNovo], periodos: list[PeriodoAquisitivo], data_inicio: Optional[dt.date], dias: float, explicit_alloc: list[dict] | None = None) -> list[dict]:
-    """Aplica AJUSTE como correção de saldo, positiva ou negativa.
-
-    O sinal vem da própria solicitação: dias positivos creditam saldo;
-    dias negativos debitam saldo. A coluna periodo_aquisitivo_origem guarda
-    apenas a distribuição por período, no padrão P4:10 | P5:10.
-    """
-    delta_total = float(dias or 0)
-    if abs(delta_total) <= 0.0001:
-        return []
-
-    sinal = 1 if delta_total >= 0 else -1
-    alloc = explicit_alloc or []
-    aplicado: list[dict] = []
-
-    if alloc:
-        for item in alloc:
-            numero = int(item.get("periodo_numero") or item.get("numero") or 0)
-            magnitude = abs(float(item.get("dias") or 0))
-            saldo = saldos_by_num.get(numero)
-            if not saldo or magnitude <= 0:
-                continue
-            delta = sinal * magnitude
-            saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + delta
-            saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + delta
-            saldo.ultima_alteracao = dt.datetime.utcnow()
-            saldo.updated_at = dt.datetime.utcnow()
-            aplicado.append({"periodo_numero": numero, "dias": magnitude})
-        return aplicado
-
-    periodo = _find_periodo_for_date(periodos, data_inicio) or (periodos[-1] if periodos else None)
-    if not periodo:
-        return []
-    saldo = saldos_by_num.get(int(periodo.periodo_numero or 0))
-    if not saldo:
-        return []
-    magnitude = abs(delta_total)
-    saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + delta_total
-    saldo.saldo_disponivel = float(saldo.saldo_disponivel or 0) + delta_total
-    saldo.ultima_alteracao = dt.datetime.utcnow()
-    saldo.updated_at = dt.datetime.utcnow()
-    return [{"periodo_numero": int(periodo.periodo_numero or 0), "dias": magnitude}]
-
-
-# Alias mantido por compatibilidade com versões anteriores do serviço.
-def _credit_adjustment_saldo_periodo(saldos_by_num: dict[int, SaldoPeriodoNovo], periodos: list[PeriodoAquisitivo], data_inicio: Optional[dt.date], dias: float, explicit_alloc: list[dict] | None = None) -> list[dict]:
-    return _apply_adjustment_saldo_periodo(saldos_by_num, periodos, data_inicio, dias, explicit_alloc)
-
-def _ensure_periodos_colaborador(session, colab: Colaborador, ref_date: dt.date) -> list[PeriodoAquisitivo]:
-    admissao = colab.data_admissao if isinstance(colab.data_admissao, dt.date) else parse_date(colab.data_admissao)
-    if not admissao:
-        return []
-
-    existentes = {
-        int(p.periodo_numero): p
-        for p in session.query(PeriodoAquisitivo).filter(
-            (PeriodoAquisitivo.colaborador_matricula == colab.matricula) | (PeriodoAquisitivo.colaborador_id == colab.id)
-        ).all()
-        if p.periodo_numero is not None
-    }
-
-    periodos: list[PeriodoAquisitivo] = []
-    for numero, inicio, fim, is_atual in _iter_periodos_aquisitivos(admissao, ref_date) or []:
-        periodo = existentes.get(numero)
-        if not periodo:
-            periodo = PeriodoAquisitivo(
-                colaborador_id=colab.id,
-                colaborador_matricula=colab.matricula,
-                periodo_numero=numero,
-                data_inicio=inicio,
-                data_fim=fim,
-                is_atual=is_atual,
-            )
-            session.add(periodo)
-            session.flush()
-            existentes[numero] = periodo
-        else:
-            periodo.colaborador_id = colab.id
-            periodo.colaborador_matricula = colab.matricula
-            periodo.data_inicio = inicio
-            periodo.data_fim = fim
-            periodo.is_atual = is_atual
-        periodos.append(periodo)
-
-    return sorted(periodos, key=lambda p: p.periodo_numero or 0)
 
 def _canonical_status(value: Any) -> str:
     raw = normalize_text(value)
@@ -1447,17 +1191,11 @@ def _sync_solicitacoes(session, solicitacoes: SheetMaps, solicitacoes_sheet_id: 
     }
 
 def _recalculate_complemento(session) -> dict:
-    """Compatibilidade V56.
-
-    O recálculo cumulativo antigo foi desativado porque criava o período em
-    formação e uma linha PREMIUM para cada período anual. A criação diária dos
-    ciclos agora é feita pelo period_accrual_service, exclusivamente no BD.
-    """
+    """Compatibilidade de interface; nenhum saldo é recalculado nesta transação."""
     return {
         "recalculated": 0,
-        "periodos_synced": 0,
         "saldo_periodo_synced": 0,
-        "message": "Recálculo cumulativo legado desativado na V56.",
+        "message": "A normalização V58 ocorre depois da sincronização, somente em saldo_periodo.",
     }
 
 def recalcular_saldo_periodo_from_db() -> dict:
@@ -1565,6 +1303,20 @@ def sync_cadastro_from_smartsheet(triggered_by: str = "manual", actor_email: str
             session.commit()
 
         dispose_engine()
+
+        # Novos colaboradores ativos recebem imediatamente somente os ciclos já
+        # concluídos. Quem ficar inativo preserva o histórico e deixa de receber novos ciclos.
+        try:
+            from .period_accrual_service import ensure_due_periods
+            period_result = ensure_due_periods(
+                actor_email=safe_lower(actor_email or triggered_by or "smartsheet-sync"),
+                force=True,
+                wait_for_lock=True,
+            )
+            extra["periodos_v58"] = period_result
+        except Exception as period_exc:
+            log.exception("Cadastro sincronizado, mas falhou a normalização V58 de saldo_periodo")
+            extra["periodos_v58_error"] = str(period_exc)[:1000]
 
         # Sessão curta apenas para status final. Se falhar, os dados já foram gravados.
         try:

@@ -22,7 +22,7 @@ def create_app(run_db_migrations: bool = False) -> Flask:
 
     try:
         from .logging_config import get_logger as _get_logger
-        _get_logger(__name__).info("Gestao Ferias build V56 carregado")
+        _get_logger(__name__).info("Gestao Ferias build V58 carregado")
     except Exception:
         pass
 
@@ -48,7 +48,7 @@ def create_app(run_db_migrations: bool = False) -> Flask:
     # Contexto global para templates
     app.context_processor(inject_user_context)
 
-    # V56: verificação diária somente no PostgreSQL. Ela não acessa o Smartsheet
+    # V58: verificação diária somente no PostgreSQL. Ela não acessa o Smartsheet
     # e usa trava consultiva para que apenas um worker faça a criação dos ciclos.
     @app.before_request
     def _trigger_daily_period_check():

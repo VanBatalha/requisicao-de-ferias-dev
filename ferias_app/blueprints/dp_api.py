@@ -110,7 +110,7 @@ def api_dp_ajustes_lancar():
 
     Nesta versão, o app não depende mais do Smartsheet para ajustes. O ajuste é
     registrado em solicitacoes_ferias com colaborador_matricula e altera o saldo
-    real em saldos_periodo, gerando auditoria_saldos.
+    real em saldo_periodo, com registro na auditoria geral.
     """
     try:
         user = session.get("user")
