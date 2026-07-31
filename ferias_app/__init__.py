@@ -22,7 +22,7 @@ def create_app(run_db_migrations: bool = False) -> Flask:
 
     try:
         from .logging_config import get_logger as _get_logger
-        _get_logger(__name__).info("Gestao Ferias build V61 carregado")
+        _get_logger(__name__).info("Gestao Ferias build V62 carregado")
     except Exception:
         pass
 

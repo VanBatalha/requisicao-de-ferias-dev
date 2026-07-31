@@ -525,7 +525,7 @@ def ensure_due_periods(
             "premium_created": int(counters["premium_created"]),
             "future_rows_removed": int(counters["regular_deleted"] + counters["premium_deleted"]),
             "rule": "saldo_periodo_only; create_for_active_only; preserve_history_after_inactivation; regular_12m_completed; premium_5y_plus_1d_then_30m; no_future_cycles",
-            "version": "v61",
+            "version": "v62",
         }
         if not state:
             state = SyncState(sync_name=_SYNC_NAME)

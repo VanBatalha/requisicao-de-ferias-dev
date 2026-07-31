@@ -40,11 +40,20 @@ from ..services.core_support import (
     _parse_date_value,
 )
 def _has_dp_access(email: str | None) -> bool:
-    """Retorna True se o usuário tem acesso ao Painel DP.
+    """Retorna True para perfis DP e ADMIN com acesso ao Painel DP.
 
-    Fail-closed: se der erro ao consultar permissões, não libera acesso.
+    A sessão é verificada primeiro para que um ADMIN já autenticado não dependa
+    de uma nova resolução de permissões durante cada chamada da API. A consulta
+    por e-mail permanece como fallback e a função continua fail-closed.
     """
     try:
+        user = session.get("user") or {}
+        user_type = str(user.get("user_type") or "").strip().upper()
+        grupos_sessao = {str(g or "").strip().upper() for g in (user.get("grupos") or [])}
+        if user_type in {"ADMIN", "ADMINISTRADOR", "DP", "RH"}:
+            return True
+        if grupos_sessao.intersection({"ADMIN", "ADMINISTRADOR", "DP", "RH"}):
+            return True
         if not email:
             return False
         return tem_grupo(email, "DP") or tem_grupo(email, "Administrador")

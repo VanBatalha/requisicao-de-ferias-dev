@@ -207,6 +207,81 @@
               <div id="ajustes-msg" class="muted" style="margin-top:10px;"></div>
             </div>
           </div>
+          <section class="ajustes-historico" aria-live="polite">
+            <div class="ajustes-historico-header">
+              <div>
+                <h3 style="margin:0;">Histórico do colaborador</h3>
+                <div class="muted">Consulta somente leitura. DP e ADMIN podem visualizar, mas não alterar nem excluir registros por esta tela.</div>
+              </div>
+              <button id="ajustes-historico-atualizar" type="button" class="btn btn-secondary" disabled>Atualizar histórico</button>
+            </div>
+
+            <div class="ajustes-historico-consulta">
+              <div class="ajustes-historico-consulta-campo">
+                <label class="mini-label" for="ajustes-historico-colaborador-input">Consultar colaborador</label>
+                <div class="autocomplete-wrap">
+                  <input id="ajustes-historico-colaborador-input" class="form-control" placeholder="🔍 Digite matrícula ou nome..." autocomplete="off" />
+                  <div id="ajustes-historico-colaborador-sugestoes" class="autocomplete-menu" role="listbox"></div>
+                </div>
+                <div class="muted">Disponível para usuários DP e ADMIN. A consulta inclui colaboradores ativos e inativos.</div>
+              </div>
+              <button id="ajustes-historico-limpar" type="button" class="btn btn-secondary">Limpar seleção</button>
+            </div>
+
+            <div id="ajustes-historico-status" class="muted ajustes-historico-status">
+              Selecione um subordinado ou pesquise um colaborador para visualizar solicitações e ajustes.
+            </div>
+
+            <div class="ajustes-historico-grid">
+              <div class="ajustes-historico-card">
+                <div class="ajustes-historico-title">
+                  <strong>Solicitações</strong>
+                  <span id="ajustes-total-solicitacoes" class="badge">0</span>
+                </div>
+                <div class="ajustes-table-wrap">
+                  <table class="ajustes-history-table">
+                    <thead>
+                      <tr>
+                        <th>Período</th>
+                        <th>Tipo</th>
+                        <th>Dias</th>
+                        <th>Status</th>
+                        <th>Saldo</th>
+                        <th>Observações</th>
+                      </tr>
+                    </thead>
+                    <tbody id="ajustes-historico-solicitacoes">
+                      <tr><td colspan="6" class="muted">Nenhum colaborador selecionado.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="ajustes-historico-card">
+                <div class="ajustes-historico-title">
+                  <strong>Ajustes</strong>
+                  <span id="ajustes-total-ajustes" class="badge">0</span>
+                </div>
+                <div class="ajustes-table-wrap">
+                  <table class="ajustes-history-table">
+                    <thead>
+                      <tr>
+                        <th>Data</th>
+                        <th>Tipo</th>
+                        <th>Dias</th>
+                        <th>Status</th>
+                        <th>Período aplicado</th>
+                        <th>Observações</th>
+                      </tr>
+                    </thead>
+                    <tbody id="ajustes-historico-ajustes">
+                      <tr><td colspan="6" class="muted">Nenhum colaborador selecionado.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -753,6 +828,18 @@
         @media (max-width:1100px){.ajustes-right-body{grid-template-columns:1fr;}}
         .ajustes-sublista{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:12px;background:rgba(255,255,255,.02);}
         .ajustes-form{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:12px;background:rgba(255,255,255,.02);}
+        .ajustes-historico{margin:0 12px 12px;border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:12px;background:rgba(255,255,255,.02);}
+        .ajustes-historico-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+        .ajustes-historico-status{margin:10px 0;}
+        .ajustes-historico-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+        @media (max-width:1200px){.ajustes-historico-grid{grid-template-columns:1fr;}}
+        .ajustes-historico-card{min-width:0;border:1px solid rgba(148,163,184,.18);border-radius:12px;padding:10px;background:rgba(0,0,0,.08);}
+        .ajustes-historico-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;}
+        .ajustes-table-wrap{overflow:auto;max-height:360px;}
+        .ajustes-history-table{width:100%;border-collapse:collapse;font-size:12px;}
+        .ajustes-history-table th,.ajustes-history-table td{padding:8px;border-bottom:1px solid rgba(148,163,184,.15);text-align:left;vertical-align:top;white-space:nowrap;}
+        .ajustes-history-table td:last-child{white-space:normal;min-width:180px;}
+        .ajustes-history-table th{position:sticky;top:0;background:var(--color-bg-2, #fff);z-index:1;}
         
         .ajustes-saldos{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;}
         .saldo-box{border:1px solid rgba(148,163,184,.20);border-radius:14px;padding:10px;background:rgba(0,0,0,.12);}
@@ -787,11 +874,73 @@
         .mini-label{ font-size:12px; font-weight:800; display:block; margin-bottom:6px; }
         .box-scroll{
             overflow:auto;
-            border:1px solid var(--border);
+            border:1px solid var(--color-border);
             border-radius:12px;
             padding:10px;
-            background:#fff;
+            background:var(--color-surface, #fff);
             margin-bottom:10px;
+        }
+
+        /* Autocomplete alinhado ao seletor da tela de Solicitações */
+        .autocomplete-wrap{ position:relative; min-width:0; }
+        .autocomplete-menu{
+            position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:120;
+            display:none; max-height:260px; overflow-y:auto;
+            border:1px solid rgba(148,163,184,.45); border-radius:12px;
+            background:#fff; color:#111827; box-shadow:0 14px 34px rgba(15,23,42,.18);
+        }
+        .autocomplete-menu.show{ display:block; }
+        .autocomplete-option{
+            width:100%; display:block; text-align:left; padding:10px 12px;
+            border:0; border-bottom:1px solid rgba(148,163,184,.22);
+            background:#fff; color:#111827; cursor:pointer; font-weight:700;
+        }
+        .autocomplete-option:last-child{ border-bottom:0; }
+        .autocomplete-option:hover,.autocomplete-option.active{ background:#eef6ff; }
+        .autocomplete-option small{ display:block; margin-top:3px; color:#64748b; font-weight:600; }
+
+        /* Organização da aba Gestores */
+        .gestores-grid{ display:grid; grid-template-columns:minmax(320px, .85fr) minmax(420px, 1.35fr); gap:16px; margin-top:14px; align-items:start; }
+        .gestores-panel{ min-width:0; border:1px solid rgba(148,163,184,.28); border-radius:16px; padding:16px; background:var(--color-surface, #fff); }
+        .gestores-panel-header{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+        .gestores-panel-header.compact{ margin-bottom:8px; }
+        .gestores-panel-header h4{ margin:0; font-size:15px; }
+        .gestores-panel-header p{ margin:4px 0 0; color:var(--color-text-secondary); font-size:12px; }
+        .gestores-helper{ margin-top:7px; font-size:12px; }
+        .gestores-section-separator{ height:1px; background:rgba(148,163,184,.22); margin:16px 0; }
+        .gestores-lista{ margin-top:10px; max-height:360px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+        .gestor-list-item{ width:100%; display:flex; align-items:center; justify-content:space-between; gap:12px; text-align:left; padding:11px 12px; border:1px solid rgba(148,163,184,.30); border-radius:12px; background:rgba(255,255,255,.04); color:inherit; cursor:pointer; }
+        .gestor-list-item:hover{ background:rgba(27,106,90,.06); border-color:rgba(27,106,90,.28); }
+        .gestor-list-item.active{ background:rgba(27,106,90,.10); border-color:rgba(27,106,90,.45); }
+        .gestor-list-item-main{ min-width:0; }
+        .gestor-list-item-main strong{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .gestor-list-item-main small{ display:block; color:var(--color-text-secondary); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .gestor-list-count{ flex:0 0 auto; min-width:30px; text-align:center; padding:4px 8px; border-radius:999px; background:rgba(148,163,184,.14); font-weight:800; }
+        .gestor-resumo{ min-width:230px; max-width:50%; padding:10px 12px; border:1px solid rgba(148,163,184,.24); border-radius:12px; background:rgba(148,163,184,.07); font-size:12px; }
+        .gestores-checklist{ margin-top:10px; max-height:520px; overflow:auto; border:1px solid rgba(148,163,184,.28); border-radius:12px; background:var(--color-surface, #fff); }
+        .gestor-check-row{ display:grid; grid-template-columns:auto minmax(0,1fr) minmax(140px,.6fr); gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid rgba(148,163,184,.16); cursor:pointer; }
+        .gestor-check-row:last-child{ border-bottom:0; }
+        .gestor-check-row:hover{ background:rgba(27,106,90,.05); }
+        .gestor-check-row.is-checked{ background:rgba(27,106,90,.08); }
+        .gestor-check-identidade strong{ display:block; }
+        .gestor-check-identidade small,.gestor-check-email{ color:var(--color-text-secondary); font-size:12px; }
+        .gestor-check-email{ text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .gestores-actions{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:12px; }
+
+        /* Consulta de histórico no Painel DP */
+        .ajustes-historico-consulta{ display:flex; align-items:flex-end; gap:12px; margin-top:12px; padding:12px; border:1px solid rgba(148,163,184,.20); border-radius:12px; background:rgba(148,163,184,.06); }
+        .ajustes-historico-consulta-campo{ flex:1; min-width:240px; }
+        .ajustes-historico-consulta-campo .muted{ margin-top:6px; font-size:12px; }
+
+        @media (max-width:1050px){
+            .gestores-grid{ grid-template-columns:1fr; }
+            .gestor-resumo{ max-width:none; min-width:0; width:100%; }
+            .gestores-equipe-header{ flex-direction:column; }
+        }
+        @media (max-width:700px){
+            .gestor-check-row{ grid-template-columns:auto minmax(0,1fr); }
+            .gestor-check-email{ grid-column:2; text-align:left; }
+            .ajustes-historico-consulta{ align-items:stretch; flex-direction:column; }
         }
     
 </style>
@@ -893,36 +1042,53 @@
 
     <!-- SUBABA: GESTOR -->
     <div id="subtab-gestor" class="subtab-content active">
-      <div class="grid-2">
-        <div>
-          <label class="mini-label">Gestor</label>
+      <div class="gestores-grid">
+        <section class="gestores-panel">
+          <div class="gestores-panel-header">
+            <div>
+              <h4>Selecionar gestor</h4>
+              <p>Pesquise por matrícula ou nome, como na seleção de colaborador da tela de solicitações.</p>
+            </div>
+          </div>
+
+          <label class="mini-label" for="gestor-input">Gestor</label>
           <div class="autocomplete-wrap">
-            <input id="gestor-input" class="form-control" placeholder="Digite matrícula ou nome do gestor..." autocomplete="off" />
+            <input id="gestor-input" class="form-control" placeholder="🔍 Digite matrícula ou nome do gestor..." autocomplete="off" />
             <div id="gestor-sugestoes" class="autocomplete-menu" role="listbox"></div>
           </div>
           <input type="hidden" id="gestor-select" />
-          <div class="muted" style="margin-top:6px;">Qualquer colaborador ativo pode ser selecionado como gestor. A relação será gravada por matrícula.</div>
+          <div class="muted gestores-helper">Somente colaboradores ativos são apresentados. A relação é gravada por matrícula.</div>
 
-          <div style="height:12px;"></div>
+          <div class="gestores-section-separator"></div>
 
-          <label class="mini-label">Gestores atuais</label>
-          <input id="busca-gestor" class="form-control" placeholder="🔍 Filtrar gestores atuais..." style="margin-bottom:10px;" />
-          <div id="lista-gestores" class="box-scroll" style="max-height:320px;"></div>
-        </div>
+          <div class="gestores-panel-header compact">
+            <div>
+              <h4>Gestores configurados</h4>
+              <p>Selecione um item para carregar a equipe atual.</p>
+            </div>
+          </div>
+          <input id="busca-gestor" class="form-control" placeholder="🔍 Filtrar gestores configurados..." />
+          <div id="lista-gestores" class="gestores-lista" aria-live="polite"></div>
+        </section>
 
-        <div>
-          <div class="card" style="padding:14px; margin-bottom:12px;">
-            <h4 style="margin:0 0 8px 0; font-size:14px;">Subordinados do gestor selecionado</h4>
-            <div id="gestor-selecionado-resumo" class="muted">Selecione um gestor para visualizar a equipe.</div>
+        <section class="gestores-panel gestores-panel-equipe">
+          <div class="gestores-panel-header gestores-equipe-header">
+            <div>
+              <h4>Equipe do gestor</h4>
+              <p>Marque ou desmarque os colaboradores e salve a relação.</p>
+            </div>
+            <div id="gestor-selecionado-resumo" class="gestor-resumo">Selecione um gestor para visualizar a equipe.</div>
           </div>
 
-          <label class="mini-label">Buscar subordinado</label>
-          <input id="busca-subordinado" class="form-control" placeholder="🔍 Digite nome ou matrícula..." />
-          <div id="lista-subordinados" class="box-scroll" style="margin-top:12px; max-height: 520px;"></div>
+          <label class="mini-label" for="busca-subordinado">Buscar colaborador</label>
+          <input id="busca-subordinado" class="form-control" placeholder="🔍 Digite nome, matrícula ou e-mail..." />
+          <div id="lista-subordinados" class="gestores-checklist" aria-live="polite"></div>
 
-          <button type="button" id="btn-salvar-relacao" class="btn" style="margin-top:12px;">Salvar relação</button>
-          <div id="msg-relacao" class="muted" style="margin-top:10px;"></div>
-        </div>
+          <div class="gestores-actions">
+            <button type="button" id="btn-salvar-relacao" class="btn">Salvar relação</button>
+            <div id="msg-relacao" class="muted"></div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -1068,6 +1234,7 @@ function criarCalendario(dataInicio, dataFim, mes, ano) {
 // ===== GESTORES =====
 let gestoresColaboradoresCache = [];
 let gestoresMapaCache = null;
+let gestoresUIBound = false;
 let gestorSelecionadoMatricula = "";
 let gestorSubSelecionados = new Set();
 
@@ -1209,63 +1376,82 @@ function initGestoresSubtabs() {
   root.dataset._subtabsInit = '1';
 }
 
-async function carregarTelaGestores() {
+async function carregarTelaGestores(forceReload = false) {
   initGestoresSubtabs();
   ativarSubtabGestores('gestor');
-  if (gestoresMapaCache) return;
 
   const msgRel = document.getElementById('msg-relacao');
   if (msgRel) msgRel.textContent = '';
 
-  const resp = await fetch('/api/dp/gestores/mapa');
-  const data = await resp.json().catch(() => ({}));
-  if (!data.ok) {
-    if (msgRel) msgRel.textContent = data.message || 'Erro ao carregar gestores.';
-    return;
+  if (!gestoresMapaCache || forceReload) {
+    const resp = await fetch('/api/dp/gestores/mapa', { cache: 'no-store' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      if (msgRel) msgRel.textContent = data.message || `Erro HTTP ${resp.status} ao carregar gestores.`;
+      return;
+    }
+
+    gestoresMapaCache = data;
+    gestoresColaboradoresCache = (data.colaboradores || []).sort((a,b) =>
+      _normBuscaGestor(a.nome || a.label || '').localeCompare(_normBuscaGestor(b.nome || b.label || ''), 'pt-BR')
+      || _normMatJS(a.matricula).localeCompare(_normMatJS(b.matricula))
+    );
   }
 
-  gestoresMapaCache = data;
-  gestoresColaboradoresCache = (data.colaboradores || []).sort((a,b) => _normBuscaGestor(a.nome || a.label || '').localeCompare(_normBuscaGestor(b.nome || b.label || ''), 'pt-BR') || _normMatJS(a.matricula).localeCompare(_normMatJS(b.matricula)));
+  if (!gestoresUIBound) {
+    setupAutocompleteGestores('gestor-input', 'gestor-sugestoes', [], async item => {
+      const c = item?.colab || gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === _normMatJS(item?.valor));
+      gestorSelecionadoMatricula = c ? _normMatJS(c.matricula) : '';
+      document.getElementById('gestor-select').value = gestorSelecionadoMatricula;
+      await carregarRelacaoGestor(gestorSelecionadoMatricula);
+      renderListaSubordinados();
+      renderResumoGestorSelecionado(c);
+    });
 
-  setupAutocompleteGestores('gestor-input', 'gestor-sugestoes', [], async item => {
-    const c = item?.colab || gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === _normMatJS(item?.valor));
-    gestorSelecionadoMatricula = c ? _normMatJS(c.matricula) : '';
-    document.getElementById('gestor-select').value = gestorSelecionadoMatricula;
-    await carregarRelacaoGestor(gestorSelecionadoMatricula);
-    renderListaSubordinados();
-    renderResumoGestorSelecionado(c);
-  });
+    setupAutocompleteGestores('superior-colaborador-input', 'superior-colaborador-sugestoes', [], async item => {
+      const c = item?.colab || gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === _normMatJS(item?.valor));
+      document.getElementById('superior-colaborador').value = c ? _normMatJS(c.matricula) : '';
+      const msg = document.getElementById('msg-superior');
+      if (msg) msg.textContent = '';
+      if (!c) return;
+      const r = await fetch('/api/dp/gestores/superior?colaborador=' + encodeURIComponent(c.matricula), { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        const v = (j.gestor_superior || 'GESTOR').toString().trim().toUpperCase();
+        const sup = gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === v);
+        document.getElementById('superior-valor').value = v;
+        document.getElementById('superior-valor-input').value = sup ? _colabLabel(sup) : v;
+      } else if (msg) {
+        msg.textContent = j.message || 'Erro ao carregar Gestor Superior.';
+      }
+    });
 
-  setupAutocompleteGestores('superior-colaborador-input', 'superior-colaborador-sugestoes', [], async item => {
-    const c = item?.colab || gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === _normMatJS(item?.valor));
-    document.getElementById('superior-colaborador').value = c ? _normMatJS(c.matricula) : '';
-    const msg = document.getElementById('msg-superior');
-    if (msg) msg.textContent = '';
-    if (!c) return;
-    const r = await fetch('/api/dp/gestores/superior?colaborador=' + encodeURIComponent(c.matricula));
-    const j = await r.json().catch(() => ({}));
-    if (j.ok) {
-      const v = (j.gestor_superior || 'GESTOR').toString().trim().toUpperCase();
-      const sup = gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === v);
-      document.getElementById('superior-valor').value = v;
-      document.getElementById('superior-valor-input').value = sup ? _colabLabel(sup) : v;
-    }
-  });
+    setupAutocompleteGestores('superior-valor-input', 'superior-valor-sugestoes', ['GESTOR', 'DP'], item => {
+      const hidden = document.getElementById('superior-valor');
+      if (!hidden) return;
+      hidden.value = item?.tipo === 'extra' ? item.valor : _normMatJS(item?.valor);
+    });
 
-  setupAutocompleteGestores('superior-valor-input', 'superior-valor-sugestoes', ['GESTOR', 'DP'], item => {
-    const hidden = document.getElementById('superior-valor');
-    if (!hidden) return;
-    hidden.value = item?.tipo === 'extra' ? item.valor : _normMatJS(item?.valor);
-  });
+    document.getElementById('busca-gestor')?.addEventListener('input', renderListaGestores);
+    document.getElementById('busca-subordinado')?.addEventListener('input', renderListaSubordinados);
+    document.getElementById('btn-salvar-relacao')?.addEventListener('click', salvarRelacaoGestor);
+    document.getElementById('btn-salvar-superior')?.addEventListener('click', salvarGestorSuperior);
+    gestoresUIBound = true;
+  }
 
   renderListaGestores();
   renderListaGestoresSuperiores();
 
-  document.getElementById('busca-gestor')?.addEventListener('input', renderListaGestores);
-  document.getElementById('busca-subordinado')?.addEventListener('input', renderListaSubordinados);
-
-  document.getElementById('btn-salvar-relacao')?.addEventListener('click', salvarRelacaoGestor);
-  document.getElementById('btn-salvar-superior')?.addEventListener('click', salvarGestorSuperior);
+  if (gestorSelecionadoMatricula) {
+    const selecionado = gestoresColaboradoresCache.find(
+      x => _normMatJS(x.matricula) === gestorSelecionadoMatricula
+    );
+    await carregarRelacaoGestor(gestorSelecionadoMatricula);
+    renderListaSubordinados();
+    renderResumoGestorSelecionado(selecionado);
+  } else {
+    renderListaSubordinados();
+  }
 }
 
 function renderResumoGestorSelecionado(c) {
@@ -1275,7 +1461,7 @@ function renderResumoGestorSelecionado(c) {
     box.textContent = 'Selecione um gestor para visualizar a equipe.';
     return;
   }
-  box.innerHTML = `<strong>${escapeHtml(_colabLabel(c))}</strong><br><span class="muted">${escapeHtml(c.email || '')}</span><br><span class="badge" style="margin-top:6px;">${gestorSubSelecionados.size} subordinado(s)</span>`;
+  box.innerHTML = `<strong>${escapeHtml(_colabLabel(c))}</strong><br><span class="muted">${escapeHtml(c.email || '')}</span><br><span class="badge" style="display:inline-block;margin-top:7px;">${gestorSubSelecionados.size} subordinado(s) selecionado(s)</span>`;
 }
 
 function renderListaGestores() {
@@ -1290,12 +1476,15 @@ function renderListaGestores() {
     box.innerHTML = '<div class="muted">Nenhum gestor atual encontrado.</div>';
     return;
   }
-  box.innerHTML = items.map(g => `
-    <button type="button" class="btn btn-secondary" data-matricula="${escapeHtml(g.matricula)}"
-      style="width:100%; text-align:left; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:12px;">
-      <span><strong>${escapeHtml(_colabLabel(g))}</strong><div class="muted" style="font-size:11px;">${escapeHtml(g.email || '')}</div></span>
-      <span class="badge" style="background: rgba(0,0,0,.04); border-color: var(--border); color:#333;">${g.total || 0}</span>
-    </button>`).join('');
+  box.innerHTML = items.map(g => {
+    const mat = _normMatJS(g.matricula);
+    const active = mat === gestorSelecionadoMatricula ? ' active' : '';
+    return `
+    <button type="button" class="gestor-list-item${active}" data-matricula="${escapeHtml(mat)}">
+      <span class="gestor-list-item-main"><strong>${escapeHtml(_colabLabel(g))}</strong><small>${escapeHtml(g.email || '')}</small></span>
+      <span class="gestor-list-count" title="Quantidade de subordinados">${g.total || 0}</span>
+    </button>`;
+  }).join('');
   box.querySelectorAll('button[data-matricula]').forEach(b => {
     b.addEventListener('click', async () => {
       const mat = _normMatJS(b.dataset.matricula);
@@ -1360,10 +1549,10 @@ function renderListaSubordinados() {
     const mat = _normMatJS(c.matricula);
     const checked = gestorSubSelecionados.has(mat) ? 'checked' : '';
     return `
-      <label style="display:flex; gap:10px; align-items:center; padding:8px 6px; border-bottom:1px solid rgba(0,0,0,.04);">
+      <label class="gestor-check-row ${checked ? 'is-checked' : ''}">
         <input type="checkbox" data-matricula="${escapeHtml(mat)}" ${checked} />
-        <span style="font-weight:700;">${escapeHtml(_colabLabel(c))}</span>
-        <span class="muted" style="margin-left:auto;">${escapeHtml(c.email || '')}</span>
+        <span class="gestor-check-identidade"><strong>${escapeHtml(_colabLabel(c))}</strong><small>${escapeHtml(c.setor || c.SETOR || '')}</small></span>
+        <span class="gestor-check-email">${escapeHtml(c.email || '')}</span>
       </label>`;
   }).join('');
 
@@ -1372,6 +1561,7 @@ function renderListaSubordinados() {
       const m = _normMatJS(cb.dataset.matricula);
       if (cb.checked) gestorSubSelecionados.add(m);
       else gestorSubSelecionados.delete(m);
+      cb.closest('.gestor-check-row')?.classList.toggle('is-checked', cb.checked);
       const c = gestoresColaboradoresCache.find(x => _normMatJS(x.matricula) === gestorSelecionadoMatricula);
       renderResumoGestorSelecionado(c);
     });
@@ -1397,7 +1587,7 @@ async function salvarRelacaoGestor() {
     const j = await r.json().catch(() => ({}));
     if (msg) msg.textContent = j.message || (r.ok ? 'Relação salva.' : 'Erro ao salvar relação.');
     gestoresMapaCache = null;
-    await carregarTelaGestores();
+    await carregarTelaGestores(true);
   } catch (e) {
     if (msg) msg.textContent = 'Erro ao salvar relação.';
   } finally {
@@ -1446,7 +1636,7 @@ async function salvarGestorSuperior() {
     const j = await r.json().catch(() => ({}));
     if (msg) msg.textContent = j.message || (r.ok ? 'Gestor Superior salvo.' : 'Erro ao salvar Gestor Superior.');
     gestoresMapaCache = null;
-    await carregarTelaGestores();
+    await carregarTelaGestores(true);
   } catch (e) {
     if (msg) msg.textContent = 'Erro ao salvar Gestor Superior.';
   } finally {
@@ -1820,6 +2010,9 @@ let ajustesColabsCache = null;
 let ajustesGestorMap = {};      // { gestorEmail: [subEmail,...] }
 let ajustesNomePorEmail = {};   // { email: nome }
 let ajustesMatriculaPorEmail = {};
+let ajustesColabPorMatricula = {};
+let ajustesHistoricoSel = null;
+let ajustesHistoricoAutocompleteBound = false;
 let ajustesBound = false;
 
 function aNorm(s){
@@ -1841,11 +2034,15 @@ function aNome(matricula){
 function aBuildNomeIndex(colabs){
   ajustesNomePorEmail = {};
   ajustesMatriculaPorEmail = {};
+  ajustesColabPorMatricula = {};
   (colabs || []).forEach(c => {
     const mat = (c.MATRICULA || c['MATRÍCULA'] || c.matricula || '').toString().trim().toUpperCase();
     if (!mat) return;
     const nome = (c['NOME COMPLETO'] || c.nome_completo || c.nome || '').toString().trim();
     ajustesNomePorEmail[mat] = nome || mat;
+    ajustesColabPorMatricula[mat] = c;
+    const email = aEmail(c.email || c['EMAIL DA EMPRESA'] || '');
+    if (email) ajustesMatriculaPorEmail[email] = mat;
   });
 }
 
@@ -1859,6 +2056,8 @@ function aBuildGestorMap(colabs){
     if (!map[g].includes(s)) map[g].push(s);
   }
   (colabs || []).forEach(c => {
+    const status = (c.STATUS || c.status || '').toString().trim().toUpperCase();
+    if (status && status !== 'ATIVO') return;
     const sub = (c.MATRICULA || c['MATRÍCULA'] || c.matricula || '').toString().trim().toUpperCase();
     if (!sub) return;
     const gestorDireto = (c.GESTOR_DIRETO_MATRICULA || c.gestor_direto || '').toString().trim().toUpperCase();
@@ -1872,7 +2071,7 @@ function aBuildGestorMap(colabs){
 }
 
 async function aFetchColabs(){
-  const resp = await fetch("/api/dp/colaboradores?status=ATIVO");
+  const resp = await fetch("/api/dp/colaboradores", { cache: "no-store" });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || !data.ok) throw new Error(data.message || "Falha ao carregar colaboradores");
   return data.colaboradores || [];
@@ -1962,9 +2161,176 @@ async function aAtualizarSaldos(email){
   if (prem) prem.textContent = (data.premium?.saldo ?? "-");
 }
 
+function aFormatarData(value){
+  const raw = (value || '').toString().trim();
+  if (!raw) return '-';
+  const datePart = raw.slice(0, 10);
+  const m = datePart.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : raw;
+}
+
+function aHistoricoColabLabel(c){
+  const mat = (c?.MATRICULA || c?.['MATRÍCULA'] || c?.matricula || '').toString().trim().toUpperCase();
+  const nome = (c?.['NOME COMPLETO'] || c?.nome_completo || c?.nome || '').toString().trim();
+  const status = (c?.STATUS || c?.status || '').toString().trim().toUpperCase();
+  return `${mat} | ${nome || mat}${status ? ` — ${status}` : ''}`;
+}
+
+function aSetupHistoricoAutocomplete(){
+  const input = document.getElementById('ajustes-historico-colaborador-input');
+  const menu = document.getElementById('ajustes-historico-colaborador-sugestoes');
+  if (!input || !menu || ajustesHistoricoAutocompleteBound) return;
+  ajustesHistoricoAutocompleteBound = true;
+  let itensAtuais = [];
+  let activeIndex = -1;
+
+  const fechar = () => menu.classList.remove('show');
+  const selecionar = (c) => {
+    const mat = (c?.MATRICULA || c?.['MATRÍCULA'] || c?.matricula || '').toString().trim().toUpperCase();
+    if (!mat) return;
+    ajustesHistoricoSel = mat;
+    input.value = aHistoricoColabLabel(c);
+    fechar();
+    aCarregarHistorico(mat);
+  };
+  const render = () => {
+    const q = aNorm(input.value);
+    itensAtuais = (ajustesColabsCache || [])
+      .filter(c => !q || aNorm(`${aHistoricoColabLabel(c)} ${c.email || c['EMAIL DA EMPRESA'] || ''}`).includes(q))
+      .sort((a,b) => aHistoricoColabLabel(a).localeCompare(aHistoricoColabLabel(b), 'pt-BR', {sensitivity:'base'}))
+      .slice(0, 40);
+    if (!itensAtuais.length){ menu.innerHTML=''; fechar(); return; }
+    activeIndex = -1;
+    menu.innerHTML = itensAtuais.map((c, idx) => {
+      const email = c.email || c['EMAIL DA EMPRESA'] || '';
+      return `<button type="button" class="autocomplete-option" data-hidx="${idx}" role="option">${escapeHtml(aHistoricoColabLabel(c))}${email ? `<small>${escapeHtml(email)}</small>` : ''}</button>`;
+    }).join('');
+    menu.classList.add('show');
+    menu.querySelectorAll('[data-hidx]').forEach(btn => btn.addEventListener('mousedown', ev => {
+      ev.preventDefault(); selecionar(itensAtuais[Number(btn.dataset.hidx)]);
+    }));
+  };
+
+  input.addEventListener('focus', render);
+  input.addEventListener('input', () => { ajustesHistoricoSel = null; render(); });
+  input.addEventListener('blur', () => setTimeout(fechar, 160));
+  input.addEventListener('keydown', ev => {
+    const opts = Array.from(menu.querySelectorAll('.autocomplete-option'));
+    if (ev.key === 'Escape'){ fechar(); return; }
+    if (!opts.length || !menu.classList.contains('show')) return;
+    if (ev.key === 'ArrowDown'){ ev.preventDefault(); activeIndex=Math.min(activeIndex+1,opts.length-1); }
+    else if (ev.key === 'ArrowUp'){ ev.preventDefault(); activeIndex=Math.max(activeIndex-1,0); }
+    else if (ev.key === 'Enter'){ ev.preventDefault(); selecionar(itensAtuais[Math.max(activeIndex,0)]); return; }
+    else return;
+    opts.forEach((o,i)=>o.classList.toggle('active',i===activeIndex));
+    opts[activeIndex]?.scrollIntoView({block:'nearest'});
+  });
+}
+
+function aHistoricoVazio(message = 'Selecione um subordinado ou pesquise um colaborador para visualizar solicitações e ajustes.'){
+  const status = document.getElementById('ajustes-historico-status');
+  const solBody = document.getElementById('ajustes-historico-solicitacoes');
+  const ajuBody = document.getElementById('ajustes-historico-ajustes');
+  const solTotal = document.getElementById('ajustes-total-solicitacoes');
+  const ajuTotal = document.getElementById('ajustes-total-ajustes');
+  const refresh = document.getElementById('ajustes-historico-atualizar');
+  if (status) status.textContent = message;
+  if (solBody) solBody.innerHTML = '<tr><td colspan="6" class="muted">Nenhum registro carregado.</td></tr>';
+  if (ajuBody) ajuBody.innerHTML = '<tr><td colspan="6" class="muted">Nenhum registro carregado.</td></tr>';
+  if (solTotal) solTotal.textContent = '0';
+  if (ajuTotal) ajuTotal.textContent = '0';
+  if (refresh) refresh.disabled = !(ajustesHistoricoSel || ajustesSubSel);
+}
+
+function aHistoricoObservacao(item){
+  const partes = [];
+  if (item.observacoes) partes.push(escapeHtml(item.observacoes));
+  const autor = item.criado_por || item.solicitante_matricula || '';
+  if (autor) partes.push(`<span class="muted">Registrado por: ${escapeHtml(autor)}</span>`);
+  return partes.length ? partes.join('<br>') : '-';
+}
+
+function aRenderHistoricoSolicitacoes(items){
+  const body = document.getElementById('ajustes-historico-solicitacoes');
+  const total = document.getElementById('ajustes-total-solicitacoes');
+  if (total) total.textContent = String((items || []).length);
+  if (!body) return;
+  if (!items || !items.length){
+    body.innerHTML = '<tr><td colspan="6" class="muted">Nenhuma solicitação encontrada para este colaborador.</td></tr>';
+    return;
+  }
+  body.innerHTML = items.map(item => {
+    const inicio = aFormatarData(item.data_inicio);
+    const fim = aFormatarData(item.data_fim);
+    const periodo = fim !== '-' && fim !== inicio ? `${inicio} a ${fim}` : inicio;
+    return `<tr>
+      <td>${escapeHtml(periodo)}</td>
+      <td>${escapeHtml(item.solicitacao || '-')}</td>
+      <td>${escapeHtml(item.dias ?? 0)}</td>
+      <td>${escapeHtml(item.status || '-')}</td>
+      <td>${escapeHtml(item.saldo_tipo || '-')}</td>
+      <td>${aHistoricoObservacao(item)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function aRenderHistoricoAjustes(items){
+  const body = document.getElementById('ajustes-historico-ajustes');
+  const total = document.getElementById('ajustes-total-ajustes');
+  if (total) total.textContent = String((items || []).length);
+  if (!body) return;
+  if (!items || !items.length){
+    body.innerHTML = '<tr><td colspan="6" class="muted">Nenhum ajuste encontrado para este colaborador.</td></tr>';
+    return;
+  }
+  body.innerHTML = items.map(item => `<tr>
+    <td>${escapeHtml(aFormatarData(item.data_inicio))}</td>
+    <td>${escapeHtml(item.solicitacao || '-')}</td>
+    <td>${escapeHtml(item.dias ?? 0)}</td>
+    <td>${escapeHtml(item.status || '-')}</td>
+    <td>${escapeHtml(item.periodo_aquisitivo_origem || '-')}</td>
+    <td>${aHistoricoObservacao(item)}</td>
+  </tr>`).join('');
+}
+
+async function aCarregarHistorico(matricula){
+  const mat = (matricula || '').toString().trim().toUpperCase();
+  if (!mat){
+    aHistoricoVazio();
+    return;
+  }
+  ajustesHistoricoSel = mat;
+  const histInput = document.getElementById('ajustes-historico-colaborador-input');
+  const histColab = ajustesColabPorMatricula[mat];
+  if (histInput && histColab) histInput.value = aHistoricoColabLabel(histColab);
+  const status = document.getElementById('ajustes-historico-status');
+  const refresh = document.getElementById('ajustes-historico-atualizar');
+  if (status) status.textContent = 'Carregando histórico...';
+  if (refresh) refresh.disabled = true;
+  try {
+    const resp = await fetch(`/api/dp/historico/${encodeURIComponent(mat)}`, { cache: 'no-store' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) throw new Error(data.message || `Erro HTTP ${resp.status}`);
+    aRenderHistoricoSolicitacoes(data.solicitacoes || []);
+    aRenderHistoricoAjustes(data.ajustes || []);
+    if (status) {
+      const nome = data.colaborador?.nome || aNome(mat);
+      status.textContent = `${nome} — ${(data.totais?.solicitacoes ?? 0)} solicitação(ões) e ${(data.totais?.ajustes ?? 0)} ajuste(s).`;
+    }
+  } catch (e){
+    aHistoricoVazio(e.message || 'Erro ao carregar histórico.');
+  } finally {
+    if (refresh) refresh.disabled = !(ajustesHistoricoSel || ajustesSubSel);
+  }
+}
+
+
 function aSelectGestor(gestorEmail){
   ajustesGestorSel = gestorEmail;
   ajustesSubSel = null;
+  ajustesHistoricoSel = null;
+  const histInput = document.getElementById('ajustes-historico-colaborador-input');
+  if (histInput) histInput.value = '';
 
   aRenderGestores(document.getElementById("ajustes-gestor-busca")?.value || "");
   aRenderSubordinados();
@@ -1977,10 +2343,15 @@ function aSelectGestor(gestorEmail){
   document.getElementById("ajustes-msg").textContent = "";
   document.getElementById("ajustes-dias").value = "";
   document.getElementById("ajustes-obs").value = "";
+  aHistoricoVazio();
 }
 
 async function aSelectSub(subEmail){
   ajustesSubSel = (subEmail || "").toString().trim().toUpperCase();
+  ajustesHistoricoSel = ajustesSubSel;
+  const histInput = document.getElementById('ajustes-historico-colaborador-input');
+  const histColab = ajustesColabPorMatricula[ajustesSubSel];
+  if (histInput && histColab) histInput.value = aHistoricoColabLabel(histColab);
 
   aRenderSubordinados();
 
@@ -1988,10 +2359,13 @@ async function aSelectSub(subEmail){
   document.getElementById("ajustes-sub-email").textContent = ajustesSubSel;
   document.getElementById("ajustes-msg").textContent = "";
 
-  try {
-    await aAtualizarSaldos(ajustesSubSel);
-  } catch (e){
-    document.getElementById("ajustes-msg").textContent = e.message || "Erro ao consultar saldos";
+  const resultados = await Promise.allSettled([
+    aAtualizarSaldos(ajustesSubSel),
+    aCarregarHistorico(ajustesSubSel)
+  ]);
+  const falhaSaldo = resultados[0].status === "rejected" ? resultados[0].reason : null;
+  if (falhaSaldo) {
+    document.getElementById("ajustes-msg").textContent = falhaSaldo.message || "Erro ao consultar saldos";
   }
 }
 
@@ -2039,7 +2413,10 @@ async function aSalvarAjuste(){
     if (!resp.ok || !data.ok) throw new Error(data.message || "Falha ao salvar ajuste");
 
     if (msg) msg.textContent = data.message || "Ajuste salvo.";
-    await aAtualizarSaldos(ajustesSubSel);
+    await Promise.all([
+      aAtualizarSaldos(ajustesSubSel),
+      aCarregarHistorico(ajustesSubSel)
+    ]);
 
     document.getElementById("ajustes-dias").value = "";
     document.getElementById("ajustes-obs").value = "";
@@ -2058,6 +2435,7 @@ async function initAjustesTab(){
     }
 
     aRenderGestores(document.getElementById("ajustes-gestor-busca")?.value || "");
+    aSetupHistoricoAutocomplete();
 
     // auto-select primeiro gestor se nada selecionado
     if (!ajustesGestorSel){
@@ -2077,6 +2455,16 @@ async function initAjustesTab(){
       document.getElementById("btn-ajuste-ferias")?.addEventListener("click", () => aSetModo("AJUSTE FÉRIAS"));
       document.getElementById("btn-ajuste-premium")?.addEventListener("click", () => aSetModo("AJUSTE CERTARIANA"));
       document.getElementById("ajustes-salvar")?.addEventListener("click", aSalvarAjuste);
+      document.getElementById("ajustes-historico-atualizar")?.addEventListener("click", () => {
+        const mat = ajustesHistoricoSel || ajustesSubSel;
+        if (mat) aCarregarHistorico(mat);
+      });
+      document.getElementById("ajustes-historico-limpar")?.addEventListener("click", () => {
+        ajustesHistoricoSel = null;
+        const input = document.getElementById('ajustes-historico-colaborador-input');
+        if (input) input.value = '';
+        aHistoricoVazio();
+      });
 
       aSetModo("AJUSTE FÉRIAS");
     }
