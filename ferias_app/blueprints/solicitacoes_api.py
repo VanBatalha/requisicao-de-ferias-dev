@@ -39,6 +39,9 @@ def api_relatorio_lancamento():
     try:
         mes = request.args.get("mes", type=int)
         ano = request.args.get("ano", type=int)
+        escopo = (request.args.get("escopo") or "").strip()
+        colaborador_matricula = (request.args.get("colaborador_matricula") or "").strip().upper()
+        gestor_matricula = (request.args.get("gestor_matricula") or "").strip().upper()
         if mes and not (1 <= mes <= 12):
             return jsonify({"ok": False, "message": "Mês inválido"}), 400
         if ano and not (2000 <= ano <= 2100):
@@ -49,6 +52,9 @@ def api_relatorio_lancamento():
             mes,
             ano,
             perfil_sessao=user.get("user_type"),
+            escopo_solicitado=escopo,
+            colaborador_matricula=colaborador_matricula,
+            gestor_matricula=gestor_matricula,
         )
         return jsonify(relatorio), (200 if relatorio.get("ok") else 503)
 
@@ -77,6 +83,9 @@ def api_relatorio_lancamento_xlsx():
     try:
         mes = request.args.get("mes", type=int)
         ano = request.args.get("ano", type=int)
+        escopo = (request.args.get("escopo") or "").strip()
+        colaborador_matricula = (request.args.get("colaborador_matricula") or "").strip().upper()
+        gestor_matricula = (request.args.get("gestor_matricula") or "").strip().upper()
         if mes and not (1 <= mes <= 12):
             return jsonify({"ok": False, "message": "Mês inválido"}), 400
         if ano and not (2000 <= ano <= 2100):
@@ -87,13 +96,17 @@ def api_relatorio_lancamento_xlsx():
             mes,
             ano,
             perfil_sessao=user.get("user_type"),
+            escopo_solicitado=escopo,
+            colaborador_matricula=colaborador_matricula,
+            gestor_matricula=gestor_matricula,
         )
         if not relatorio.get("ok"):
             return jsonify(relatorio), 503
 
         arquivo = criar_relatorio_lancamento_xlsx(relatorio)
         periodo = f"{ano or 'todos'}-{int(mes):02d}" if mes else str(ano or "todos-periodos")
-        nome = f"relatorio_solicitacoes_{periodo}.xlsx"
+        sufixo_escopo = (escopo or relatorio.get("escopo") or "relatorio").replace("_", "-")
+        nome = f"relatorio_solicitacoes_{sufixo_escopo}_{periodo}.xlsx"
         return send_file(
             BytesIO(arquivo),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

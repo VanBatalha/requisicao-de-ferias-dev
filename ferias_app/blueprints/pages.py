@@ -215,15 +215,24 @@ def ferias():
 
     raw_matricula = str(request.args.get("matricula") or request.args.get("colaborador_matricula") or "").strip().upper()
     opcoes_por_matricula = {o["matricula"]: o for o in opcoes}
-    selecionado_matricula = raw_matricula if raw_matricula in opcoes_por_matricula else (opcoes[0]["matricula"] if opcoes else "")
+
+    # V63: a tela inicial não pré-seleciona o primeiro colaborador. O resumo e o
+    # histórico só são consultados depois de uma seleção explícita no autocomplete.
+    selecionado_matricula = raw_matricula if raw_matricula in opcoes_por_matricula else ""
     selecionado_opcao = opcoes_por_matricula.get(selecionado_matricula) or {}
     selecionado_email = safe_lower(selecionado_opcao.get("email") or "")
 
     t_resumo_start = time.perf_counter()
-    if postgres_enabled():
-        resumo = get_resumo_ferias_por_matricula_postgres(selecionado_matricula)
+    if selecionado_matricula:
+        if postgres_enabled():
+            resumo = get_resumo_ferias_por_matricula_postgres(selecionado_matricula)
+        else:
+            resumo = get_resumo_ferias(selecionado_matricula)
     else:
-        resumo = get_resumo_ferias(selecionado_matricula)
+        resumo = {
+            "regular": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "periodos": [], "periodo_atual": None},
+            "premium": {"direito": 0, "usados": 0, "reservados": 0, "saldo": 0, "periodos": [], "periodo_atual": None},
+        }
     t_resumo = time.perf_counter() - t_resumo_start
 
     dias_direito = resumo["regular"]["direito"]
@@ -239,7 +248,9 @@ def ferias():
     premium_saldo = resumo["premium"].get("saldo", resumo["premium"].get("disponivel", 0))
 
     t_hist_start = time.perf_counter()
-    if postgres_enabled():
+    if not selecionado_matricula:
+        solicitacoes = []
+    elif postgres_enabled():
         # Histórico do colaborador selecionado. Evita carregar todas as solicitações
         # do banco a cada troca no autocomplete.
         solicitacoes = listar_solicitacoes_matricula_postgres(selecionado_matricula)
@@ -249,8 +260,8 @@ def ferias():
         solicitacoes = listar_solicitacoes_equipes([gestor_email] + subs)
     t_hist = time.perf_counter() - t_hist_start
 
-    colaborador_nome = selecionado_opcao.get("nome") or selecionado_matricula or selecionado_email
-    is_viewing_own_holidays = selecionado_email == gestor_email and not is_dp_or_admin
+    colaborador_nome = selecionado_opcao.get("nome") or ""
+    is_viewing_own_holidays = bool(selecionado_matricula) and selecionado_email == gestor_email and not is_dp_or_admin
 
     total = time.perf_counter() - t0
     log.info(
@@ -289,6 +300,8 @@ def ferias():
         simulated_gestor=simulated_gestor,
         render_mode=render_mode,
         is_viewing_own_holidays=is_viewing_own_holidays,
+        is_dp_or_admin=is_dp_or_admin,
+        has_selected_colaborador=bool(selecionado_matricula),
     )
 
 @bp.route("/painel-admin")

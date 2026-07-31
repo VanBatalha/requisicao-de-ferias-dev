@@ -266,9 +266,20 @@
     <div class="icon">🏖️</div>
     <div>
       <h1 class="ferias-title">Solicitações de Férias</h1>
+      {% if has_selected_colaborador %}
       <p class="ferias-sub muted">Você está operando para: <strong>{{ colaborador_matricula }} | {{ colaborador_nome }}</strong>{% if colaborador_email %} ({{ colaborador_email }}){% endif %}</p>
+      {% else %}
+      <p class="ferias-sub muted">Nenhum colaborador selecionado. Use o campo de pesquisa abaixo para iniciar.</p>
+      {% endif %}
     </div>
   </div>
+
+  {% if not has_selected_colaborador %}
+  <div class="card" style="border-style:dashed; background:rgba(59,130,246,.06);">
+    <strong>Selecione um colaborador</strong>
+    <div class="muted" style="margin-top:5px;">Os saldos, o histórico e o formulário permanecerão zerados até que uma pessoa seja escolhida.</div>
+  </div>
+  {% endif %}
 
   <div class="card">
     <div class="section-title">🟩 Férias Regulares</div>
@@ -480,7 +491,7 @@
       </div>
 
       <div class="btn-row">
-        <button type="submit" class="btn-primary" id="btn-submit-solicitacao">➕ Fazer Solicitação</button>
+        <button type="submit" class="btn-primary" id="btn-submit-solicitacao"{% if not has_selected_colaborador or is_simulating or is_viewing_own_holidays %} disabled{% endif %}>➕ Fazer Solicitação</button>
       </div>
       <div id="resultado" class="msg muted"></div>
     </form>
@@ -551,9 +562,22 @@
   <div class="card">
     <h3 style="margin:0">📋 Relatório de Lançamento</h3>
     <div class="divider"></div>
-    <p class="muted">Gere um relatório detalhado de lançamentos de férias por colaborador ou período específico.</p>
+    <p class="muted">Gere um relatório do colaborador selecionado ou da equipe, usando os controles de mês e ano.</p>
     
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 14px;">
+      <div class="form-group-inline">
+        <label for="rel-escopo">Escopo</label>
+        <select id="rel-escopo" class="form-control">
+          {% if is_dp_or_admin %}
+          <option value="todos">Todos os colaboradores</option>
+          <option value="colaborador">Colaborador selecionado</option>
+          {% else %}
+          <option value="equipe">Minha equipe (inclui o gestor)</option>
+          <option value="colaborador">Colaborador selecionado</option>
+          {% endif %}
+        </select>
+      </div>
+
       <div class="form-group-inline">
         <label for="rel-mes">Mês (opcional)</label>
         <select id="rel-mes" class="form-control">
@@ -803,6 +827,14 @@ _applyTipoFerias();
   }
   setupAutocompleteColabFerias();
 
+  const hasSelectedColaborador = {{ 'true' if has_selected_colaborador else 'false' }};
+  if (!hasSelectedColaborador) {
+    document.querySelectorAll('#form-solicitacao input, #form-solicitacao select, #form-solicitacao textarea, #form-solicitacao button').forEach(el => {
+      if (el.id === 'colaborador_busca' || el.id === 'colaborador_email' || el.id === 'colaborador_matricula') return;
+      el.disabled = true;
+    });
+  }
+
   const form = document.getElementById('form-solicitacao');
   const resultado = document.getElementById('resultado');
   const btnSubmitSolicitacao = document.getElementById('btn-submit-solicitacao');
@@ -950,6 +982,7 @@ _applyTipoFerias();
   const relResultado = document.getElementById('rel-resultado');
   const relMes = document.getElementById('rel-mes');
   const relAno = document.getElementById('rel-ano');
+  const relEscopo = document.getElementById('rel-escopo');
   const btnBaixarRelatorioXlsx = document.getElementById('btn-baixar-relatorio-xlsx');
   let ultimoRelatorioParams = '';
 
@@ -971,6 +1004,16 @@ _applyTipoFerias();
     const params = new URLSearchParams();
     if (mes) params.append('mes', mes);
     if (ano) params.append('ano', ano);
+    const escopo = relEscopo?.value || '{{ "todos" if is_dp_or_admin else "equipe" }}';
+    params.append('escopo', escopo);
+    if (escopo === 'colaborador') {
+      const selecionada = normMatFerias(hiddenColabMatricula?.value || '');
+      if (!selecionada) {
+        relResultado.innerHTML = '<div class="text-danger">Selecione um colaborador antes de gerar o relatório individual.</div>';
+        return;
+      }
+      params.append('colaborador_matricula', selecionada);
+    }
 
     btnGerarRelatorio.disabled = true;
     if (btnBaixarRelatorioXlsx) btnBaixarRelatorioXlsx.disabled = true;
@@ -1010,8 +1053,11 @@ _applyTipoFerias();
       html += '<div style="font-weight: 700; margin-bottom: 6px;">📊 Resumo</div>';
       html += `<div style="font-size: 13px;">Total de solicitações: <strong>${data.total}</strong></div>`;
       html += `<div style="font-size: 13px;">Total de dias: <strong>${data.total_dias}</strong></div>`;
+      html += `<div style="font-size: 13px;">Escopo: <strong>${escaparHtml(data.escopo_label || data.escopo || '-')}</strong></div>`;
       html += `<div style="font-size: 13px;">Colaboradores com lançamentos: <strong>${data.total_colaboradores_com_lancamento ?? Object.keys(data.por_colaborador || {}).length}</strong></div>`;
-      if (data.gestor_referencia) {
+      if (data.colaborador_referencia) {
+        html += `<div style="font-size: 13px;">Colaborador selecionado: <strong>${escaparHtml(data.colaborador_referencia)}</strong></div>`;
+      } else if (data.gestor_referencia) {
         html += `<div style="font-size: 13px;">Matrícula de referência: <strong>${escaparHtml(data.gestor_referencia)}</strong></div>`;
       }
       if (data.total_colaboradores_escopo !== null && typeof data.total_colaboradores_escopo !== 'undefined') {

@@ -1,6 +1,6 @@
 """Relatório de solicitações gerado diretamente pelo PostgreSQL.
 
-V52:
+V63:
 - conexão curta e exclusiva, sem disputar o pool SQLAlchemy das telas;
 - perfil e matrícula lidos da sessão, sem Smartsheet e sem busca por e-mail;
 - limite do PostgreSQL e limite rígido no processo para impedir timeout do Gunicorn;
@@ -100,9 +100,27 @@ def _normalizar_perfil(value: Any) -> str:
     return "USER"
 
 
+def _normalizar_escopo(value: Any, perfil: str) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "usuario": "colaborador",
+        "colaborador_selecionado": "colaborador",
+        "minha_equipe": "equipe",
+        "equipe_do_gestor": "equipe",
+        "gestor": "equipe_gestor",
+        "equipe_selecionada": "equipe_gestor",
+        "all": "todos",
+    }
+    raw = aliases.get(raw, raw)
+    if perfil in {"ADMIN", "DP"}:
+        return raw if raw in {"todos", "colaborador", "equipe_gestor"} else "todos"
+    return "colaborador" if raw == "colaborador" else "equipe"
+
+
 def _resultado_vazio(
     *, request_id: str, mes: Optional[int], ano: Optional[int], escopo: str,
     referencia: str, total_colaboradores_escopo: Optional[int],
+    escopo_label: str = "", colaborador_referencia: str = "",
 ) -> Dict[str, Any]:
     return {
         "ok": True,
@@ -114,7 +132,9 @@ def _resultado_vazio(
         "mes": mes,
         "ano": ano,
         "escopo": escopo,
+        "escopo_label": escopo_label,
         "gestor_referencia": referencia,
+        "colaborador_referencia": colaborador_referencia,
         "total_colaboradores_escopo": total_colaboradores_escopo,
         "total_colaboradores_com_lancamento": 0,
         "from_cache": False,
@@ -128,7 +148,7 @@ def _abrir_conexao():
     return psycopg2.connect(
         settings.database_url,
         connect_timeout=4,
-        application_name="ferias_app_relatorio_v52",
+        application_name="ferias_app_relatorio_v63",
         options=(
             "-c statement_timeout=6000 "
             "-c lock_timeout=1500 "
@@ -186,8 +206,14 @@ def _filtro_periodo(mes: Optional[int], ano: Optional[int]) -> tuple[str, list[A
     return "", []
 
 
-def _cache_path(matricula: str, perfil: str, mes: Optional[int], ano: Optional[int]) -> Path:
-    chave = f"{matricula}|{perfil}|{mes or 0}|{ano or 0}".encode("utf-8")
+def _cache_path(
+    matricula: str, perfil: str, mes: Optional[int], ano: Optional[int],
+    escopo: str = "", colaborador_matricula: str = "", gestor_matricula: str = "",
+) -> Path:
+    chave = (
+        f"{matricula}|{perfil}|{mes or 0}|{ano or 0}|{escopo}|"
+        f"{colaborador_matricula or ''}|{gestor_matricula or ''}"
+    ).encode("utf-8")
     return _CACHE_DIR / f"{hashlib.sha256(chave).hexdigest()}.json"
 
 
@@ -251,19 +277,39 @@ def gerar_relatorio_lancamento(
     mes: Optional[int] = None,
     ano: Optional[int] = None,
     perfil_sessao: Optional[str] = None,
+    escopo_solicitado: Optional[str] = None,
+    colaborador_matricula: Optional[str] = None,
+    gestor_matricula: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Gera o relatório por matrícula usando uma conexão PostgreSQL exclusiva."""
+    """Gera relatório por matrícula, com escopo explícito e validação no backend.
+
+    Regras:
+    - DP/ADMIN: todos, colaborador selecionado ou equipe de um gestor;
+    - gestor comum: sua equipe (incluindo o próprio gestor) ou um colaborador
+      pertencente ao seu escopo.
+    """
     request_id = uuid.uuid4().hex[:10]
     inicio_total = time.monotonic()
     matricula_usuario = str(usuario_matricula or "").strip().upper()
     perfil = _normalizar_perfil(perfil_sessao)
+    escopo = _normalizar_escopo(escopo_solicitado, perfil)
+    alvo_colaborador = str(colaborador_matricula or "").strip().upper()
+    alvo_gestor = str(gestor_matricula or "").strip().upper()
     etapa = "abrindo conexão exclusiva"
 
     if not matricula_usuario:
         raise ValueError("Matrícula do usuário não foi identificada na sessão. Saia e entre novamente no sistema.")
+    if escopo == "colaborador" and not alvo_colaborador:
+        raise ValueError("Selecione um colaborador para gerar este relatório.")
+    if escopo == "equipe_gestor" and not alvo_gestor:
+        raise ValueError("Selecione um gestor para gerar o relatório da equipe.")
 
     schema_sql = _quote_ident(_schema_name())
-    cache_path = _cache_path(matricula_usuario, perfil, mes, ano)
+    cache_path = _cache_path(
+        matricula_usuario, perfil, mes, ano, escopo,
+        colaborador_matricula=alvo_colaborador,
+        gestor_matricula=alvo_gestor,
+    )
     conn = None
     try:
         with _limite_rigido(6, etapa):
@@ -274,44 +320,112 @@ def gerar_relatorio_lancamento(
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             is_admin_dp = perfil in {"ADMIN", "DP"}
             total_colaboradores_escopo: Optional[int] = None
-            escopo = "todos" if is_admin_dp else "equipe_do_gestor"
+            escopo_sql = ""
+            escopo_params: list[Any] = []
+            referencia = ""
+            colaborador_referencia = ""
 
-            if not is_admin_dp:
+            if escopo == "todos":
+                if not is_admin_dp:
+                    raise RelatorioAcessoNegado("Acesso negado ao relatório de todos os colaboradores.")
+                escopo_label = "Todos os colaboradores"
+
+            elif escopo == "colaborador":
+                colaborador_referencia = alvo_colaborador
+                referencia = alvo_colaborador
+                escopo_label = "Colaborador selecionado"
+                if not is_admin_dp:
+                    etapa = "validando colaborador no escopo"
+                    _executar(
+                        cursor,
+                        f"""
+                        SELECT (
+                            %s = %s OR EXISTS (
+                                SELECT 1
+                                  FROM {schema_sql}.hierarquia_gestao h
+                                 WHERE h.colaborador_matricula = %s
+                                   AND (h.gestor_direto_matricula = %s OR h.gestor_superior_matricula = %s)
+                            )
+                        ) AS permitido
+                        """,
+                        (alvo_colaborador, matricula_usuario, alvo_colaborador, matricula_usuario, matricula_usuario),
+                        etapa,
+                    )
+                    permitido = bool((cursor.fetchone() or {}).get("permitido"))
+                    if not permitido:
+                        raise RelatorioAcessoNegado("O colaborador selecionado não pertence à sua equipe.")
+                else:
+                    etapa = "validando colaborador"
+                    _executar(
+                        cursor,
+                        f"SELECT EXISTS(SELECT 1 FROM {schema_sql}.colaboradores WHERE matricula = %s) AS existe",
+                        (alvo_colaborador,),
+                        etapa,
+                    )
+                    if not bool((cursor.fetchone() or {}).get("existe")):
+                        raise ValueError("Colaborador selecionado não encontrado.")
+                total_colaboradores_escopo = 1
+                escopo_sql = " AND s.colaborador_matricula = %s"
+                escopo_params.append(alvo_colaborador)
+
+            else:
+                gestor_ref = alvo_gestor if escopo == "equipe_gestor" else matricula_usuario
+                if escopo == "equipe_gestor" and not is_admin_dp:
+                    raise RelatorioAcessoNegado("Apenas DP/ADMIN podem consultar a equipe de outro gestor.")
+                referencia = gestor_ref
+                escopo_label = "Equipe do gestor (incluindo o gestor)"
+
+                etapa = "validando gestor"
+                _executar(
+                    cursor,
+                    f"SELECT EXISTS(SELECT 1 FROM {schema_sql}.colaboradores WHERE matricula = %s) AS existe",
+                    (gestor_ref,),
+                    etapa,
+                )
+                if not bool((cursor.fetchone() or {}).get("existe")):
+                    raise ValueError("Gestor selecionado não encontrado.")
+
                 etapa = "consultando hierarquia"
                 marco = time.monotonic()
                 _executar(
                     cursor,
                     f"""
-                    SELECT count(DISTINCT colaborador_matricula) AS total
-                      FROM {schema_sql}.hierarquia_gestao
-                     WHERE gestor_direto_matricula = %s
-                        OR gestor_superior_matricula = %s
+                    SELECT count(*) AS total
+                      FROM (
+                            SELECT %s::text AS matricula
+                            UNION
+                            SELECT h.colaborador_matricula
+                              FROM {schema_sql}.hierarquia_gestao h
+                             WHERE h.gestor_direto_matricula = %s
+                                OR h.gestor_superior_matricula = %s
+                      ) equipe
+                     WHERE matricula IS NOT NULL AND btrim(matricula) <> ''
                     """,
-                    (matricula_usuario, matricula_usuario),
+                    (gestor_ref, gestor_ref, gestor_ref),
                     etapa,
                 )
-                count_row = cursor.fetchone() or {}
-                total_colaboradores_escopo = int(count_row.get("total") or 0)
-                log.info("RELATORIO[%s] hierarquia em %.3fs (%d matrícula(s))", request_id, time.monotonic() - marco, total_colaboradores_escopo)
-                if total_colaboradores_escopo <= 0:
-                    raise RelatorioAcessoNegado("Acesso negado: nenhuma equipe foi vinculada à sua matrícula.")
+                total_colaboradores_escopo = int((cursor.fetchone() or {}).get("total") or 0)
+                log.info(
+                    "RELATORIO[%s] hierarquia em %.3fs (%d matrícula(s), gestor incluído)",
+                    request_id, time.monotonic() - marco, total_colaboradores_escopo,
+                )
+                escopo_sql = f"""
+                    AND (
+                        s.colaborador_matricula = %s
+                        OR EXISTS (
+                            SELECT 1
+                              FROM {schema_sql}.hierarquia_gestao h
+                             WHERE h.colaborador_matricula = s.colaborador_matricula
+                               AND (h.gestor_direto_matricula = %s OR h.gestor_superior_matricula = %s)
+                        )
+                    )
+                """
+                escopo_params.extend([gestor_ref, gestor_ref, gestor_ref])
 
             etapa = "consultando solicitações"
             marco = time.monotonic()
             periodo_sql, periodo_params = _filtro_periodo(mes, ano)
-            escopo_sql = ""
-            params: list[Any] = []
-            if not is_admin_dp:
-                escopo_sql = f"""
-                    AND EXISTS (
-                        SELECT 1
-                          FROM {schema_sql}.hierarquia_gestao h
-                         WHERE h.colaborador_matricula = s.colaborador_matricula
-                           AND (h.gestor_direto_matricula = %s OR h.gestor_superior_matricula = %s)
-                    )
-                """
-                params.extend([matricula_usuario, matricula_usuario])
-            params.extend(periodo_params)
+            params: list[Any] = list(escopo_params) + list(periodo_params)
 
             _executar(
                 cursor,
@@ -343,7 +457,8 @@ def gerar_relatorio_lancamento(
         if not rows:
             resultado = _resultado_vazio(
                 request_id=request_id, mes=mes, ano=ano, escopo=escopo,
-                referencia=matricula_usuario, total_colaboradores_escopo=total_colaboradores_escopo,
+                referencia=referencia, total_colaboradores_escopo=total_colaboradores_escopo,
+                escopo_label=escopo_label, colaborador_referencia=colaborador_referencia,
             )
             _gravar_cache(cache_path, resultado)
             log.info("RELATORIO[%s] concluído vazio em %.3fs", request_id, time.monotonic() - inicio_total)
@@ -394,7 +509,9 @@ def gerar_relatorio_lancamento(
             "mes": mes,
             "ano": ano,
             "escopo": escopo,
-            "gestor_referencia": matricula_usuario,
+            "escopo_label": escopo_label,
+            "gestor_referencia": referencia,
+            "colaborador_referencia": colaborador_referencia,
             "total_colaboradores_escopo": total_colaboradores_escopo,
             "total_colaboradores_com_lancamento": len(matriculas_com_lancamento),
             "from_cache": False,
@@ -435,22 +552,29 @@ def obter_relatorio_para_exportacao(
     mes: Optional[int] = None,
     ano: Optional[int] = None,
     perfil_sessao: Optional[str] = None,
+    escopo_solicitado: Optional[str] = None,
+    colaborador_matricula: Optional[str] = None,
+    gestor_matricula: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Obtém o mesmo relatório da tela, priorizando o cache já gerado.
-
-    O download costuma ocorrer logo após a visualização. Reutilizar o cache evita
-    uma segunda consulta ao PostgreSQL e reduz o risco de falha intermitente.
-    """
+    """Obtém o mesmo relatório da tela, priorizando o cache já gerado."""
     matricula = str(usuario_matricula or "").strip().upper()
     perfil = _normalizar_perfil(perfil_sessao)
+    escopo = _normalizar_escopo(escopo_solicitado, perfil)
+    colab = str(colaborador_matricula or "").strip().upper()
+    gestor = str(gestor_matricula or "").strip().upper()
     if not matricula:
         raise ValueError("Matrícula do usuário não foi identificada na sessão.")
 
-    cached = _ler_cache(_cache_path(matricula, perfil, mes, ano))
+    cached = _ler_cache(_cache_path(matricula, perfil, mes, ano, escopo, colab, gestor))
     if cached:
         cached["warning"] = "Relatório exportado a partir do resultado exibido na tela."
         return cached
-    return gerar_relatorio_lancamento(matricula, mes, ano, perfil_sessao=perfil)
+    return gerar_relatorio_lancamento(
+        matricula, mes, ano, perfil_sessao=perfil,
+        escopo_solicitado=escopo,
+        colaborador_matricula=colab,
+        gestor_matricula=gestor,
+    )
 
 
 def _parse_data_br(value: Any):
@@ -518,8 +642,8 @@ def criar_relatorio_lancamento_xlsx(relatorio: Dict[str, Any]) -> bytes:
 
     metadados = [
         ("Período", periodo),
-        ("Escopo", "Todos os colaboradores" if relatorio.get("escopo") == "todos" else "Equipe do gestor"),
-        ("Matrícula de referência", relatorio.get("gestor_referencia") or ""),
+        ("Escopo", relatorio.get("escopo_label") or ("Todos os colaboradores" if relatorio.get("escopo") == "todos" else "Equipe do gestor")),
+        ("Matrícula de referência", relatorio.get("colaborador_referencia") or relatorio.get("gestor_referencia") or ""),
         ("Gerado em", datetime.now().strftime("%d/%m/%Y %H:%M")),
     ]
     for row_idx, (label, value) in enumerate(metadados, start=3):

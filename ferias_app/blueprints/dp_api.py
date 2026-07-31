@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+from io import BytesIO
 import re
 import unicodedata
 
 import smartsheet
-from flask import jsonify, request, session
+from flask import jsonify, request, session, send_file
 
 from .base import bp
 from ..core import (
@@ -87,6 +88,57 @@ def api_dp_colaboradores():
     except Exception as e:
         print(f"ERRO em api_dp_colaboradores: {e}")
         return jsonify({"ok": False, "message": str(e)}), 500
+
+
+@bp.route("/api/dp/relatorio-saldos.xlsx")
+def api_dp_relatorio_saldos_xlsx():
+    """Exporta o relatório de saldos com o mesmo padrão visual do relatório de solicitações."""
+    user = session.get("user")
+    if not user or not _has_dp_access(user.get("email")):
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    status_filter = (request.args.get("status") or "").strip().upper()
+    busca = (request.args.get("busca") or "").strip()
+    try:
+        from ..services.postgres_compat_service import postgres_enabled
+        if not postgres_enabled():
+            return jsonify({"ok": False, "message": "O relatório XLSX de saldos requer PostgreSQL."}), 500
+
+        from ..services.postgres_service import listar_colaboradores_com_saldos
+        from ..services.saldos_report_service import criar_relatorio_saldos_xlsx
+
+        colaboradores = listar_colaboradores_com_saldos(status_filter or None)
+        if busca:
+            busca_norm = unicodedata.normalize("NFD", busca).encode("ascii", "ignore").decode("ascii").casefold()
+            # O autocomplete exibe "MATRÍCULA | NOME". A busca do relatório
+            # trabalha por tokens para aceitar esse rótulo e também pesquisas livres.
+            tokens = [token for token in re.split(r"[^a-z0-9@._-]+", busca_norm) if token]
+            filtrados = []
+            for item in colaboradores:
+                texto = " ".join(str(item.get(k) or "") for k in (
+                    "matricula", "MATRICULA", "MATRÍCULA", "nome_completo", "NOME COMPLETO",
+                    "email", "EMAIL DA EMPRESA", "cargo", "CARGO", "setor", "SETOR",
+                ))
+                texto_norm = unicodedata.normalize("NFD", texto).encode("ascii", "ignore").decode("ascii").casefold()
+                if all(token in texto_norm for token in tokens):
+                    filtrados.append(item)
+            colaboradores = filtrados
+
+        arquivo = criar_relatorio_saldos_xlsx(
+            colaboradores,
+            status_filtro=status_filter,
+            busca=busca,
+        )
+        data_ref = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        return send_file(
+            BytesIO(arquivo),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"relatorio_saldos_colaboradores_{data_ref}.xlsx",
+            max_age=0,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Erro ao gerar relatório de saldos: {e}"}), 500
 
 
 @bp.route("/api/dp/saldos/<path:identificador>")

@@ -78,6 +78,25 @@
                         </div>
                     </div>
     
+                    <section class="dp-relatorio-equipe">
+                        <div class="dp-relatorio-equipe-header">
+                            <div>
+                                <strong>Relatório por equipe do gestor</strong>
+                                <div class="muted">Usa o mês e o ano selecionados acima e inclui o próprio gestor no relatório.</div>
+                            </div>
+                        </div>
+                        <div class="dp-relatorio-equipe-controles">
+                            <div class="autocomplete-wrap dp-relatorio-gestor-campo">
+                                <input id="dp-relatorio-gestor-input" class="form-control" placeholder="🔍 Pesquise matrícula ou nome do gestor..." autocomplete="off" />
+                                <div id="dp-relatorio-gestor-sugestoes" class="autocomplete-menu" role="listbox"></div>
+                            </div>
+                            <input type="hidden" id="dp-relatorio-gestor-matricula" />
+                            <button type="button" id="dp-relatorio-gerar" class="btn btn-primary">Gerar relatório</button>
+                            <button type="button" id="dp-relatorio-baixar" class="btn btn-secondary" disabled>Baixar XLSX</button>
+                        </div>
+                        <div id="dp-relatorio-resultado" class="dp-relatorio-resultado"></div>
+                    </section>
+
                     <!-- LISTA DE FÉRIAS -->
                     <div id="ferias-lista" class="ferias-lista">
                         <p class="loading">⏳ Carregando férias...</p>
@@ -927,6 +946,17 @@
         .gestor-check-email{ text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .gestores-actions{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:12px; }
 
+        /* Relatório de equipe dentro da aba Férias */
+        .dp-relatorio-equipe{ margin:14px 0; padding:14px; border:1px solid rgba(148,163,184,.28); border-radius:14px; background:rgba(59,130,246,.05); }
+        .dp-relatorio-equipe-header{ display:flex; justify-content:space-between; gap:12px; margin-bottom:10px; }
+        .dp-relatorio-equipe-controles{ display:grid; grid-template-columns:minmax(240px,1fr) auto auto; gap:10px; align-items:start; }
+        .dp-relatorio-resultado{ margin-top:12px; overflow-x:auto; }
+        .dp-relatorio-tabela{ width:100%; border-collapse:collapse; font-size:12px; }
+        .dp-relatorio-tabela th,.dp-relatorio-tabela td{ padding:8px; border-bottom:1px solid rgba(148,163,184,.22); text-align:left; }
+        .dp-relatorio-tabela th{ background:rgba(59,130,246,.08); }
+        .relatorio-resumo-grid{ display:grid; grid-template-columns:repeat(4,minmax(140px,1fr)); gap:10px; margin-bottom:12px; }
+        .relatorio-resumo-texto{ margin-top:5px; font-weight:800; line-height:1.3; }
+
         /* Consulta de histórico no Painel DP */
         .ajustes-historico-consulta{ display:flex; align-items:flex-end; gap:12px; margin-top:12px; padding:12px; border:1px solid rgba(148,163,184,.20); border-radius:12px; background:rgba(148,163,184,.06); }
         .ajustes-historico-consulta-campo{ flex:1; min-width:240px; }
@@ -941,6 +971,8 @@
             .gestor-check-row{ grid-template-columns:auto minmax(0,1fr); }
             .gestor-check-email{ grid-column:2; text-align:left; }
             .ajustes-historico-consulta{ align-items:stretch; flex-direction:column; }
+            .dp-relatorio-equipe-controles{ grid-template-columns:1fr; }
+            .relatorio-resumo-grid{ grid-template-columns:1fr 1fr; }
         }
     
 </style>
@@ -951,15 +983,18 @@
                 <!-- COLUNA ESQUERDA: Lista -->
                 <div class="coluna-lista">
                     <div class="filtros">
-    					<input type="text" id="busca-colaboradores" class="form-control" placeholder="🔍 Buscar colaborador...">
-    					<div class="filtros-status">
+                        <div class="autocomplete-wrap">
+                            <input type="text" id="busca-colaboradores" class="form-control" placeholder="🔍 Digite matrícula, nome ou e-mail..." autocomplete="off">
+                            <div id="busca-colaboradores-sugestoes" class="autocomplete-menu" role="listbox"></div>
+                        </div>
+    						<div class="filtros-status">
     						<button class="btn-pill btn-status active" data-status="">Todos</button>
     						<button class="btn-pill btn-status" data-status="ATIVO">Ativo</button>
     						<button class="btn-pill btn-status" data-status="INATIVO">Inativo</button>
     					</div>
     				</div>
                     <div style="display:flex; justify-content:flex-end; margin:0 0 10px 0;">
-                        <button type="button" id="btn-exportar-saldos" class="btn btn-primary">Exportar relatório de saldos</button>
+                        <button type="button" id="btn-exportar-saldos" class="btn btn-primary">Baixar relatório de saldos (.xlsx)</button>
                     </div>
                     <div id="lista-colaboradores" class="colaboradores-lista">
                         <p class="loading">⏳ Carregando colaboradores...</p>
@@ -1153,6 +1188,10 @@ let feriasCache = [];
 let mesSelecionadoOffset = 0;
 let mesSelecionado = mesAtual;
 let anoSelecionado = anoAtual;
+let dpRelatorioGestores = [];
+let dpRelatorioUltimosParams = null;
+let dpRelatorioAutocompleteBound = false;
+let colaboradoresAutocompleteBound = false;
 
 // ===== FUNÇÕES AUXILIARES =====
 function nomeMes(mes) {
@@ -1659,6 +1698,7 @@ async function carregarColaboradores() {
         
         colaboradores = (data.colaboradores || []).sort((a, b) => ((a['NOME COMPLETO'] || a.nome || '').localeCompare((b['NOME COMPLETO'] || b.nome || ''), 'pt-BR', {sensitivity:'base'})));
         renderizarColaboradores();
+        setupColaboradoresAutocomplete();
     } catch (e) {
         console.error('Erro:', e);
         document.getElementById('lista-colaboradores').innerHTML = 
@@ -1771,6 +1811,223 @@ function aplicarFiltros() {
         
         card.style.display = (matchBusca && matchStatus) ? 'block' : 'none';
     });
+}
+
+
+function colabLabelBusca(colab) {
+    const matricula = (colab?.MATRICULA || colab?.['MATRÍCULA'] || colab?.matricula || '').toString().trim().toUpperCase();
+    const nome = (colab?.['NOME COMPLETO'] || colab?.nome_completo || colab?.nome || '').toString().trim();
+    const email = (colab?.['EMAIL DA EMPRESA'] || colab?.email || '').toString().trim();
+    return { matricula, nome, email, label: matricula ? `${matricula} | ${nome || matricula}` : nome };
+}
+
+function setupColaboradoresAutocomplete() {
+    const input = document.getElementById('busca-colaboradores');
+    const menu = document.getElementById('busca-colaboradores-sugestoes');
+    if (!input || !menu || colaboradoresAutocompleteBound) return;
+    colaboradoresAutocompleteBound = true;
+    let itens = [];
+    let ativo = -1;
+
+    const fechar = () => menu.classList.remove('show');
+    const selecionar = (colab) => {
+        const info = colabLabelBusca(colab);
+        input.value = info.label;
+        fechar();
+        aplicarFiltros();
+        const idx = colaboradores.indexOf(colab);
+        const card = document.querySelector(`.colaborador-card[data-idx="${idx}"]`);
+        if (idx >= 0 && card) {
+            mostrarColaboradorPorIndice(idx, card);
+            card.scrollIntoView({behavior:'smooth', block:'nearest'});
+        }
+    };
+    const render = () => {
+        const q = aNorm(input.value);
+        const statusAtivo = document.querySelector('.btn-status.active')?.dataset.status?.toUpperCase() || '';
+        itens = (colaboradores || []).filter(c => {
+            const info = colabLabelBusca(c);
+            const status = (c.STATUS || c.Status || c.status || '').toString().trim().toUpperCase();
+            if (statusAtivo && status !== statusAtivo) return false;
+            return !q || aNorm(`${info.label} ${info.email}`).includes(q);
+        }).slice(0, 40);
+        ativo = -1;
+        if (!itens.length) { menu.innerHTML=''; fechar(); return; }
+        menu.innerHTML = itens.map((c, idx) => {
+            const info = colabLabelBusca(c);
+            return `<button type="button" class="autocomplete-option" data-cidx="${idx}" role="option">${escapeHtml(info.label)}${info.email ? `<small>${escapeHtml(info.email)}</small>` : ''}</button>`;
+        }).join('');
+        menu.classList.add('show');
+        menu.querySelectorAll('[data-cidx]').forEach(btn => btn.addEventListener('mousedown', ev => {
+            ev.preventDefault();
+            selecionar(itens[Number(btn.dataset.cidx)]);
+        }));
+    };
+
+    input.addEventListener('focus', render);
+    input.addEventListener('input', () => { aplicarFiltros(); render(); });
+    input.addEventListener('blur', () => setTimeout(fechar, 160));
+    input.addEventListener('keydown', ev => {
+        const opts = Array.from(menu.querySelectorAll('.autocomplete-option'));
+        if (ev.key === 'Escape') { fechar(); return; }
+        if (!opts.length || !menu.classList.contains('show')) return;
+        if (ev.key === 'ArrowDown') { ev.preventDefault(); ativo=Math.min(ativo+1, opts.length-1); }
+        else if (ev.key === 'ArrowUp') { ev.preventDefault(); ativo=Math.max(ativo-1, 0); }
+        else if (ev.key === 'Enter') { ev.preventDefault(); selecionar(itens[Math.max(ativo,0)]); return; }
+        else return;
+        opts.forEach((o,i)=>o.classList.toggle('active', i===ativo));
+        opts[ativo]?.scrollIntoView({block:'nearest'});
+    });
+}
+
+function resetDpRelatorioEquipe(message='') {
+    dpRelatorioUltimosParams = null;
+    const btn = document.getElementById('dp-relatorio-baixar');
+    const box = document.getElementById('dp-relatorio-resultado');
+    if (btn) btn.disabled = true;
+    if (box) box.innerHTML = message ? `<div class="muted">${escapeHtml(message)}</div>` : '';
+}
+
+function dpRelatorioGestorLabel(item) {
+    const mat = (item?.matricula || '').toString().trim().toUpperCase();
+    const nome = (item?.nome || '').toString().trim();
+    const email = (item?.email || '').toString().trim();
+    return {mat, nome, email, label: mat ? `${mat} | ${nome || mat}` : nome};
+}
+
+async function carregarGestoresRelatorioDp() {
+    if (dpRelatorioGestores.length) return dpRelatorioGestores;
+    const resp = await fetch('/api/dp/gestores/mapa', {cache:'no-store'});
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) throw new Error(data.message || 'Não foi possível carregar os gestores.');
+    const colabPorMat = {};
+    (data.colaboradores || []).forEach(c => {
+        const mat=(c.matricula || '').toString().trim().toUpperCase();
+        if (mat) colabPorMat[mat]=c;
+    });
+    const mapa = new Map();
+    [...(data.gestores_diretos || []), ...(data.gestores_superiores || [])].forEach(g => {
+        const mat=(g.matricula || '').toString().trim().toUpperCase();
+        if (!mat || ['DP','GESTOR'].includes(mat) || !colabPorMat[mat]) return;
+        const atual = mapa.get(mat) || {...colabPorMat[mat], subordinados:[], total:0};
+        const subs = new Set([...(atual.subordinados || []).map(s => (s.matricula || '').toString().toUpperCase()), ...(g.subordinados || []).map(s => (s.matricula || '').toString().toUpperCase())]);
+        atual.subordinados = Array.from(subs).filter(Boolean).map(m => colabPorMat[m] || {matricula:m,nome:m});
+        atual.total = atual.subordinados.length;
+        mapa.set(mat, atual);
+    });
+    dpRelatorioGestores = Array.from(mapa.values()).sort((a,b) => dpRelatorioGestorLabel(a).label.localeCompare(dpRelatorioGestorLabel(b).label, 'pt-BR', {sensitivity:'base'}));
+    return dpRelatorioGestores;
+}
+
+function setupDpRelatorioGestorAutocomplete() {
+    const input = document.getElementById('dp-relatorio-gestor-input');
+    const hidden = document.getElementById('dp-relatorio-gestor-matricula');
+    const menu = document.getElementById('dp-relatorio-gestor-sugestoes');
+    if (!input || !hidden || !menu || dpRelatorioAutocompleteBound) return;
+    dpRelatorioAutocompleteBound = true;
+    let itens=[];
+    let ativo=-1;
+    const fechar=()=>menu.classList.remove('show');
+    const selecionar=g=>{
+        const info=dpRelatorioGestorLabel(g);
+        hidden.value=info.mat;
+        input.value=info.label;
+        fechar();
+        resetDpRelatorioEquipe('Clique em “Gerar relatório” para consultar a equipe selecionada.');
+    };
+    const render=async()=>{
+        try {
+            const gestores=await carregarGestoresRelatorioDp();
+            const q=aNorm(input.value);
+            itens=gestores.filter(g=>{
+                const info=dpRelatorioGestorLabel(g);
+                return !q || aNorm(`${info.label} ${info.email}`).includes(q);
+            }).slice(0,40);
+            ativo=-1;
+            if(!itens.length){menu.innerHTML='';fechar();return;}
+            menu.innerHTML=itens.map((g,idx)=>{
+                const info=dpRelatorioGestorLabel(g);
+                const total=Number(g.total || 0);
+                return `<button type="button" class="autocomplete-option" data-gidx="${idx}" role="option">${escapeHtml(info.label)}<small>${escapeHtml(info.email || 'Sem e-mail')} • ${total} subordinado(s)</small></button>`;
+            }).join('');
+            menu.classList.add('show');
+            menu.querySelectorAll('[data-gidx]').forEach(btn=>btn.addEventListener('mousedown',ev=>{ev.preventDefault();selecionar(itens[Number(btn.dataset.gidx)]);}));
+        } catch(e) {
+            menu.innerHTML=`<div class="autocomplete-option">${escapeHtml(e.message || 'Erro ao carregar gestores')}</div>`;
+            menu.classList.add('show');
+        }
+    };
+    input.addEventListener('focus',render);
+    input.addEventListener('input',()=>{hidden.value='';resetDpRelatorioEquipe();render();});
+    input.addEventListener('blur',()=>setTimeout(fechar,160));
+    input.addEventListener('keydown',ev=>{
+        const opts=Array.from(menu.querySelectorAll('.autocomplete-option[data-gidx]'));
+        if(ev.key==='Escape'){fechar();return;}
+        if(!opts.length||!menu.classList.contains('show'))return;
+        if(ev.key==='ArrowDown'){ev.preventDefault();ativo=Math.min(ativo+1,opts.length-1);}
+        else if(ev.key==='ArrowUp'){ev.preventDefault();ativo=Math.max(ativo-1,0);}
+        else if(ev.key==='Enter'){ev.preventDefault();selecionar(itens[Math.max(ativo,0)]);return;}
+        else return;
+        opts.forEach((o,i)=>o.classList.toggle('active',i===ativo));
+        opts[ativo]?.scrollIntoView({block:'nearest'});
+    });
+}
+
+function renderDpRelatorioEquipe(data) {
+    const box=document.getElementById('dp-relatorio-resultado');
+    if(!box)return;
+    const grupos=Object.values(data.por_colaborador || {});
+    let linhas='';
+    grupos.forEach(g=>{
+        (g.solicitacoes || []).forEach(s=>{
+            linhas += `<tr><td>${escapeHtml(g.matricula || '')}</td><td>${escapeHtml(g.nome || '')}</td><td>${escapeHtml(s.inicio || '')}</td><td>${escapeHtml(s.fim || '')}</td><td>${escapeHtml(String(s.dias ?? ''))}</td><td>${escapeHtml(s.status || '')}</td><td>${escapeHtml(s.solicitacao || '')}</td></tr>`;
+        });
+    });
+    box.innerHTML = `
+      <div class="relatorio-resumo-grid">
+        <div class="saldo-box"><div class="saldo-lbl">Escopo</div><div class="relatorio-resumo-texto">${escapeHtml(data.escopo_label || 'Equipe do gestor')}</div></div>
+        <div class="saldo-box"><div class="saldo-lbl">Colaboradores no escopo</div><div class="saldo-val">${Number(data.total_colaboradores_escopo || 0)}</div></div>
+        <div class="saldo-box"><div class="saldo-lbl">Solicitações</div><div class="saldo-val">${Number(data.total || 0)}</div></div>
+        <div class="saldo-box"><div class="saldo-lbl">Dias lançados</div><div class="saldo-val">${Number(data.total_dias || 0).toFixed(1)}</div></div>
+      </div>
+      ${linhas ? `<table class="dp-relatorio-tabela"><thead><tr><th>Matrícula</th><th>Colaborador</th><th>Início</th><th>Fim</th><th>Dias</th><th>Status</th><th>Solicitação</th></tr></thead><tbody>${linhas}</tbody></table>` : '<p class="empty-state">Nenhuma solicitação encontrada no período selecionado.</p>'}
+    `;
+}
+
+async function gerarDpRelatorioEquipe() {
+    const mat=(document.getElementById('dp-relatorio-gestor-matricula')?.value || '').trim().toUpperCase();
+    const box=document.getElementById('dp-relatorio-resultado');
+    const btnGerar=document.getElementById('dp-relatorio-gerar');
+    const btnBaixar=document.getElementById('dp-relatorio-baixar');
+    if(!mat){ if(box)box.innerHTML='<div class="muted">Selecione um gestor na lista de sugestões.</div>'; return; }
+    const params=new URLSearchParams({mes:String(mesSelecionado),ano:String(anoSelecionado),escopo:'equipe_gestor',gestor_matricula:mat});
+    try{
+        if(btnGerar)btnGerar.disabled=true;
+        if(btnBaixar)btnBaixar.disabled=true;
+        if(box)box.innerHTML='<p class="loading">⏳ Gerando relatório da equipe...</p>';
+        const resp=await fetch(`/api/relatorio-lancamento?${params.toString()}`,{cache:'no-store'});
+        const data=await resp.json().catch(()=>({}));
+        if(!resp.ok||!data.ok)throw new Error(data.message || `Erro HTTP ${resp.status}`);
+        dpRelatorioUltimosParams=params;
+        renderDpRelatorioEquipe(data);
+        if(btnBaixar)btnBaixar.disabled=false;
+    }catch(e){
+        dpRelatorioUltimosParams=null;
+        if(box)box.innerHTML=`<div class="muted">${escapeHtml(e.message || 'Erro ao gerar relatório.')}</div>`;
+    }finally{ if(btnGerar)btnGerar.disabled=false; }
+}
+
+function baixarDpRelatorioEquipe() {
+    if(!dpRelatorioUltimosParams)return;
+    window.location.href=`/api/relatorio-lancamento.xlsx?${dpRelatorioUltimosParams.toString()}`;
+}
+
+function initDpRelatorioEquipe() {
+    setupDpRelatorioGestorAutocomplete();
+    const gerar=document.getElementById('dp-relatorio-gerar');
+    const baixar=document.getElementById('dp-relatorio-baixar');
+    if(gerar && !gerar.dataset.bound){gerar.addEventListener('click',gerarDpRelatorioEquipe);gerar.dataset.bound='1';}
+    if(baixar && !baixar.dataset.bound){baixar.addEventListener('click',baixarDpRelatorioEquipe);baixar.dataset.bound='1';}
 }
 
 // ===== FÉRIAS =====
@@ -2477,19 +2734,12 @@ async function initAjustesTab(){
     
 // ===== EVENT LISTENERS =====
 function exportarRelatorioSaldos(){
-  const cols = ['Matrícula','Nome','Email','Cargo','Setor','Unidade','Empresa','Status','Saldo Regular','Saldo Certariana','Saldo Total'];
-  const rows = (colaboradores || []).map(c => [
-    c.matricula || c.MATRICULA || c['MATRÍCULA'] || '', c.nome_completo || c['NOME COMPLETO'] || c.nome || '',
-    c.email || c['EMAIL DA EMPRESA'] || '', c.cargo || c.CARGO || '', c.setor || c.SETOR || '',
-    c.unidade || c.UNIDADE || '', c.empresa || c.EMPRESA || '', c.status || c.STATUS || '',
-    Number(c.saldo_regular || 0), Number(c.saldo_premium || 0), Number(c.saldo_total || 0)
-  ]);
-  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const csv = '\ufeff' + [cols, ...rows].map(r => r.map(esc).join(';')).join('\r\n');
-  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = `relatorio_saldos_${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  const status = document.querySelector('.btn-status.active')?.dataset.status || '';
+  const busca = document.getElementById('busca-colaboradores')?.value || '';
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (busca.trim()) params.set('busca', busca.trim());
+  window.location.href = `/api/dp/relatorio-saldos.xlsx?${params.toString()}`;
 }
 
 document.getElementById('btn-exportar-saldos')?.addEventListener('click', exportarRelatorioSaldos);
@@ -2520,8 +2770,9 @@ document.querySelectorAll('.btn-mes').forEach(btn => {
         document.getElementById('selector-mes').value = mesSelecionado;
         document.getElementById('selector-ano').value = anoSelecionado;
         
+        resetDpRelatorioEquipe('O período foi alterado. Gere novamente o relatório da equipe.');
         bindFeriasListClick();
-    carregarFeriasAtivas();
+        carregarFeriasAtivas();
     });
 });
 
@@ -2535,7 +2786,7 @@ document.getElementById('btn-buscar-ferias')?.addEventListener('click', () => {
     anoSelecionado = parseInt(document.getElementById('selector-ano').value);
     
     document.querySelectorAll('.btn-mes').forEach(b => b.classList.remove('active'));
-    
+    resetDpRelatorioEquipe('O período foi alterado. Gere novamente o relatório da equipe.');
     bindFeriasListClick();
     carregarFeriasAtivas();
 });
@@ -2558,9 +2809,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         } else if (btn.dataset.tab === 'ferias') {
             document.getElementById('selector-mes').value = mesAtual;
             document.getElementById('selector-ano').value = anoAtual;
-            document.querySelector('.btn-mes[data-mes-offset="0"]').classList.add('active');
+            document.querySelectorAll('.btn-mes').forEach(b => b.classList.remove('active'));
+            document.querySelector('.btn-mes[data-mes-offset="0"]')?.classList.add('active');
+            mesSelecionado = mesAtual;
+            anoSelecionado = anoAtual;
+            initDpRelatorioEquipe();
             bindFeriasListClick();
-    carregarFeriasAtivas();
+            carregarFeriasAtivas();
         } else if (btn.dataset.tab === 'ajustes') {
     initAjustesTab();
 }        
@@ -2571,6 +2826,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('selector-mes').value = mesAtual;
     document.getElementById('selector-ano').value = anoAtual;
+    initDpRelatorioEquipe();
     bindFeriasListClick();
     carregarFeriasAtivas();
 });
