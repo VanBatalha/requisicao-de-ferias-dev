@@ -103,7 +103,16 @@ def ferias():
     if not gestor_email:
         return redirect(url_for("ferias.logout"))
 
-    role = get_user_role(gestor_email)
+    # V64: ADMIN e DP têm acesso integral à tela de Solicitações.
+    # Prioriza o perfil gravado no login para evitar que uma consulta de
+    # permissão momentaneamente inconsistente reduza o escopo para gestor.
+    session_user_type = str(user.get("user_type") or "").strip().upper()
+    if session_user_type in {"ADMIN", "ADMINISTRADOR"}:
+        role = "admin"
+    elif session_user_type in {"DP", "RH"}:
+        role = "DP"
+    else:
+        role = get_user_role(gestor_email)
     is_dp_or_admin = role in ("DP", "admin")
 
     simulated_gestor = get_simulated_gestor()
@@ -146,8 +155,8 @@ def ferias():
 
     if postgres_enabled():
         # Consulta leve e filtrada no backend. A matrícula é a chave operacional.
-        # ADMIN vê todos; DP/Gestor respeitam colaborador_complemento.gestor_direto
-        # e gestor_superior. Não há filtragem por e-mail nesta tela.
+        # ADMIN e DP veem todos os colaboradores ativos. Somente gestores comuns
+        # ficam limitados à própria equipe. Não há filtragem por e-mail nesta tela.
         escopo_role = "ADMIN" if role == "admin" else ("DP" if role == "DP" else "GESTOR")
         opcoes_base = listar_colaboradores_opcoes_ferias_postgres(gestor_email, escopo_role)
         if not is_dp_or_admin and not opcoes_base:

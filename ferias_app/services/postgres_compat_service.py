@@ -743,9 +743,7 @@ def listar_colaboradores_opcoes_ferias_postgres(usuario_email: str, role: str | 
     """Lista leve de colaboradores ATIVOS dentro do escopo da tela /ferias.
 
     Regra operacional atual:
-    - ADMIN vê todos os colaboradores ativos;
-    - DP vê colaboradores marcados com gestor_direto/gestor_superior = DP e
-      também vínculos diretos à sua matrícula, quando existirem;
+    - ADMIN e DP veem todos os colaboradores ativos;
     - Gestor vê colaboradores cuja matrícula aparece em gestor_direto ou
       gestor_superior. Quando gestor_superior = GESTOR, o responsável é o
       gestor_direto.
@@ -779,13 +777,10 @@ def listar_colaboradores_opcoes_ferias_postgres(usuario_email: str, role: str | 
     query = _active_query_filter(query)
     query = query.filter(or_(ColaboradorComplemento.ativo_no_app.is_(None), ColaboradorComplemento.ativo_no_app.is_(True)))
 
-    if role_norm in {'ADMIN', 'ADMINISTRADOR'}:
+    if role_norm in {'ADMIN', 'ADMINISTRADOR', 'DP', 'RH'}:
+        # V64: perfis administrativos não dependem da hierarquia para operar
+        # a tela de Solicitações. O filtro de equipe aplica-se apenas a gestores.
         pass
-    elif role_norm in {'DP', 'RH'}:
-        filtros = [gd == 'DP', gs == 'DP']
-        if usuario_matricula:
-            filtros.extend([gd == usuario_matricula, gs == usuario_matricula])
-        query = query.filter(or_(*filtros))
     else:
         if not usuario_matricula:
             return []

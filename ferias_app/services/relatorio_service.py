@@ -148,7 +148,7 @@ def _abrir_conexao():
     return psycopg2.connect(
         settings.database_url,
         connect_timeout=4,
-        application_name="ferias_app_relatorio_v63",
+        application_name="ferias_app_relatorio_v64",
         options=(
             "-c statement_timeout=6000 "
             "-c lock_timeout=1500 "
