@@ -18,7 +18,7 @@ from .postgres_service import get_session
 
 log = get_logger(__name__)
 
-_SYNC_NAME = "ciclos_saldos_v58"
+_SYNC_NAME = "ciclos_saldos_v59"
 _ADVISORY_LOCK_KEY = 5700729
 _LOCAL_CHECK_INTERVAL_SECONDS = 1800
 _local_lock = threading.Lock()
@@ -525,7 +525,7 @@ def ensure_due_periods(
             "premium_created": int(counters["premium_created"]),
             "future_rows_removed": int(counters["regular_deleted"] + counters["premium_deleted"]),
             "rule": "saldo_periodo_only; create_for_active_only; preserve_history_after_inactivation; regular_12m_completed; premium_5y_plus_1d_then_30m; no_future_cycles",
-            "version": "v58",
+            "version": "v61",
         }
         if not state:
             state = SyncState(sync_name=_SYNC_NAME)
@@ -539,7 +539,7 @@ def ensure_due_periods(
         state.updated_at = now
         session.add(Auditoria(
             actor_email=actor_email,
-            action="DAILY_PERIOD_ACCRUAL_V58",
+            action="DAILY_PERIOD_ACCRUAL_V59",
             entity_type="saldo_periodo",
             entity_id=0,
             before_data=None,
@@ -569,9 +569,9 @@ def _daily_worker() -> None:
             if last_business_date and last_business_date >= today:
                 return
         result = ensure_due_periods(today, force=False, wait_for_lock=False)
-        log.info("Verificação diária de períodos V58: %s", result)
+        log.info("Verificação diária de períodos V59: %s", result)
     except Exception:
-        log.exception("Falha na verificação diária de períodos V58")
+        log.exception("Falha na verificação diária de períodos V59")
     finally:
         with _local_lock:
             _thread_running = False
@@ -586,4 +586,4 @@ def trigger_daily_check_async() -> None:
             return
         _last_local_check = now
         _thread_running = True
-    threading.Thread(target=_daily_worker, name="period-accrual-v58", daemon=True).start()
+    threading.Thread(target=_daily_worker, name="period-accrual-v59", daemon=True).start()
