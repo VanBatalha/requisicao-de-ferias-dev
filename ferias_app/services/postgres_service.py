@@ -421,7 +421,6 @@ def listar_colaboradores_com_saldos(status_filter: Optional[str] = None) -> List
                 )
                 .filter(
                     func.upper(SaldoPeriodoNovo.colaborador_matricula).in_(mats),
-                    SaldoPeriodoNovo.is_atual.is_(True),
                 )
                 .group_by(SaldoPeriodoNovo.colaborador_matricula, SaldoPeriodoNovo.tipo_saldo)
                 .all()
@@ -503,7 +502,6 @@ def get_saldos_colaborador(identificador: str) -> Dict[str, Any]:
             session.query(SaldoPeriodoNovo)
             .filter(
                 func.upper(SaldoPeriodoNovo.colaborador_matricula) == str(colab.matricula).upper(),
-                SaldoPeriodoNovo.is_atual.is_(True),
             )
             .all()
         )
@@ -586,21 +584,20 @@ def _parse_periodo_alloc_v29(value: Any) -> List[Dict[str, Any]]:
 
 
 def _saldo_periodo_por_numero_v29(session, colab: Colaborador, tipo_saldo: str, numero: int):
-    """Movimentacoes operacionais sempre atingem o saldo vigente.
+    """Retorna o período exato para REGULAR e o vigente para PREMIUM.
 
-    O numero antigo continua no historico da solicitacao, mas uma alteracao ou
-    cancelamento nao pode voltar a deixar saldo em P encerrado.
+    Desde a V65, férias regulares podem manter saldo remanescente em mais de
+    um período adquirido. O mapa ``P<n>:dias`` precisa atingir a linha real
+    de origem. Premium continua usando somente o ciclo vigente.
     """
-    return (
-        session.query(SaldoPeriodoNovo)
-        .filter(
-            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-            SaldoPeriodoNovo.tipo_saldo == (tipo_saldo or 'REGULAR').upper(),
-            SaldoPeriodoNovo.is_atual.is_(True),
-        )
-        .order_by(SaldoPeriodoNovo.periodo_numero.desc())
-        .first()
+    tipo = (tipo_saldo or 'REGULAR').upper()
+    query = session.query(SaldoPeriodoNovo).filter(
+        SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+        SaldoPeriodoNovo.tipo_saldo == tipo,
     )
+    if tipo == 'PREMIUM':
+        return query.filter(SaldoPeriodoNovo.is_atual.is_(True)).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
+    return query.filter(SaldoPeriodoNovo.periodo_numero == int(numero)).first()
 
 
 def _mover_saldo_status_v29(session, colab: Colaborador, solicitacao: Solicitacao, old_status: str, new_status: str):
@@ -714,16 +711,13 @@ def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias:
     restante = _to_int_days(dias)
     if restante <= 0:
         return []
-    saldos = (
-        session.query(SaldoPeriodoNovo)
-        .filter(
-            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-            SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
-            SaldoPeriodoNovo.is_atual.is_(True),
-        )
-        .order_by(SaldoPeriodoNovo.periodo_numero.asc())
-        .all()
+    query_saldos = session.query(SaldoPeriodoNovo).filter(
+        SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+        SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
     )
+    if saldo_tipo == 'PREMIUM':
+        query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
+    saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
     movimentos = []
     for saldo in saldos:
         disponivel = float(saldo.saldo_disponivel or 0)
@@ -762,16 +756,13 @@ def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: in
         movimentos.append({"saldo_id": saldo.id, "periodo_numero": saldo.periodo_numero, "dias": dias})
     else:
         restante = abs(dias)
-        saldos = (
-            session.query(SaldoPeriodoNovo)
-            .filter(
-                SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-                SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
-                SaldoPeriodoNovo.is_atual.is_(True),
-            )
-            .order_by(SaldoPeriodoNovo.periodo_numero.asc())
-            .all()
+        query_saldos = session.query(SaldoPeriodoNovo).filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
         )
+        if saldo_tipo == 'PREMIUM':
+            query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
+        saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
         for saldo in saldos:
             disponivel = float(saldo.saldo_disponivel or 0)
             if disponivel <= 0:

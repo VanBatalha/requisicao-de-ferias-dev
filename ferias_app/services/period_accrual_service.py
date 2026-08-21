@@ -268,6 +268,13 @@ def _clean_invalid_rows(
 
 
 def _ensure_regular_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> dict[str, int]:
+    """Mantém todos os ciclos REGULAR adquiridos e preserva saldos remanescentes.
+
+    Desde a V65, saldo regular pode existir em mais de um período adquirido
+    (por exemplo, 30 dias em P8 + 30 dias em P9). A rotina diária não consolida
+    nem zera períodos históricos. Ela apenas remove ciclos ainda não adquiridos,
+    cria linhas ausentes e marca o ciclo mais recente como ``is_atual``.
+    """
     valid_numbers = {cycle.numero for cycle in cycles}
     rows, deleted = _clean_invalid_rows(session, colab, "REGULAR", valid_numbers)
     if not cycles:
@@ -275,87 +282,46 @@ def _ensure_regular_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> 
 
     by_number = {int(row.periodo_numero): row for row in rows}
     current_cycle = cycles[-1]
-    current_row = by_number.get(current_cycle.numero)
-    previous_current = next((row for row in sorted(rows, key=lambda item: (bool(item.is_atual), int(item.periodo_numero or 0), int(item.id or 0)), reverse=True) if row.is_atual), None)
-    previous_state = None
-    if previous_current is not None:
-        previous_state = (
-            max(0.0, _as_float(previous_current.saldo_disponivel)),
-            max(0.0, _as_float(previous_current.saldo_reservado)),
-        )
-    created = zeroed = rolled = 0
-
-    # Primeiro desmarca/zera o histórico para não existir mais de uma linha vigente.
-    for row in rows:
-        if row is not current_row and _zero_historical(row):
-            zeroed += 1
-
-    if current_row is None:
-        if previous_state is not None:
-            previous_available, previous_reserved = previous_state
-            initial = previous_available + previous_reserved + current_cycle.base
-            used = 0.0
-            reserved = previous_reserved
-            rolled += 1
-        else:
-            initial = current_cycle.base
-            used = 0.0
-            reserved = 0.0
-        current_row = _create_balance_row(
-            session,
-            colab,
-            current_cycle,
-            initial=initial,
-            used=used,
-            reserved=reserved,
-            is_current=True,
-        )
-        by_number[current_cycle.numero] = current_row
-        created += 1
-    else:
-        # Uma linha vigente completamente zerada é vestígio da estrutura antiga.
-        if not any(abs(_as_float(value)) > 0.0001 for value in (
-            current_row.saldo_inicial,
-            current_row.saldo_utilizado,
-            current_row.saldo_reservado,
-            current_row.saldo_disponivel,
-        )):
-            current_row.saldo_inicial = current_cycle.base
-            current_row.saldo_utilizado = 0
-            current_row.saldo_reservado = 0
-            current_row.saldo_disponivel = current_cycle.base
-        current_row.is_atual = True
-
+    created = 0
     now = dt.datetime.utcnow()
+
+    # Cria primeiro todas as linhas adquiridas ainda ausentes. Somente o ciclo
+    # que acabou de se tornar vigente recebe os 30 dias legais; históricos
+    # ausentes são criados zerados para preservar a sequência P1..Pn.
     for cycle in cycles:
         row = by_number.get(cycle.numero)
         if row is None:
+            is_current = cycle.numero == current_cycle.numero
             row = _create_balance_row(
                 session,
                 colab,
                 cycle,
-                initial=0,
+                initial=cycle.base if is_current else 0,
                 used=0,
                 reserved=0,
-                is_current=False,
+                is_current=is_current,
             )
             by_number[cycle.numero] = row
             created += 1
+
         row.colaborador_id = colab.id
         row.colaborador_matricula = str(colab.matricula).strip().upper()
         row.tipo_saldo = "REGULAR"
         row.data_inicio = cycle.data_inicio
         row.data_fim = cycle.data_fim
-        if cycle.numero == current_cycle.numero:
-            row.is_atual = True
-            row.saldo_disponivel = max(0.0, _as_float(row.saldo_inicial) - _as_float(row.saldo_utilizado) - _as_float(row.saldo_reservado))
-        else:
-            _zero_historical(row)
+        row.is_atual = cycle.numero == current_cycle.numero
+        # Não recalcula direito/usado/reservado de linhas já existentes: esses
+        # campos refletem o saldo reconciliado e podem permanecer em P anteriores.
+        row.saldo_disponivel = max(
+            0.0,
+            _as_float(row.saldo_inicial)
+            - _as_float(row.saldo_utilizado)
+            - _as_float(row.saldo_reservado),
+        )
         row.ultima_alteracao = row.ultima_alteracao or now
         row.updated_at = now
 
-    return {"created": created, "deleted": deleted, "zeroed": zeroed, "rolled": rolled}
-
+    return {"created": created, "deleted": deleted, "zeroed": 0, "rolled": 0}
 
 def _ensure_premium_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> dict[str, int]:
     valid_numbers = {cycle.numero for cycle in cycles}
@@ -402,23 +368,9 @@ def _ensure_premium_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> 
         created += 1
         recalculated += 1
     else:
-        if not any(abs(_as_float(value)) > 0.0001 for value in (
-            current_row.saldo_inicial,
-            current_row.saldo_utilizado,
-            current_row.saldo_reservado,
-            current_row.saldo_disponivel,
-        )):
-            used, reserved, adjustments = _request_state_for_premium(
-                session,
-                str(colab.matricula).strip().upper(),
-                current_cycle,
-            )
-            initial = max(current_cycle.base + adjustments, used + reserved, 0.0)
-            current_row.saldo_inicial = initial
-            current_row.saldo_utilizado = used
-            current_row.saldo_reservado = reserved
-            current_row.saldo_disponivel = max(0.0, initial - used - reserved)
-            recalculated += 1
+        # Uma linha Premium já existente é considerada fonte autoritativa do
+        # saldo reconciliado, inclusive quando estiver zerada. O crédito-base
+        # só nasce quando o novo ciclo ainda não possui linha no banco.
         current_row.is_atual = True
 
     now = dt.datetime.utcnow()

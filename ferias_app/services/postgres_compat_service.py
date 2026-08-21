@@ -504,16 +504,17 @@ def get_resumo_ferias_postgres(email: str) -> Dict[str, Any]:
         }
     reg_periodos = _saldos_por_periodo(colab, 'REGULAR')
     prem_periodos = _saldos_por_periodo(colab, 'PREMIUM')
-    def totals(periodos):
-        vigentes = [p for p in periodos if p.get('atual')]
-        base = vigentes or []
+    def totals(periodos, tipo):
+        # REGULAR pode manter saldo em vários ciclos adquiridos. PREMIUM continua
+        # restrito ao ciclo vigente por causa da regra de expiração.
+        base = periodos if tipo == 'REGULAR' else [p for p in periodos if p.get('atual')]
         direito = sum(int(p.get('direito') or 0) for p in base)
         usados = sum(int(p.get('usados') or 0) for p in base)
         reservados = sum(int(p.get('reservados') or 0) for p in base)
         saldo = sum(int(p.get('saldo') or 0) for p in base)
         return direito, usados, reservados, saldo
-    rd, ru, rr, rs = totals(reg_periodos)
-    pd, pu, pr, ps = totals(prem_periodos)
+    rd, ru, rr, rs = totals(reg_periodos, 'REGULAR')
+    pd, pu, pr, ps = totals(prem_periodos, 'PREMIUM')
     periodo_atual = next((p for p in reg_periodos if p.get('atual')), None)
     try:
         session = get_db_session()
@@ -856,13 +857,13 @@ def get_resumo_ferias_por_matricula_postgres(matricula: str) -> Dict[str, Any]:
             'tipo_saldo': tipo,
         })
 
-    def totals(periodos: List[Dict[str, Any]]):
-        vigentes = [p for p in periodos if p.get('atual')]
+    def totals(periodos: List[Dict[str, Any]], tipo: str):
+        base = periodos if tipo == 'REGULAR' else [p for p in periodos if p.get('atual')]
         return {
-            'direito': sum(_num_int(p.get('direito')) for p in vigentes),
-            'usados': sum(_num_int(p.get('usados')) for p in vigentes),
-            'reservados': sum(_num_int(p.get('reservados')) for p in vigentes),
-            'saldo': sum(_num_int(p.get('saldo')) for p in vigentes),
+            'direito': sum(_num_int(p.get('direito')) for p in base),
+            'usados': sum(_num_int(p.get('usados')) for p in base),
+            'reservados': sum(_num_int(p.get('reservados')) for p in base),
+            'saldo': sum(_num_int(p.get('saldo')) for p in base),
             'ajustes': 0,
             'periodos': periodos,
             'periodo_atual': next((p for p in periodos if p.get('atual')), None),
@@ -877,8 +878,8 @@ def get_resumo_ferias_por_matricula_postgres(matricula: str) -> Dict[str, Any]:
         total = 0
 
     return {
-        'regular': totals(grupos.get('REGULAR', [])),
-        'premium': totals(grupos.get('PREMIUM', [])),
+        'regular': totals(grupos.get('REGULAR', []), 'REGULAR'),
+        'premium': totals(grupos.get('PREMIUM', []), 'PREMIUM'),
         'total_solicitacoes': int(total),
     }
 

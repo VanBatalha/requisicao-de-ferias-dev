@@ -190,10 +190,7 @@ def _saldo_periodo_json(session, colab: Colaborador):
 def _resumo_saldo_periodo(session, colab: Colaborador) -> Dict[str, Any]:
     rows = (
         session.query(SaldoPeriodoNovo)
-        .filter(
-            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-            SaldoPeriodoNovo.is_atual.is_(True),
-        )
+        .filter(SaldoPeriodoNovo.colaborador_matricula == colab.matricula)
         .all()
     )
 
@@ -705,16 +702,15 @@ def _format_alloc(items: List[Dict[str, Any]]) -> str:
 
 
 def _saldo_por_periodo(session, colab: Colaborador, tipo: str, numero: int) -> Optional[SaldoPeriodoNovo]:
-    """Retorna exclusivamente a linha vigente.
-
-    ``numero`` e mantido na assinatura porque os registros historicos guardam o
-    P de origem, mas nenhuma edicao pode reativar saldo em uma linha antiga.
-    """
-    return session.query(SaldoPeriodoNovo).filter(
+    """REGULAR usa o período exato; PREMIUM permanece restrito ao vigente."""
+    tipo = str(tipo or "REGULAR").strip().upper()
+    query = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
-        SaldoPeriodoNovo.is_atual.is_(True),
-    ).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
+    )
+    if tipo == "PREMIUM":
+        return query.filter(SaldoPeriodoNovo.is_atual.is_(True)).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
+    return query.filter(SaldoPeriodoNovo.periodo_numero == int(numero)).first()
 
 
 def _premium_event_affects_current(colab: Colaborador, event_date: Any) -> bool:
@@ -794,14 +790,14 @@ def _aplicar_efeito_ajuste(
     query = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
-        SaldoPeriodoNovo.is_atual.is_(True),
     )
     if periodo_numero:
         query = query.filter(SaldoPeriodoNovo.periodo_numero == int(periodo_numero))
+    elif tipo == "PREMIUM":
+        query = query.filter(SaldoPeriodoNovo.is_atual.is_(True))
     saldos = query.order_by(
-        SaldoPeriodoNovo.is_atual.desc(),
-        SaldoPeriodoNovo.data_inicio.desc(),
         SaldoPeriodoNovo.periodo_numero.desc(),
+        SaldoPeriodoNovo.id.desc(),
     ).all()
     if not saldos:
         raise ValueError(f"Não existe linha de saldo {tipo} para aplicar o ajuste.")
@@ -1111,16 +1107,13 @@ def _reverter_efeito_solicitacao(session, colab: Colaborador, solicitacao: Solic
         # preservando o total e registrando a distribuição encontrada na auditoria.
         restante = dias
         movimentos_inferidos: List[Dict[str, Any]] = []
-        saldos = (
-            session.query(SaldoPeriodoNovo)
-            .filter(
-                SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-                SaldoPeriodoNovo.tipo_saldo == tipo,
-                SaldoPeriodoNovo.is_atual.is_(True),
-            )
-            .order_by(SaldoPeriodoNovo.periodo_numero.desc())
-            .all()
+        query_saldos = session.query(SaldoPeriodoNovo).filter(
+            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+            SaldoPeriodoNovo.tipo_saldo == tipo,
         )
+        if tipo == "PREMIUM":
+            query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
+        saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
         for saldo in saldos:
             atual = Decimal(str(getattr(saldo, campo) or 0))
             if atual <= 0:
@@ -1205,16 +1198,14 @@ def _aplicar_efeito_solicitacao(
                 movimentos.append({"periodo_numero": saldo.periodo_numero, "dias": qtd})
             return movimentos
 
-    saldos = (
-        session.query(SaldoPeriodoNovo)
-        .filter(
-            SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
-            SaldoPeriodoNovo.tipo_saldo == tipo,
-            SaldoPeriodoNovo.is_atual.is_(True),
-        )
-        .order_by(SaldoPeriodoNovo.periodo_numero.desc())
-        .all()
+    query_saldos = session.query(SaldoPeriodoNovo).filter(
+        SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
+        SaldoPeriodoNovo.tipo_saldo == tipo,
     )
+    if tipo == "PREMIUM":
+        query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
+    # REGULAR consome o período adquirido mais antigo que ainda possui saldo.
+    saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
     restante = dias
     for saldo in saldos:
         disponivel = Decimal(str(saldo.saldo_disponivel or 0))

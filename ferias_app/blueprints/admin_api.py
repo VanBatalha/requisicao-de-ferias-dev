@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
+import os
+import tempfile
+from pathlib import Path
 
-from flask import jsonify, request, session
+from flask import after_this_request, jsonify, request, send_file, session
 
 from .base import bp
 from ..core import load_runtime_settings, save_runtime_settings
@@ -463,6 +467,60 @@ def api_admin_cadastro_excluir_solicitacao(colaborador_id: int, solicitacao_id: 
         except Exception:
             pass
         return jsonify({"ok": False, "message": f"Erro ao excluir solicitação: {str(e)}"}), 500
+
+
+# ============================================
+# API: ADMIN - EXPORTAÇÃO DO BANCO PARA XLSX
+# ============================================
+
+@bp.route("/api/admin/exportar-banco-xlsx", methods=["GET"])
+def api_admin_exportar_banco_xlsx():
+    user = _admin_required()
+    if not user:
+        return jsonify({"ok": False, "message": "Acesso negado"}), 403
+
+    include_backups = str(request.args.get("include_backups") or "").strip().lower() in {"1", "true", "sim", "yes"}
+    temp_path = None
+    try:
+        from export_database_xlsx import export_database
+
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        handle = tempfile.NamedTemporaryFile(
+            prefix="export_app_ferias_",
+            suffix=".xlsx",
+            delete=False,
+        )
+        temp_path = handle.name
+        handle.close()
+
+        export_database(
+            Path(temp_path),
+            include_backups=include_backups,
+        )
+
+        @after_this_request
+        def _remove_temp_file(response):  # noqa: ANN001
+            try:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
+            return response
+
+        return send_file(
+            temp_path,
+            as_attachment=True,
+            download_name=f"export_app_ferias_{stamp}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            max_age=0,
+        )
+    except Exception as exc:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+        return jsonify({"ok": False, "message": f"Erro ao exportar banco: {exc}"}), 500
 
 
 # ============================================
