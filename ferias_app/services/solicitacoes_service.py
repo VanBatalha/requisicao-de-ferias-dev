@@ -8,6 +8,7 @@ from flask import session
 
 from ..config import get_settings
 from ..logging_config import get_logger
+from .normalization_service import canonical_saldo_tipo
 from ..utils import safe_lower, parse_date, format_date
 from .auth_service import get_access_token
 from .smartsheet_service import get_sheet, add_rows, columns_map
@@ -237,9 +238,10 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
     data_inicio_str = payload.get("data_inicio")
     data_fim_str = payload.get("data_fim")
     observacoes = (payload.get("observacoes") or "").strip()
-    saldo_tipo_req = (payload.get("saldo_tipo") or payload.get("tipo_ferias") or "REGULAR").strip().upper()
-    if saldo_tipo_req not in ("REGULAR", "PREMIUM"):
-        saldo_tipo_req = "REGULAR"
+    saldo_tipo_req = canonical_saldo_tipo(
+        payload.get("saldo_tipo") or payload.get("tipo_ferias") or "REGULAR",
+        observacoes,
+    )
 
     certariana_segmentos = []
     cert_total_dias = 0
@@ -339,7 +341,7 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             periodo_alloc_txt = tipo_solicitacao_out
         elif saldo_tipo_req == "REGULAR":
             if dias_novos > reg_saldo:
-                return {"ok": False, "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias e informe um período válido conforme a regra: até 3 períodos, mínimo de 10 dias por período; se forem 3, deve ser 3×10."}, 400
+                return {"ok": False, "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias. O limite atual é de até 3 segmentos, respeitando o saldo disponível."}, 400
             try:
                 periodo_alloc = distribuir_solicitacao_por_periodo(colaborador_matricula or colaborador_email, dias_novos)
                 periodo_alloc_txt = serialize_periodo_aquisitivo_alloc(periodo_alloc)
@@ -434,7 +436,14 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
                 "is_ajuste": False,
                 "metadata": {
                     "periodo_aquisitivo": periodo_alloc_txt,
-                    "periodos_consumidos": periodo_alloc,
+                    "periodos_consumidos": [
+                        {
+                            "numero": int(item.get("numero") or 0),
+                            "dias": int(item.get("dias") or item.get("consumidos") or 0),
+                        }
+                        for item in (periodo_alloc or [])
+                        if int(item.get("numero") or 0) > 0
+                    ],
                     "origem": "app_postgres",
                 },
             })

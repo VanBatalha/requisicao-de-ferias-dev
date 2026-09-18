@@ -1,19 +1,8 @@
-"""Regras de negócio centralizadas.
+"""Regras operacionais atuais.
 
-Objetivo: manter as validações que bloqueiam uma ação em um único lugar,
-para evitar espalhar lógica por blueprints/serviços.
-
-Regras centralizadas aqui:
-- Período permitido para solicitação de férias
-  - bloqueio retroativo
-  - bloqueio no mês vigente
-  - bloqueio do mês seguinte após o dia de corte
-  - exceção temporária por usuário/grupo/gestores
-- Licença Certariana (PREMIUM)
-  - até 3 períodos, mínimo 10 dias por período;
-  - se 3 períodos, deve ser 10/10/10 (total 30);
-  - se 2 períodos, ambos devem ter >= 10 dias, e o saldo restante deve ser 0 ou >= 10;
-  - não pode sobrar saldo entre 1 e 9.
+Licença Certariana: temporariamente não exige mínimo de 10 dias, saldo
+remanescente mínimo ou 3x10. Mantém saldo suficiente, máximo de 3 segmentos e
+proteção contra sobreposição.
 """
 
 from __future__ import annotations
@@ -77,14 +66,15 @@ def validate_intervalo_datas(dt_inicio: dt.date | None, dt_fim: dt.date | None) 
 
 
 def validate_premium_balance(prem_saldo: int, dias_novos: int) -> None:
-    if dias_novos > prem_saldo:
-        raise RuleError(f"Saldo da Licença Certariana insuficiente: {prem_saldo} dias.")
-    restante_premium = int(prem_saldo) - int(dias_novos)
-    if restante_premium != 0 and restante_premium < 10:
-        raise RuleError(
-            "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar)."
-        )
+    """Valida apenas existência de saldo suficiente na Licença Certariana.
 
+    Temporariamente não há mínimo de 10 dias nem exigência de saldo remanescente
+    mínimo, pois os ciclos de 15 dias tornam a regra antiga incompatível.
+    """
+    if int(dias_novos or 0) <= 0:
+        raise RuleError("A quantidade de dias deve ser maior que zero.")
+    if int(dias_novos) > int(prem_saldo or 0):
+        raise RuleError(f"Saldo da Licença Certariana insuficiente: {prem_saldo} dias.")
 
 def _safe_cutoff_day(value) -> int:
     try:
@@ -269,14 +259,10 @@ def validate_licenca_certariana(
     exclude_row_id: Optional[int] = None,
     include_statuses: Optional[Set[str]] = None,
 ) -> None:
-    """Valida fracionamento da Licença Certariana.
+    """Valida a Licença Certariana com a política temporária atual.
 
-    Regras:
-    - 1 período: >= 10 dias, restante deve ser 0 ou >= 10
-    - 2 períodos: ambos >= 10 dias, restante deve ser 0 ou >= 10
-    - 3 períodos: obrigatoriamente 10+10+10 (total 30)
-
-    Levanta RuleError quando a regra for violada.
+    Mantém saldo suficiente, ausência de sobreposição e máximo de 3 segmentos.
+    As antigas regras de mínimo de 10 dias, sobra mínima e 3x10 estão suspensas.
     """
     # imports locais para evitar ciclos
     from .services.core_support import (
@@ -290,9 +276,8 @@ def validate_licenca_certariana(
     except Exception:
         raise RuleError("Dias inválidos.")
 
-    # Validação 1: Mínimo 10 dias por período
-    if dias < 10:
-        raise RuleError("Na Licença Certariana, cada período deve ter no mínimo 10 dias.")
+    if dias <= 0:
+        raise RuleError("A quantidade de dias deve ser maior que zero.")
 
     adm = _colaborador_admissao(email)
     resumo_premium_direito = 0
@@ -403,36 +388,8 @@ def validate_licenca_certariana(
 
     periodos = len(segs) + 1
 
-    # Validação 3: Máximo 3 períodos
+    # Mantém apenas o limite de até 3 segmentos e a proteção contra sobreposição.
+    # Regras de mínimo de 10 dias, saldo remanescente mínimo e 3x10 estão
+    # temporariamente suspensas para compatibilizar créditos de 15 dias.
     if periodos > 3:
         raise RuleError("Licença Certariana permite no máximo 3 períodos na janela atual.")
-
-    restante = direito_total - total
-
-    # Validação 4: Saldo restante deve ser 0 ou >= 10 (nunca entre 1 e 9)
-    if restante != 0 and restante < 10:
-        raise RuleError(
-            "O saldo restante da Licença Certariana não pode ficar menor que 10 dias (ou deve zerar)."
-        )
-
-    # Validação 5: Se 2 períodos, ambos precisam ter >= 10 dias.
-    #
-    # Observação importante:
-    # deixar saldo 10 É permitido, pois isso viabiliza um 3º período de 10 dias,
-    # exatamente como a regra do negócio descreve (3×10). O que não pode é sobrar
-    # saldo entre 1 e 9 dias, já tratado acima.
-    if periodos == 2:
-        for seg_dias in segs:
-            if seg_dias < 10:
-                raise RuleError(
-                    "Para fracionar em 2 períodos, ambos devem ter no mínimo 10 dias. "
-                    "Verifique o período anterior."
-                )
-
-    # Validação 6: Se 3 períodos, deve ser obrigatoriamente 10+10+10
-    if periodos == 3:
-        todos = segs + [int(round(dias))]
-        if not (direito_total == 30 and total == 30 and all(v == 10 for v in todos)):
-            raise RuleError(
-                "Quando houver 3 períodos na Licença Certariana, deve ser obrigatoriamente 3×10 (total 30)."
-            )

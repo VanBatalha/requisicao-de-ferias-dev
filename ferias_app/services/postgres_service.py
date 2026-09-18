@@ -4,7 +4,9 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import datetime, date
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 import json
 
 from sqlalchemy import create_engine, event, text, func
@@ -17,7 +19,26 @@ from ..models import (
     Base, Colaborador, ColaboradorComplemento, Solicitacao, AdminConfig, Auditoria, SyncState, SaldoPeriodoNovo, PermissaoUsuario, HierarquiaGestao
 )
 
+from .normalization_service import canonical_saldo_tipo
+
 log = get_logger(__name__)
+
+
+def _json_default(value: Any):
+    """Converte tipos Python comuns para valores aceitos por JSON/JSONB."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, set):
+        return list(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_serializer(value: Any) -> str:
+    return json.dumps(value, default=_json_default, ensure_ascii=False)
 
 
 def _db_schema_name() -> str:
@@ -89,6 +110,7 @@ def init_db(run_migrations: bool = False):
         pool_timeout=5,
         pool_reset_on_return="rollback",
         connect_args=connect_args,
+        json_serializer=_json_serializer,
     )
 
     @event.listens_for(_ENGINE, "connect")
@@ -584,35 +606,43 @@ def _parse_periodo_alloc_v29(value: Any) -> List[Dict[str, Any]]:
 
 
 def _saldo_periodo_por_numero_v29(session, colab: Colaborador, tipo_saldo: str, numero: int):
-    """Retorna o período exato para REGULAR e o vigente para PREMIUM.
+    """Retorna a linha de saldo estritamente do tipo solicitado.
 
-    Desde a V65, férias regulares podem manter saldo remanescente em mais de
-    um período adquirido. O mapa ``P<n>:dias`` precisa atingir a linha real
-    de origem. Premium continua usando somente o ciclo vigente.
+    REGULAR usa o período exato. PREMIUM usa o período exato quando a exceção
+    de acumulação está ativa; caso contrário permanece restrito ao ciclo vigente.
     """
-    tipo = (tipo_saldo or 'REGULAR').upper()
+    tipo = canonical_saldo_tipo(tipo_saldo)
     query = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
     )
     if tipo == 'PREMIUM':
-        return query.filter(SaldoPeriodoNovo.is_atual.is_(True)).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
+        try:
+            from .premium_policy_service import premium_accumulation_enabled
+            acumula = premium_accumulation_enabled(colab.matricula, session=session)
+        except Exception:
+            acumula = False
+        if not acumula:
+            return query.filter(SaldoPeriodoNovo.is_atual.is_(True)).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
     return query.filter(SaldoPeriodoNovo.periodo_numero == int(numero)).first()
 
-
 def _mover_saldo_status_v29(session, colab: Colaborador, solicitacao: Solicitacao, old_status: str, new_status: str):
-    saldo_tipo = (solicitacao.saldo_tipo or solicitacao.tipo_ferias or 'REGULAR').upper()
+    saldo_tipo = canonical_saldo_tipo(solicitacao.saldo_tipo or solicitacao.tipo_ferias, solicitacao.observacoes or '')
     if saldo_tipo == 'PREMIUM':
         try:
-            from .period_accrual_service import premium_event_in_current_cycle
-            if not premium_event_in_current_cycle(colab.data_admissao, solicitacao.data_inicio):
-                # O evento pertence a um ciclo Premium expirado. Mantém o
-                # histórico, mas não credita/estorna o saldo vigente.
+            from .premium_policy_service import premium_accumulation_enabled
+            acumula = premium_accumulation_enabled(colab.matricula, session=session)
+        except Exception:
+            acumula = False
+        if not acumula:
+            try:
+                from .period_accrual_service import premium_event_in_current_cycle
+                if not premium_event_in_current_cycle(colab.data_admissao, solicitacao.data_inicio):
+                    _atualizar_complemento_cache(session, colab)
+                    return
+            except Exception:
                 _atualizar_complemento_cache(session, colab)
                 return
-        except Exception:
-            _atualizar_complemento_cache(session, colab)
-            return
     dias = _to_int_days(solicitacao.dias or solicitacao.dias_solicitados or 0)
     if dias <= 0 or saldo_tipo not in {'REGULAR', 'PREMIUM'}:
         _atualizar_complemento_cache(session, colab)
@@ -665,7 +695,7 @@ def _mover_saldo_status_v29(session, colab: Colaborador, solicitacao: Solicitaca
 
 
 def _saldo_periodo_destino_ajuste_v29(session, colab: Colaborador, saldo_tipo: str):
-    saldo_tipo = (saldo_tipo or 'REGULAR').upper()
+    saldo_tipo = canonical_saldo_tipo(saldo_tipo)
     saldo = (
         session.query(SaldoPeriodoNovo)
         .filter(
@@ -707,17 +737,26 @@ def _atualizar_complemento_cache(session, colab: Colaborador):
 
 
 def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias: int, solicitacao_id: int | None = None, actor: Colaborador | None = None):
-    saldo_tipo = (saldo_tipo or 'REGULAR').upper()
+    saldo_tipo = canonical_saldo_tipo(saldo_tipo)
     restante = _to_int_days(dias)
     if restante <= 0:
         return []
+
     query_saldos = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
     )
     if saldo_tipo == 'PREMIUM':
-        query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
-    saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
+        try:
+            from .premium_policy_service import premium_accumulation_enabled
+            acumula = premium_accumulation_enabled(colab.matricula, session=session)
+        except Exception:
+            acumula = False
+        if not acumula:
+            query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
+
+    # FIFO: utiliza primeiro o crédito mais antigo ainda disponível.
+    saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc(), SaldoPeriodoNovo.id.asc()).all()
     movimentos = []
     for saldo in saldos:
         disponivel = float(saldo.saldo_disponivel or 0)
@@ -735,18 +774,26 @@ def _reservar_saldo_periodos(session, colab: Colaborador, saldo_tipo: str, dias:
         if restante <= 0:
             break
     if restante > 0:
-        raise ValueError(f"Saldo insuficiente. Faltam {restante} dia(s).")
+        nome = 'Licença Certariana' if saldo_tipo == 'PREMIUM' else 'férias regulares'
+        raise ValueError(f"Saldo insuficiente em {nome}. Faltam {restante} dia(s).")
     _atualizar_complemento_cache(session, colab)
     return movimentos
 
 
 
 def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: int, solicitacao_id: int | None, actor: Colaborador | None = None):
-    saldo_tipo = (saldo_tipo or 'REGULAR').upper()
+    """Aplica ajuste como correção de direito, nunca como férias utilizadas.
+
+    Crédito: aumenta saldo_inicial e disponível.
+    Débito: reduz saldo_inicial e disponível.
+    saldo_utilizado e saldo_reservado não são alterados por AJUSTE.
+    """
+    saldo_tipo = canonical_saldo_tipo(saldo_tipo)
     dias = _to_int_days(dias)
     movimentos = []
     if dias == 0:
         return movimentos
+
     if dias > 0:
         saldo = _saldo_periodo_destino_ajuste_v29(session, colab, saldo_tipo)
         saldo.saldo_inicial = float(saldo.saldo_inicial or 0) + dias
@@ -761,15 +808,24 @@ def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: in
             SaldoPeriodoNovo.tipo_saldo == saldo_tipo,
         )
         if saldo_tipo == 'PREMIUM':
-            query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
-        saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
+            try:
+                from .premium_policy_service import premium_accumulation_enabled
+                acumula = premium_accumulation_enabled(colab.matricula, session=session)
+            except Exception:
+                acumula = False
+            if not acumula:
+                query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
+        saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc(), SaldoPeriodoNovo.id.asc()).all()
         for saldo in saldos:
             disponivel = float(saldo.saldo_disponivel or 0)
-            if disponivel <= 0:
+            inicial = float(saldo.saldo_inicial or 0)
+            if disponivel <= 0 or inicial <= 0:
                 continue
-            retirar = min(int(disponivel), restante)
-            saldo.saldo_utilizado = float(saldo.saldo_utilizado or 0) + retirar
-            saldo.saldo_disponivel = max(0, float(saldo.saldo_disponivel or 0) - retirar)
+            retirar = min(int(disponivel), int(inicial), restante)
+            if retirar <= 0:
+                continue
+            saldo.saldo_inicial = max(0, inicial - retirar)
+            saldo.saldo_disponivel = max(0, disponivel - retirar)
             saldo.ultima_alteracao = datetime.utcnow()
             saldo.updated_at = datetime.utcnow()
             movimentos.append({"saldo_id": saldo.id, "periodo_numero": saldo.periodo_numero, "dias": retirar})
@@ -777,7 +833,7 @@ def _aplicar_ajuste_saldo(session, colab: Colaborador, saldo_tipo: str, dias: in
             if restante <= 0:
                 break
         if restante > 0:
-            raise ValueError(f'Ajuste negativo maior que o saldo disponível. Faltam {restante} dia(s).')
+            raise ValueError(f'Ajuste negativo maior que o saldo disponível do tipo {saldo_tipo}. Faltam {restante} dia(s).')
     _atualizar_complemento_cache(session, colab)
     return movimentos
 
@@ -799,7 +855,7 @@ def criar_solicitacao(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[int]
         if not colaborador_email:
             colaborador_email = (colab.email or '').strip().lower()
         solicitante = _usuario_por_email(session, gestor_email)
-        saldo_tipo = (payload.get('saldo_tipo') or 'REGULAR').upper()
+        saldo_tipo = canonical_saldo_tipo(payload.get('saldo_tipo') or payload.get('tipo_ferias') or 'REGULAR', payload.get('observacoes') or '')
         tipo_sol = payload.get('solicitacao', '') or payload.get('tipo_solicitacao', '') or 'GOZO'
         dias = _to_int_days(payload.get('dias', 0))
         status = _norm_status_for_reserva(payload.get('status') or 'PENDENTE')

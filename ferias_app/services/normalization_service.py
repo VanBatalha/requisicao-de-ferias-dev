@@ -62,6 +62,27 @@ def is_ajuste(solicitacao: str) -> bool:
     return "ajuste" in norm_solicitacao(solicitacao)
 
 
+def canonical_saldo_tipo(value: str | None, observacoes: str = "") -> str:
+    """Normaliza qualquer alias de saldo para REGULAR ou PREMIUM.
+
+    A matrícula + este tipo canônico são usados como proteção para impedir
+    movimentações cruzadas entre férias regulares e Licença Certariana.
+    """
+    explicit_norm = norm_title(value or "")
+    premium_aliases = {
+        "premium", "licenca premium", "licenca certariana", "certariana",
+        "licenca certareana", "certareana",
+    }
+    regular_aliases = {
+        "regular", "ferias", "ferias regular", "ferias regulares",
+    }
+    if explicit_norm in premium_aliases:
+        return "PREMIUM"
+    if explicit_norm in regular_aliases:
+        return "REGULAR"
+    return infer_saldo_tipo(observacoes or "", value or "")
+
+
 def infer_saldo_tipo(observacoes: str, explicit: str = "") -> str:
     explicit_norm = norm_title(explicit) if explicit else ""
     if explicit_norm in {

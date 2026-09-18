@@ -15,7 +15,7 @@ from ..logging_config import get_logger
 from ..utils import safe_lower
 from ..models import Colaborador, ColaboradorComplemento, Solicitacao, PermissaoUsuario, HierarquiaGestao, SaldoPeriodoNovo
 from .postgres_service import get_db_session
-from .normalization_service import canonical_status, is_ajuste, infer_saldo_tipo, norm_status
+from .normalization_service import canonical_status, canonical_saldo_tipo, is_ajuste, infer_saldo_tipo, norm_status
 
 log = get_logger(__name__)
 
@@ -505,9 +505,15 @@ def get_resumo_ferias_postgres(email: str) -> Dict[str, Any]:
     reg_periodos = _saldos_por_periodo(colab, 'REGULAR')
     prem_periodos = _saldos_por_periodo(colab, 'PREMIUM')
     def totals(periodos, tipo):
-        # REGULAR pode manter saldo em vários ciclos adquiridos. PREMIUM continua
-        # restrito ao ciclo vigente por causa da regra de expiração.
-        base = periodos if tipo == 'REGULAR' else [p for p in periodos if p.get('atual')]
+        if tipo == 'REGULAR':
+            base = periodos
+        else:
+            try:
+                from .premium_policy_service import premium_accumulation_enabled
+                acumula = premium_accumulation_enabled(colab.matricula)
+            except Exception:
+                acumula = False
+            base = periodos if acumula else [p for p in periodos if p.get('atual')]
         direito = sum(int(p.get('direito') or 0) for p in base)
         usados = sum(int(p.get('usados') or 0) for p in base)
         reservados = sum(int(p.get('reservados') or 0) for p in base)
@@ -545,7 +551,7 @@ def get_resumo_ferias_postgres(email: str) -> Dict[str, Any]:
 
 def _solicitacao_tuple(sol: Solicitacao, include_email: bool = True):
     status = canonical_status(sol.status or "PENDENTE")
-    saldo_tipo = (sol.saldo_tipo or sol.tipo_ferias or infer_saldo_tipo(sol.observacoes or "", "")).upper() or "REGULAR"
+    saldo_tipo = canonical_saldo_tipo(sol.saldo_tipo or sol.tipo_ferias, sol.observacoes or '')
     email = safe_lower(sol.colaborador_email or "")
     if not email and getattr(sol, 'colaborador', None):
         email = safe_lower(sol.colaborador.email or "")
@@ -858,7 +864,15 @@ def get_resumo_ferias_por_matricula_postgres(matricula: str) -> Dict[str, Any]:
         })
 
     def totals(periodos: List[Dict[str, Any]], tipo: str):
-        base = periodos if tipo == 'REGULAR' else [p for p in periodos if p.get('atual')]
+        if tipo == 'REGULAR':
+            base = periodos
+        else:
+            try:
+                from .premium_policy_service import premium_accumulation_enabled
+                acumula = premium_accumulation_enabled(matricula, session=session)
+            except Exception:
+                acumula = False
+            base = periodos if acumula else [p for p in periodos if p.get('atual')]
         return {
             'direito': sum(_num_int(p.get('direito')) for p in base),
             'usados': sum(_num_int(p.get('usados')) for p in base),

@@ -967,67 +967,32 @@ def _validar_fracionamento_certariana(
     dias_novos: int,
     segmentos_existentes: list[dict],
 ) -> tuple[bool, str]:
-    """Valida as regras de fracionamento da Licença Certariana.
+    """Compatibilidade com a política temporária atual da Certariana.
 
-    Regras (DP):
-    - Até 3 períodos.
-    - Cada período >= 10 dias.
-    - Se forem 3 períodos: somente 3×10 (total 30).
-    - Se forem 2 períodos: nenhum < 10 (ex.: 20+10, 16+14, etc.).
-    - 1 período por solicitação (este endpoint), reconhecendo os períodos anteriores.
+    Mantém: saldo suficiente, não sobreposição e máximo de 3 segmentos.
+    Suspende: mínimo de 10 dias, sobra mínima e obrigação 3x10.
     """
     try:
         direito_total = int(direito_total or 0)
+        dias_novos = int(dias_novos or 0)
     except Exception:
-        direito_total = 0
-
-    if dias_novos < 10:
-        return False, "Para Licença Certariana, o período mínimo é de 10 dias."
-
+        return False, "Quantidade de dias inválida."
+    if dias_novos <= 0:
+        return False, "A quantidade de dias deve ser maior que zero."
     if direito_total <= 0:
         return False, "Licença Certariana indisponível (direito total = 0)."
 
-    # Não permitir sobreposição com períodos já registrados (aprovados ou reservados)
     for seg in segmentos_existentes:
         ini = seg.get("ini")
         fim = seg.get("fim")
-        if not ini or not fim:
-            continue
-        if not (dt_fim < ini or dt_inicio > fim):
+        if ini and fim and not (dt_fim < ini or dt_inicio > fim):
             return False, "Este período conflita (sobrepõe) com outro período de Licença Certariana já registrado."
 
     seg_dias = [int(s.get("dias") or 0) for s in segmentos_existentes]
-    seg_count = len(seg_dias)
-    used_sum = sum(seg_dias)
-
-    if seg_count >= 3:
-        return False, "Já existem 3 períodos de Licença Certariana registrados nesta janela. Não é possível adicionar outro."
-
-    total_after = used_sum + int(dias_novos)
-    if total_after > direito_total:
+    if len(seg_dias) >= 3:
+        return False, "Já existem 3 períodos de Licença Certariana registrados nesta janela."
+    if sum(seg_dias) + dias_novos > direito_total:
         return False, f"Total de dias excede o direito da Licença Certariana ({direito_total} dias) nesta janela."
-
-    seg_after = seg_count + 1
-    remaining = direito_total - total_after
-
-    # Mínimo por período = 10, então saldo 1-9 é impossível
-    if 0 < remaining < 10:
-        return False, f"Este fracionamento deixaria um saldo de {remaining} dia(s), mas o mínimo por período é 10."
-
-    # 3 períodos: somente 3×10 (assumindo direito 30)
-    if seg_after == 3:
-        all10 = all(d == 10 for d in (seg_dias + [dias_novos]))
-        if not (direito_total == 30 and total_after == 30 and all10):
-            return False, "Para utilizar 3 períodos, a Licença Certariana deve ser fracionada em 3×10 dias (total 30)."
-        return True, ""
-
-    # Se após este lançamento ainda restar saldo e ele iria virar um 3º período, exige 3×10
-    if seg_after == 2 and remaining > 0:
-        all10 = all(d == 10 for d in (seg_dias + [dias_novos]))
-        if not (direito_total == 30 and remaining == 10 and all10):
-            return False, "Para deixar um 3º período, a Licença Certariana deve seguir 3×10 (cada período com 10 dias)."
-        return True, ""
-
     return True, ""
 
 

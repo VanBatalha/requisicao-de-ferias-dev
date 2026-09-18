@@ -329,14 +329,23 @@ def _ensure_premium_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> 
     if not cycles:
         return {"created": 0, "deleted": deleted, "zeroed": 0, "recalculated": 0}
 
+    try:
+        from .premium_policy_service import premium_accumulation_enabled
+        acumula = premium_accumulation_enabled(colab.matricula, session=session)
+    except Exception:
+        acumula = False
+
     by_number = {int(row.periodo_numero): row for row in rows}
     current_cycle = cycles[-1]
     current_row = by_number.get(current_cycle.numero)
     created = zeroed = recalculated = 0
 
-    for row in rows:
-        if row is not current_row and _zero_historical(row):
-            zeroed += 1
+    # Regra padrão: o saldo Premium histórico expira quando nasce um novo ciclo.
+    # Exceção ADMIN: preserva créditos anteriores e permite consumo FIFO.
+    if not acumula:
+        for row in rows:
+            if row is not current_row and _zero_historical(row):
+                zeroed += 1
 
     if current_row is None:
         used, reserved, adjustments = _request_state_for_premium(
@@ -346,45 +355,25 @@ def _ensure_premium_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> 
         )
         initial = max(0.0, current_cycle.base + adjustments)
         if initial < used + reserved:
-            log.warning(
-                "Saldo Premium inconsistente para %s P%s: direito %.2f, utilizado %.2f, reservado %.2f. Ajustando direito para cobrir movimentos.",
-                colab.matricula,
-                current_cycle.numero,
-                initial,
-                used,
-                reserved,
-            )
             initial = used + reserved
         current_row = _create_balance_row(
-            session,
-            colab,
-            current_cycle,
-            initial=initial,
-            used=used,
-            reserved=reserved,
-            is_current=True,
+            session, colab, current_cycle, initial=initial, used=used, reserved=reserved, is_current=True
         )
         by_number[current_cycle.numero] = current_row
         created += 1
         recalculated += 1
     else:
-        # Uma linha Premium já existente é considerada fonte autoritativa do
-        # saldo reconciliado, inclusive quando estiver zerada. O crédito-base
-        # só nasce quando o novo ciclo ainda não possui linha no banco.
         current_row.is_atual = True
 
     now = dt.datetime.utcnow()
     for cycle in cycles:
         row = by_number.get(cycle.numero)
         if row is None:
+            # Em exceção acumulável, um ciclo histórico ausente recebe seu crédito
+            # legal. Na regra padrão, histórico ausente nasce zerado.
+            initial = cycle.base if acumula else 0
             row = _create_balance_row(
-                session,
-                colab,
-                cycle,
-                initial=0,
-                used=0,
-                reserved=0,
-                is_current=False,
+                session, colab, cycle, initial=initial, used=0, reserved=0, is_current=False
             )
             by_number[cycle.numero] = row
             created += 1
@@ -393,8 +382,8 @@ def _ensure_premium_cycles(session, colab: Colaborador, cycles: list[Cycle]) -> 
         row.tipo_saldo = "PREMIUM"
         row.data_inicio = cycle.data_inicio
         row.data_fim = cycle.data_fim
-        if cycle.numero == current_cycle.numero:
-            row.is_atual = True
+        row.is_atual = cycle.numero == current_cycle.numero
+        if cycle.numero == current_cycle.numero or acumula:
             row.saldo_disponivel = max(0.0, _as_float(row.saldo_inicial) - _as_float(row.saldo_utilizado) - _as_float(row.saldo_reservado))
         else:
             _zero_historical(row)
@@ -477,7 +466,7 @@ def ensure_due_periods(
             "premium_created": int(counters["premium_created"]),
             "future_rows_removed": int(counters["regular_deleted"] + counters["premium_deleted"]),
             "rule": "saldo_periodo_only; create_for_active_only; preserve_history_after_inactivation; regular_12m_completed; premium_5y_plus_1d_then_30m; no_future_cycles",
-            "version": "v64",
+            "version": "v67",
         }
         if not state:
             state = SyncState(sync_name=_SYNC_NAME)

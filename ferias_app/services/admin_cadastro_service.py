@@ -10,6 +10,8 @@ from sqlalchemy import and_, func, or_
 
 from ..logging_config import get_logger
 from ..models import Auditoria, Colaborador, ColaboradorComplemento, PermissaoUsuario, HierarquiaGestao, SaldoPeriodoNovo, Solicitacao
+from .premium_policy_service import premium_accumulation_enabled, set_premium_accumulation
+from .normalization_service import canonical_saldo_tipo
 from ..utils import safe_lower
 from .postgres_service import get_db_session
 
@@ -301,6 +303,7 @@ def _jsonable_colab(colab: Colaborador) -> Dict[str, Any]:
         "gestor_superior": (getattr(comp, "gestor_superior", None) if comp else "") or "",
         "ativo_no_app": bool(comp.ativo_no_app) if comp else True,
         "flags_internas": comp.flags_internas if comp else {},
+        "premium_acumula": premium_accumulation_enabled(colab.matricula, session=session),
         "created_at": colab.created_at.isoformat() if colab.created_at else None,
         "updated_at": colab.updated_at.isoformat() if colab.updated_at else None,
         "complemento_updated_at": comp.updated_at.isoformat() if comp and comp.updated_at else None,
@@ -453,6 +456,20 @@ def atualizar_colaborador_admin(colaborador_id: int, payload: Dict[str, Any], ac
 
     _sincronizar_comp_com_tabelas_novas(session, colab, comp)
     session.flush()
+
+    # Exceção por matrícula: permite acumular ciclos da Licença Certariana.
+    # Quando ativada pela primeira vez, reconstrói os créditos Premium adquiridos
+    # e passa a preservá-los nos ciclos futuros.
+    if "premium_acumula" in payload:
+        set_premium_accumulation(
+            session,
+            colab,
+            _as_bool(payload.get("premium_acumula")),
+            actor_email=actor_email,
+            reason=str(payload.get("premium_acumula_motivo") or "").strip(),
+            initialize=True,
+        )
+        session.flush()
 
     # V58: a mudança futura para INATIVO preserva o histórico já existente
     # em saldo_periodo. A rotina diária considera somente ATIVOS para criar novos
@@ -702,19 +719,20 @@ def _format_alloc(items: List[Dict[str, Any]]) -> str:
 
 
 def _saldo_por_periodo(session, colab: Colaborador, tipo: str, numero: int) -> Optional[SaldoPeriodoNovo]:
-    """REGULAR usa o período exato; PREMIUM permanece restrito ao vigente."""
-    tipo = str(tipo or "REGULAR").strip().upper()
+    tipo = canonical_saldo_tipo(tipo)
     query = session.query(SaldoPeriodoNovo).filter(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
     )
-    if tipo == "PREMIUM":
+    if tipo == "PREMIUM" and not premium_accumulation_enabled(colab.matricula, session=session):
         return query.filter(SaldoPeriodoNovo.is_atual.is_(True)).order_by(SaldoPeriodoNovo.periodo_numero.desc()).first()
     return query.filter(SaldoPeriodoNovo.periodo_numero == int(numero)).first()
 
 
-def _premium_event_affects_current(colab: Colaborador, event_date: Any) -> bool:
+def _premium_event_affects_current(colab: Colaborador, event_date: Any, session=None) -> bool:
     try:
+        if premium_accumulation_enabled(colab.matricula, session=session):
+            return True
         from .period_accrual_service import premium_event_in_current_cycle
         return premium_event_in_current_cycle(colab.data_admissao, _as_date(event_date))
     except Exception:
@@ -741,7 +759,7 @@ def _reverter_efeito_ajuste(session, colab: Colaborador, ajuste: Solicitacao) ->
     if dias == 0:
         return
     tipo = str(ajuste.saldo_tipo or ajuste.tipo_ferias or "REGULAR").strip().upper()
-    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, ajuste.data_inicio):
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, ajuste.data_inicio, session=session):
         return
     alloc = _parse_alloc(ajuste.periodo_aquisitivo_origem)
     if not alloc:
@@ -766,9 +784,9 @@ def _reverter_efeito_ajuste(session, colab: Colaborador, ajuste: Solicitacao) ->
             saldo.saldo_inicial = atual_inicial - qtd
             saldo.saldo_disponivel = atual_disp - qtd
         else:
-            if atual_usado < qtd:
-                raise ValueError(f"O saldo utilizado de P{item['periodo_numero']} é insuficiente para estornar este ajuste.")
-            saldo.saldo_utilizado = atual_usado - qtd
+            # Ajuste negativo reduz o direito/saldo inicial; não representa uso.
+            # Para estornar, devolve o direito e o disponível sem tocar em utilizado.
+            saldo.saldo_inicial = atual_inicial + qtd
             saldo.saldo_disponivel = atual_disp + qtd
         saldo.ultima_alteracao = dt.datetime.utcnow()
         saldo.updated_at = dt.datetime.utcnow()
@@ -784,7 +802,7 @@ def _aplicar_efeito_ajuste(
 ) -> List[Dict[str, Any]]:
     if dias == 0:
         raise ValueError("O ajuste deve ser diferente de zero.")
-    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, data_inicio):
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, data_inicio, session=session):
         return []
 
     query = session.query(SaldoPeriodoNovo).filter(
@@ -793,7 +811,7 @@ def _aplicar_efeito_ajuste(
     )
     if periodo_numero:
         query = query.filter(SaldoPeriodoNovo.periodo_numero == int(periodo_numero))
-    elif tipo == "PREMIUM":
+    elif tipo == "PREMIUM" and not premium_accumulation_enabled(colab.matricula, session=session):
         query = query.filter(SaldoPeriodoNovo.is_atual.is_(True))
     saldos = query.order_by(
         SaldoPeriodoNovo.periodo_numero.desc(),
@@ -813,15 +831,18 @@ def _aplicar_efeito_ajuste(
         return movimentos
 
     restante = abs(dias)
-    # Para débito sem período explícito, consome primeiro os períodos mais antigos.
+    # Ajuste negativo é correção de direito: reduz saldo_inicial e disponível,
+    # sem transformar a diferença em dias utilizados. Sem período explícito,
+    # aplica do período mais antigo com saldo disponível para o mais novo.
     if not periodo_numero:
         saldos = list(reversed(saldos))
     for saldo in saldos:
         disponivel = Decimal(str(saldo.saldo_disponivel or 0))
-        if disponivel <= 0:
+        inicial = Decimal(str(saldo.saldo_inicial or 0))
+        if disponivel <= 0 or inicial <= 0:
             continue
-        retirar = min(disponivel, restante)
-        saldo.saldo_utilizado = Decimal(str(saldo.saldo_utilizado or 0)) + retirar
+        retirar = min(disponivel, inicial, restante)
+        saldo.saldo_inicial = inicial - retirar
         saldo.saldo_disponivel = disponivel - retirar
         saldo.ultima_alteracao = dt.datetime.utcnow()
         saldo.updated_at = dt.datetime.utcnow()
@@ -854,9 +875,7 @@ def atualizar_ajuste_admin(
 
     before = _ajuste_dict(ajuste)
     legado_v54_ignorado = _ajuste_v54_ignorado(ajuste)
-    tipo_antigo = str(ajuste.saldo_tipo or ajuste.tipo_ferias or "REGULAR").strip().upper()
-    if tipo_antigo in {"CERTARIANA", "LICENCA CERTARIANA", "LICENÇA CERTARIANA"}:
-        tipo_antigo = "PREMIUM"
+    tipo_antigo = canonical_saldo_tipo(ajuste.saldo_tipo or ajuste.tipo_ferias, ajuste.observacoes or "")
     dias_antigos = _as_decimal(
         ajuste.dias if ajuste.dias is not None else ajuste.dias_solicitados,
         "dias",
@@ -864,9 +883,7 @@ def atualizar_ajuste_admin(
     alloc_antiga = _parse_alloc(ajuste.periodo_aquisitivo_origem)
     aprovado_antes = _ajuste_aprovado(ajuste)
 
-    tipo = str(payload.get("saldo_tipo", tipo_antigo)).strip().upper()
-    if tipo in {"CERTARIANA", "LICENCA CERTARIANA", "LICENÇA CERTARIANA"}:
-        tipo = "PREMIUM"
+    tipo = canonical_saldo_tipo(payload.get("saldo_tipo", tipo_antigo))
     if tipo not in {"REGULAR", "PREMIUM"}:
         raise ValueError("Tipo de ajuste inválido.")
 
@@ -1036,12 +1053,7 @@ def _solicitacao_dict(row: Solicitacao) -> Dict[str, Any]:
 
 
 def _normalizar_tipo_saldo(value: Any) -> str:
-    tipo = str(value or "REGULAR").strip().upper()
-    if tipo in {"CERTARIANA", "LICENCA CERTARIANA", "LICENÇA CERTARIANA"}:
-        tipo = "PREMIUM"
-    if tipo not in {"REGULAR", "PREMIUM"}:
-        raise ValueError("Tipo de saldo inválido.")
-    return tipo
+    return canonical_saldo_tipo(value)
 
 
 def _normalizar_status_solicitacao(value: Any) -> str:
@@ -1096,7 +1108,7 @@ def _reverter_efeito_solicitacao(session, colab: Colaborador, solicitacao: Solic
 
     alloc = _parse_alloc(solicitacao.periodo_aquisitivo_origem)
     tipo = _normalizar_tipo_saldo(solicitacao.saldo_tipo or solicitacao.tipo_ferias)
-    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, solicitacao.data_inicio):
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, solicitacao.data_inicio, session=session):
         return []
     campo = "saldo_utilizado" if impacto == "utilizado" else "saldo_reservado"
     if not alloc:
@@ -1111,7 +1123,7 @@ def _reverter_efeito_solicitacao(session, colab: Colaborador, solicitacao: Solic
             SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
             SaldoPeriodoNovo.tipo_saldo == tipo,
         )
-        if tipo == "PREMIUM":
+        if tipo == "PREMIUM" and not premium_accumulation_enabled(colab.matricula, session=session):
             query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
         saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
         for saldo in saldos:
@@ -1171,7 +1183,7 @@ def _aplicar_efeito_solicitacao(
         return []
 
     tipo = _normalizar_tipo_saldo(tipo)
-    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, data_inicio):
+    if tipo == "PREMIUM" and not _premium_event_affects_current(colab, data_inicio, session=session):
         return []
     campo = "saldo_utilizado" if impacto == "utilizado" else "saldo_reservado"
     movimentos: List[Dict[str, Any]] = []
@@ -1202,9 +1214,9 @@ def _aplicar_efeito_solicitacao(
         SaldoPeriodoNovo.colaborador_matricula == colab.matricula,
         SaldoPeriodoNovo.tipo_saldo == tipo,
     )
-    if tipo == "PREMIUM":
+    if tipo == "PREMIUM" and not premium_accumulation_enabled(colab.matricula, session=session):
         query_saldos = query_saldos.filter(SaldoPeriodoNovo.is_atual.is_(True))
-    # REGULAR consome o período adquirido mais antigo que ainda possui saldo.
+    # REGULAR e PREMIUM acumulável consomem o período adquirido mais antigo com saldo.
     saldos = query_saldos.order_by(SaldoPeriodoNovo.periodo_numero.asc()).all()
     restante = dias
     for saldo in saldos:
