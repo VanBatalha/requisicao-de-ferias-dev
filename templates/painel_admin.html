@@ -197,6 +197,10 @@
       <div>
         <label class="chk" style="margin-top:24px;"><input type="checkbox" id="cadAtivoNoApp" /> Ativo no app</label>
       </div>
+      <div style="grid-column:1 / -1; padding:10px 12px; border:1px dashed rgba(37,99,235,.35); border-radius:10px;">
+        <label class="chk"><input type="checkbox" id="cadPremiumAcumula" /> Permitir acumulação de Licença Certariana (exceção)</label>
+        <div class="muted" style="margin-top:6px;">Quando habilitado, os créditos PREMIUM adquiridos em ciclos anteriores não expiram e podem ser consumidos do mais antigo para o mais novo. Use apenas para os colaboradores autorizados pelo ADMIN.</div>
+      </div>
       <div>
         <label class="muted">Gestor direto (matrícula)</label>
         <input id="cadGestorDireto" class="input" placeholder="Ex.: MAT00061" />
@@ -768,6 +772,7 @@
     cad$("cadRegime").value = c.regime || "";
     cad$("cadUserType").value = c.user_type || "USER";
     cad$("cadAtivoNoApp").checked = !!c.ativo_no_app;
+    cad$("cadPremiumAcumula").checked = !!c.premium_acumula;
     cad$("cadGestorDireto").value = c.gestor_direto || "";
     cad$("cadGestorSuperior").value = c.gestor_superior || "";
     renderSaldosPeriodo(c.saldos_periodo || []);
@@ -791,6 +796,7 @@
       regime: cadNorm(cad$("cadRegime").value),
       user_type: cad$("cadUserType").value || "USER",
       ativo_no_app: cad$("cadAtivoNoApp").checked,
+      premium_acumula: cad$("cadPremiumAcumula").checked,
       gestor_direto: cadNorm(cad$("cadGestorDireto").value).toUpperCase(),
       gestor_superior: cadNorm(cad$("cadGestorSuperior").value).toUpperCase(),
     };
