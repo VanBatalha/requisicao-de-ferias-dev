@@ -758,7 +758,7 @@ def _reverter_efeito_ajuste(session, colab: Colaborador, ajuste: Solicitacao) ->
     dias = _as_decimal(ajuste.dias if ajuste.dias is not None else ajuste.dias_solicitados, "dias")
     if dias == 0:
         return
-    tipo = str(ajuste.saldo_tipo or ajuste.tipo_ferias or "REGULAR").strip().upper()
+    tipo = canonical_saldo_tipo(ajuste.saldo_tipo or ajuste.tipo_ferias or "REGULAR", ajuste.observacoes or "")
     if tipo == "PREMIUM" and not _premium_event_affects_current(colab, ajuste.data_inicio, session=session):
         return
     alloc = _parse_alloc(ajuste.periodo_aquisitivo_origem)

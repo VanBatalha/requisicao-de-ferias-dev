@@ -378,14 +378,11 @@ def validate_licenca_certariana(
                         "Este período conflita (sobrepõe) com outro período de Licença Certariana já registrado."
                     )
 
-    total = sum(segs) + int(round(dias))
-
-    # Validação 2: Não pode exceder direito total
-    if total > direito_total:
-        raise RuleError(
-            f"Licença Certariana excede o direito total ({direito_total} dias) na janela atual (tentativa: {total} dias)."
-        )
-
+    # V67.1: saldo_periodo.saldo_disponivel é a fonte oficial para o limite
+    # financeiro. Solicitações antigas desta janela já podem ter sido refletidas
+    # ou reconciliadas no saldo atual; somá-las novamente contra direito_total
+    # causava dupla contagem. O saldo suficiente é validado logo depois por
+    # validate_premium_balance(), usando o resumo oficial de saldo_periodo.
     periodos = len(segs) + 1
 
     # Mantém apenas o limite de até 3 segmentos e a proteção contra sobreposição.

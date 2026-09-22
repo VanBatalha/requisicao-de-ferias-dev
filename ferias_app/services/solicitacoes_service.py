@@ -326,12 +326,26 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             try:
                 validate_licenca_certariana(colaborador_matricula or colaborador_email, float(dias_novos), dt_inicio=dt_inicio, dt_fim=dt_fim, include_statuses=include_statuses)
             except RuleError as ve:
+                log.warning(
+                    "SOLICITACAO_PREMIUM_BLOQUEADA matricula=%s dias=%s inicio=%s fim=%s motivo=%s",
+                    colaborador_matricula or colaborador_email, dias_novos, dt_inicio, dt_fim, ve,
+                )
                 return {"ok": False, "message": str(ve)}, 400
             except Exception as e:
                 return {"ok": False, "message": f"Erro ao validar fracionamento da Licença Certariana: {e}"}, 500
 
         reg_saldo = int(resumo["regular"]["saldo"])
         prem_saldo = int(resumo["premium"]["saldo"])
+        log.info(
+            "SOLICITACAO_SALDO matricula=%s tipo=%s dias=%s regular=%s premium=%s inicio=%s fim=%s",
+            colaborador_matricula or colaborador_email,
+            saldo_tipo_req,
+            dias_novos,
+            reg_saldo,
+            prem_saldo,
+            dt_inicio,
+            dt_fim,
+        )
         periodo_alloc = []
         periodo_alloc_txt = ""
         saldo_tipo_final = saldo_tipo_req
@@ -341,7 +355,14 @@ def processar_solicitacao(payload: Dict[str, Any], user: Dict[str, Any] | None):
             periodo_alloc_txt = tipo_solicitacao_out
         elif saldo_tipo_req == "REGULAR":
             if dias_novos > reg_saldo:
-                return {"ok": False, "message": f"Saldo insuficiente. Regular: {reg_saldo} dias. Para usar Licença Certariana, selecione 'Licença Certariana' em Tipo de Férias. O limite atual é de até 3 segmentos, respeitando o saldo disponível."}, 400
+                return {
+                    "ok": False,
+                    "message": (
+                        f"Saldo insuficiente. O período informado possui {dias_novos} dia(s) corridos "
+                        f"e o saldo REGULAR disponível é de {reg_saldo} dia(s). "
+                        "As datas inicial e final são contadas de forma inclusiva."
+                    ),
+                }, 400
             try:
                 periodo_alloc = distribuir_solicitacao_por_periodo(colaborador_matricula or colaborador_email, dias_novos)
                 periodo_alloc_txt = serialize_periodo_aquisitivo_alloc(periodo_alloc)

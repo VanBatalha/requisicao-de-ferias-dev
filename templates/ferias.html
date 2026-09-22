@@ -959,13 +959,21 @@ _applyTipoFerias();
       const fd = new FormData(form);
       const resp = await fetch('{{ url_for("ferias.api_solicitar_ferias") }}', { method: 'POST', body: fd });
       const data = await resp.json().catch(() => ({}));
-      if (resultado) resultado.textContent = data.message || 'Solicitação enviada.';
+      if (resultado) {
+        resultado.textContent = data.message || (resp.ok ? 'Solicitação enviada.' : 'Não foi possível registrar a solicitação.');
+        resultado.classList.remove('muted', 'text-danger', 'text-success');
+        resultado.classList.add(resp.ok && data.ok ? 'text-success' : 'text-danger');
+      }
       if (resp.ok && data.ok) {
         setTimeout(() => window.location.reload(), 900);
         return;
       }
     } catch (err) {
-      if (resultado) resultado.textContent = 'Erro ao enviar solicitação. Tente novamente.';
+      if (resultado) {
+        resultado.textContent = 'Erro ao enviar solicitação. Tente novamente.';
+        resultado.classList.remove('muted', 'text-success');
+        resultado.classList.add('text-danger');
+      }
     }
 
     if (btnSubmitSolicitacao) {

@@ -644,14 +644,26 @@ def _mover_saldo_status_v29(session, colab: Colaborador, solicitacao: Solicitaca
                 _atualizar_complemento_cache(session, colab)
                 return
     dias = _to_int_days(solicitacao.dias or solicitacao.dias_solicitados or 0)
-    if dias <= 0 or saldo_tipo not in {'REGULAR', 'PREMIUM'}:
+    if saldo_tipo not in {'REGULAR', 'PREMIUM'}:
         _atualizar_complemento_cache(session, colab)
         return
+
+    # AJUSTE pode ser positivo ou negativo. A checagem antiga "dias <= 0"
+    # acontecia antes deste bloco e fazia um ajuste negativo ser ignorado
+    # quando mudava de status para APROVADO.
     if bool(solicitacao.is_ajuste):
+        if dias == 0:
+            _atualizar_complemento_cache(session, colab)
+            return
         if new_status in {'APROVADO', 'APROVADA'} and old_status not in {'APROVADO', 'APROVADA'}:
             movimentos = _aplicar_ajuste_saldo(session, colab, saldo_tipo, dias, solicitacao.id, None)
             if movimentos:
                 solicitacao.periodo_aquisitivo_origem = _format_periodo_alloc_v29(movimentos)
+        _atualizar_complemento_cache(session, colab)
+        return
+
+    if dias <= 0:
+        _atualizar_complemento_cache(session, colab)
         return
     alloc = _parse_periodo_alloc_v29(solicitacao.periodo_aquisitivo_origem)
     # Aprovação: transforma reserva em utilizado quando houver reserva; se não houver origem, debita do saldo disponível.

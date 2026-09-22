@@ -66,3 +66,12 @@ Arquivo principal: `ferias_app/services/period_accrual_service.py`.
 
 ## Observação sobre dados antigos
 A correção do código impede novos ajustes de entrarem como `saldo_utilizado`. Registros históricos que já tenham sido movimentados pela regra antiga devem ser conciliados separadamente antes de serem considerados definitivamente corrigidos.
+
+
+## Correções operacionais V67.1
+
+- O saldo disponível de `saldo_periodo` é a fonte de verdade para validar uma nova solicitação PREMIUM. Solicitações PREMIUM antigas são consideradas para sobreposição e limite de segmentos, mas não são debitadas uma segunda vez durante a validação.
+- Ajustes DP positivos ou negativos alteram direito (`saldo_inicial`) e saldo disponível, nunca representam dias utilizados.
+- Ajustes negativos deixam de ser ignorados quando uma mudança de status os torna aprovados.
+- O tipo REGULAR/PREMIUM é normalizado também nos caminhos administrativos de estorno.
+- Mensagens de saldo REGULAR informam quantos dias corridos existem no intervalo solicitado.
